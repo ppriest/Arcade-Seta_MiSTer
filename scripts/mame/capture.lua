@@ -10,6 +10,8 @@
 --   SETA_TAG      prefix for the output filenames (normally the set name)
 --   SETA_REGIONS  "name:hexaddr:hexlen,name:hexaddr:hexlen,..."
 --   SETA_TAPS     "hexlo:hexhi,..." ranges to log writes to, or empty
+--   SETA_DIPS     "Field Name=Setting;..." DIP switches to set before the
+--                 game runs, or empty
 --
 -- THIS FILE HOLDS NO GAME KNOWLEDGE. Fuuki's version had the region table
 -- inline and a board flag threaded through it; seta.cpp has far more distinct
@@ -28,6 +30,7 @@ local FRAME   = tonumber(os.getenv("SETA_FRAME") or "600")
 local TAG     = os.getenv("SETA_TAG")   or "capture"
 local REGIONS = os.getenv("SETA_REGIONS") or ""
 local TAPS    = os.getenv("SETA_TAPS")  or ""
+local DIPS    = os.getenv("SETA_DIPS")  or ""
 
 local mach = manager.machine
 local cpu  = mach.devices[":maincpu"]
@@ -39,6 +42,84 @@ local function split(s, sep)
     for tok in string.gmatch(s, "([^" .. sep .. "]+)") do out[#out + 1] = tok end
     return out
 end
+
+-- ---- DIP switches -------------------------------------------------------
+-- Set by NAME, from SETA_DIPS, before the game has run a frame.
+--
+-- A DIP that is silently not applied is the worst possible outcome here: the
+-- capture succeeds, MAME renders the game unflipped, the RTL renders it
+-- unflipped, they match, and a flip-screen test has proved nothing while
+-- reporting PASS. So every failure below is fatal and named.
+--
+-- fld.settings maps the RAW field value to the setting's name -- for
+-- thunderl's Flip Screen, {[0]="Off", [512]="On"} -- and fld:set_value takes
+-- that raw value. Probed on MAME 0.286 rather than assumed.
+local function fail(msg)
+    local f = io.open(OUT .. "/lua_error.txt", "w")
+    if f then f:write(msg .. "\n"); f:close() end
+    print("LUAFAIL " .. msg)
+    mach:exit()
+end
+
+for _, spec in ipairs(split(DIPS, ";")) do
+    local eq = string.find(spec, "=", 1, true)
+    if not eq then
+        fail("SETA_DIPS entry is not NAME=SETTING: " .. spec)
+        return
+    end
+    local want_field   = string.sub(spec, 1, eq - 1)
+    local want_setting = string.sub(spec, eq + 1)
+    local applied = false
+    for _, port in pairs(mach.ioport.ports) do
+        local fld = port.fields[want_field]
+        if fld then
+            if not fld.settings then
+                fail(string.format("DIP '%s' has no settings table", want_field))
+                return
+            end
+            for raw, name in pairs(fld.settings) do
+                if name == want_setting then
+                    fld:set_value(raw)
+                    print(string.format("DIP      %-20s = %-12s (raw 0x%x)",
+                                        want_field, want_setting, raw))
+                    applied = true
+                end
+            end
+            if not applied then
+                local have = {}
+                for _, name in pairs(fld.settings) do have[#have + 1] = name end
+                fail(string.format("DIP '%s' has no setting '%s' (has: %s)",
+                                   want_field, want_setting,
+                                   table.concat(have, ", ")))
+                return
+            end
+        end
+    end
+    if not applied then
+        fail(string.format("no DIP field named '%s' in this machine", want_field))
+        return
+    end
+end
+
+-- NO SOFT RESET HERE, and this is the second thing tried rather than the first.
+--
+-- The problem it was aimed at is real: with the DIP set from the autoboot
+-- script and no reset, thunderl came back with spritectrl[0] = 0x50 (flip on)
+-- and wits, blockcar, umanclub, neobattl, atehate and pairlove all came back
+-- 0x10 -- unflipped -- because those six read the switches once during
+-- power-on init, which has already happened by the time this script runs.
+--
+-- But calling mach:soft_reset() from here HANGS the capture. All seven sets
+-- then failed outright: MAME never reached the target frame and never exited.
+-- The frame notifier this script installs does not survive the reset it asks
+-- for, so nothing fires and nothing stops.
+--
+-- The remaining way in is MAME's own configuration: DIP settings persist in
+-- cfg/<set>.cfg and are applied at power-on, before any Lua runs. Writing that
+-- file from the Python side is the next thing to try. Until then --dip only
+-- reaches games that re-read the switches while running, and
+-- x1_001_sweep.py --flip checks spritectrl[0] bit 6 in the finished capture,
+-- so a set that ignored the DIP fails loudly instead of passing vacuously.
 
 local regions = {}
 for _, spec in ipairs(split(REGIONS, ",")) do
@@ -167,11 +248,42 @@ local function frame_body()
     -- RTL's own rendering of this exact state gets compared against.
     mach.video:snapshot()
 
+    -- THE SNAPSHOT IS THE REFERENCE, and both halves of that sentence took a
+    -- sweep to establish.
+    --
+    -- It has to be taken with `-snapview native` (mame_capture.py passes it),
+    -- or MAME writes it through the render pipeline with the cabinet
+    -- orientation applied: over the seven Group A sets a ROT270 game's
+    -- snapshot came out 180 degrees from screen space while ROT0 and ROT90
+    -- came out unrotated, at the same 384x240 either way, so nothing about the
+    -- file said which.
+    --
+    -- And it has to be the snapshot rather than scr:pixels(). pixels() looks
+    -- like the better reference -- no file, no encoder, screen space by
+    -- construction -- but it returns the bitmap MAME rendered at the end of
+    -- the VISIBLE area, which is one vblank before this notifier runs. The
+    -- game's vblank handler has rewritten sprite RAM by then, so it disagrees
+    -- with the region dumps taken here: measured at up to 4.3% of pixels on
+    -- frames where the game writes during vblank, and 0% for the snapshot,
+    -- which video:snapshot() re-renders from the state that is live now.
+    --
+    -- The screen's own bitmap is still recorded, because "what the state was
+    -- one vblank ago" is occasionally the question -- but it is NOT what the
+    -- renderer is checked against, and the name says so.
+    local px = scr:pixels()
+    local pf = assert(io.open(string.format("%s/%s_screen_prev_vblank.bin", OUT, TAG), "wb"))
+    pf:write(px)
+    pf:close()
+    print(string.format("CAPTURE  screen     %dx%d (state at the PREVIOUS vblank)",
+                        scr.width, scr.height))
+
     local f = assert(io.open(string.format("%s/%s_info.txt", OUT, TAG), "w"))
     f:write(string.format("system      %s\n", mach.system.name))
     f:write(string.format("description %s\n", mach.system.description))
     f:write(string.format("frame       %d\n", n))
     f:write(string.format("screen      %dx%d refresh %f\n", scr.width, scr.height, scr.refresh))
+    f:write(string.format("orientation %s\n", tostring(scr:orientation())))
+    f:write(string.format("pixels      %d bytes, 32bpp, screen space\n", #px))
     f:write(string.format("mame        %s\n", emu.app_version()))
     f:close()
 

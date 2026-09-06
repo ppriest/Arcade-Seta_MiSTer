@@ -92,12 +92,9 @@ echo "--- vlog: RTL + testbench ---"
 #   *_upstream_reference.sv pristine upstream copies kept beside the vendored
 #                           modules purely so local changes can be diffed.
 #                           They are not part of any design.
-#   cos.sv, lfsr.v, mycore.v  Template_MiSTer's demo core. lfsr.v uses the
-#                           Altera `lcell` primitive and references a parameter
-#                           before declaring it -- Quartus accepts both,
-#                           ModelSim rejects them. They are still instantiated
-#                           by the unmodified Seta.sv and go when the real top
-#                           level is written; until then they are not simulated.
+#   cos.sv, lfsr.v, mycore.v  Template_MiSTer's demo core, DELETED once
+#                           Seta.sv became the real top level. The exclusions
+#                           are kept so a stray copy cannot creep back in.
 RTL=$(find rtl -name '*.sv' \
         -not -path '*/synth_check/*' \
         -not -name 'screen_rotate*.sv' \

@@ -139,8 +139,23 @@ def main():
         for ai, d in exp:
             f.write(f"{ai >> 1:06x}{d:04x}\n")       # word address, then data
 
+    # THE FIXTURE CARRIES ITS OWN BOARD, and board.hex exists so the bench can
+    # read it without parsing prose.
+    #
+    # Without it, running the bench bare -- `scripts/run_sim.sh maincpu_tb` --
+    # uses whatever fixture the last run left behind against the bench's
+    # DEFAULT board, and a mismatch reports "the CPU stalled or ran out of
+    # time" after 44 of 160 reads. That is a confident, specific, wrong
+    # failure: it names the CPU, and the CPU is fine. Only the sweep passed
+    # +BOARD, so only the sweep was ever right.
+    from maincpu_sweep import BOARDS
+    if a.set not in BOARDS:
+        sys.exit(f"{a.set}: no board mapping in maincpu_sweep.BOARDS")
+    (out / "board.hex").write_text(f"{BOARDS[a.set]:02x}\n", encoding="utf8")
+
     (out / "fixture.txt").write_text(
         f"set     {a.set}\n"
+        f"board   {BOARDS[a.set]}\n"
         f"zip     {zippath}\n"
         f"trace   {a.trace}\n"
         f"image   {len(img)} bytes, {nwords} words written\n"

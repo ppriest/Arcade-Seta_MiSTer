@@ -50,7 +50,9 @@ package seta_board_pkg;
 		BOARD_WITS      = 4'd9,   // wits_map       -- thunderl plus spare RAM
 		BOARD_UMANCLUB  = 4'd10,  // umanclub_map   -- NOT thunderl_map
 		BOARD_BLOCKCAR  = 4'd11,  // blockcar_map
-		BOARD_ATEHATE   = 4'd12   // atehate_map    -- 1 MB of work RAM
+		BOARD_ATEHATE   = 4'd12,  // atehate_map    -- 1 MB of work RAM
+		BOARD_PAIRLOVE  = 4'd13   // pairlove_map   -- 2048 palette entries,
+		                          //                   plus a protection RAM
 	} board_t;
 endpackage
 
@@ -129,6 +131,17 @@ module maincpu (
 	// be diffed against scripts/mame_capture.py --boot-trace output. The whole
 	// point of Phase 0 is that this diff either matches or names the first
 	// place it does not.
+	// ---- interrupt acknowledge ---------------------------------------------
+	// A 68000 signals an acknowledge with FC = 111 (CPU space) and puts the
+	// level it latched on A3..A1. TG68KdotC_Kernel.vhd does both -- FC(1 downto
+	// 0) <= "11" while `interrupt`, and memaddr_a(4 downto 0) <= '1' & rIPL_nr
+	// & '0' -- so rtl/cpu/seta_irq.sv can clear exactly the level being taken
+	// rather than the highest one pending, which is a different thing whenever
+	// a higher interrupt arrives between the CPU's decision and its
+	// acknowledge cycle.
+	output logic        iack,
+	output logic  [2:0] iack_level,
+
 	output logic        dbg_stb,
 	output logic [23:1] dbg_addr,
 	output logic        dbg_we,
@@ -151,6 +164,10 @@ module maincpu (
 	localparam int IO_DSW      = 11;
 	localparam int IO_WRAM2    = 12;  // the second work RAM block, where present
 	localparam int IO_MISC     = 13;  // watchdog, coin counter, IRQ acks
+	// pairlove only. seta.cpp calls it protection; prot_r returns the current
+	// value and then reverts that cell to the PREVIOUS value written to it, so
+	// it is a one-deep write history and not an algorithm. Two small RAMs.
+	localparam int IO_PROT     = 14;
 
 	// =====================================================================
 	// The CPU
@@ -159,6 +176,10 @@ module maincpu (
 	wire [15:0] cpu_dout;
 	wire [15:0] cpu_din;
 	wire        n_wr, n_uds, n_lds;
+	wire  [2:0] fc;      // declared before the instance: a port connection to an
+	                     // undeclared name is inferred as a net by ModelSim even
+	                     // under `default_nettype none`, and the later explicit
+	                     // declaration then collides with it.
 	wire  [1:0] busstate;
 	logic       cpu_clkena;
 
@@ -179,15 +200,24 @@ module maincpu (
 		.busstate       (busstate),
 		.longword       (),
 		.nResetOut      (),
-		.FC             (),
+		.FC             (fc),
 		.clr_berr       (),
 		.skipFetch      (),
 		.regin_out      (), .CACR_out (), .VBR_out ()
 	);
 
 	wire        acc_active = (busstate != 2'b01);   // 01 = no memory access
+
 	wire        acc_write  = (busstate == 2'b11);
 	wire [23:0] addr24     = a32[23:0];
+
+	// CPU space: an interrupt-acknowledge bus cycle. Qualified with an actual
+	// access so a stale FC between cycles cannot clear a pending flag.
+	// Placed AFTER addr24 rather than beside the other iack wiring: ModelSim
+	// rejects a use before the declaration where Quartus tolerates it
+	// (LESSONS_LEARNED).
+	assign iack       = acc_active && (fc == 3'b111);
+	assign iack_level = addr24[3:1];
 
 	// =====================================================================
 	// Address decode
@@ -206,6 +236,7 @@ module maincpu (
 	logic [23:0] x1_base;
 	logic [23:0] vregs_base;
 	logic [23:0] in_base, dsw_base;
+	logic [23:0] prot_base;
 	logic        has_l0, has_l1, has_wram2;
 	logic [23:0] wram_mask;
 
@@ -228,6 +259,7 @@ module maincpu (
 		x1_base      = 24'hC00000;
 		vregs_base   = 24'h500000;
 		in_base      = 24'h400000;  dsw_base   = 24'h600000;
+		prot_base    = NONE;
 		has_l0 = 1'b1; has_l1 = 1'b1; has_wram2 = 1'b1;
 
 		case (board)
@@ -332,8 +364,21 @@ module maincpu (
 
 			BOARD_ATEHATE: begin                     // atehate_map
 				rom_end    = 24'h0FFFFF;
-				wram_base  = 24'h900000; wram_end = 24'h9FFFFF;   // a full MB
-				wram_mask  = 24'h0FFFFF;
+				// atehate_map DECLARES a megabyte at 0x900000-0x9fffff, which
+				// is MAME allocating the whole decoded window rather than
+				// evidence the board carries 1 MB of RAM. MEASURED, from a
+				// capture of the full window during play: the game touches
+				// 0x900061-0x9099a19 (variables) and 0x9ffF7b-0x9ffffb (the
+				// stack) and NOTHING else -- and under a 64 KB mirror those two
+				// land at 0x0061-0x9a19 and 0xff7b-0xfffb, with ZERO
+				// collisions. Under a 32 KB mirror there are none either.
+				//
+				// So the board decodes A23..A20 and ignores A19..A16, which is
+				// what a 64 KB part on this address range looks like. Masking
+				// to 64 KB here is what makes the core's work RAM 64 KB instead
+				// of a megabyte the device does not have the block RAM for.
+				wram_base  = 24'h900000; wram_end = 24'h9FFFFF;
+				wram_mask  = 24'h00FFFF;
 				wram2_base = NONE; has_wram2 = 1'b0;
 				pal_base   = 24'h700000; pal_end  = 24'h7003FF;
 				l0v_base = NONE; l1v_base = NONE; l0c_base = NONE; l1c_base = NONE;
@@ -345,6 +390,24 @@ module maincpu (
 				vregs_base = NONE;
 			end
 
+			BOARD_PAIRLOVE: begin                    // pairlove_map
+				// Nothing here shares an address with any other board, and the
+				// palette is 0x1000 bytes -- 2048 entries, four times every
+				// other Group A set, via gfx_pairlove's 0x200 colour base.
+				rom_end    = 24'h03FFFF;
+				wram_base  = 24'hF00000; wram_end = 24'hF0FFFF;
+				wram2_base = NONE; has_wram2 = 1'b0;
+				pal_base   = 24'hB00000; pal_end  = 24'hB00FFF;
+				l0v_base = NONE; l1v_base = NONE; l0c_base = NONE; l1c_base = NONE;
+				has_l0 = 1'b0; has_l1 = 1'b0;
+				sprcode_base = 24'hC00000;
+				spry_base  = 24'hE00000; sprc_base = 24'hE00600;
+				x1_base    = 24'hA00000;
+				in_base    = 24'h500000;  dsw_base = 24'h300000;
+				prot_base  = 24'h900000;
+				vregs_base = NONE;
+			end
+
 			default: ;    // the two-layer defaults; see the assertion below
 		endcase
 	end
@@ -353,6 +416,7 @@ module maincpu (
 	wire is_wram    = (addr24 >= wram_base)  && (addr24 <= wram_end);
 	wire is_wram2   = has_wram2 && (addr24 >= wram2_base) && (addr24 <= wram2_end);
 	wire is_pal     = (addr24 >= pal_base)   && (addr24 <= pal_end);
+	wire is_prot    = (addr24 >= prot_base)  && (addr24 <  prot_base + 24'h400);
 	wire is_spry    = (addr24 >= spry_base)  && (addr24 <  spry_base + 24'h600);
 	wire is_sprc    = (addr24 >= sprc_base)  && (addr24 <  sprc_base + 24'h8);
 	wire is_sprcode = (addr24 >= sprcode_base) && (addr24 < sprcode_base + 24'h4000);
@@ -485,17 +549,34 @@ module maincpu (
 	assign io_wdata = cpu_dout;
 	assign io_uds   = ~n_uds;
 	assign io_lds   = ~n_lds;
-	assign io_sel   = {2'b00,
-	                   is_wram2, is_dsw, is_inputs, is_vregs, is_x1,
-	                   is_l1c, is_l0c, is_l1v, is_l0v,
-	                   is_sprcode, is_sprc, is_spry, is_pal};
+	// SIXTEEN ELEMENTS FOR A SIXTEEN-BIT PORT, one per IO_* index, including the
+	// undriven ones. A short concatenation zero-extends on the LEFT, so adding
+	// a signal at the top silently shifts every index below it -- which is how
+	// is_prot first landed on IO_MISC's bit. Written out in full so the
+	// positions are visible rather than inferred from the element count.
+	assign io_sel   = {1'b0,          // 15 unused
+	                   is_prot,       // 14 IO_PROT
+	                   1'b0,          // 13 IO_MISC -- decoded in the core, not here
+	                   is_wram2,      // 12
+	                   is_dsw,        // 11
+	                   is_inputs,     // 10
+	                   is_vregs,      //  9
+	                   is_x1,         //  8
+	                   is_l1c,        //  7
+	                   is_l0c,        //  6
+	                   is_l1v,        //  5
+	                   is_l0v,        //  4
+	                   is_sprcode,    //  3
+	                   is_sprc,       //  2
+	                   is_spry,       //  1
+	                   is_pal};       //  0
 
 // synthesis translate_off
 	// A board value with no case arm silently gets the two-layer map, which
 	// would decode most addresses to the wrong region and look like a CPU
 	// fault. Say so in simulation rather than letting it pass.
 	always_ff @(posedge clk) begin
-		if (!reset && board > BOARD_ATEHATE)
+		if (!reset && board > BOARD_PAIRLOVE)
 			$fatal(1, "maincpu: board=%0d has no memory map", board);
 	end
 // synthesis translate_on

@@ -69,7 +69,17 @@ module tb_maincpu;
 	logic [23:1] dbg_addr;
 	logic [15:0] dbg_data;
 
-	int board_sel = 8;                      // BOARD_THUNDERL; +BOARD=n overrides
+	// The board comes from the FIXTURE, not from a default. scripts/
+	// prep_maincpu_tb.py writes board.hex beside the other files, so a bare
+	// run of this bench is always self-consistent with whatever fixture is
+	// present. +BOARD=n still overrides, for deliberately trying a wrong one.
+	//
+	// The default used to be BOARD_THUNDERL and only the sweep passed +BOARD.
+	// A bare run against another set's fixture then reported "the CPU stalled
+	// or ran out of time" after 44 of 160 reads -- which names the CPU, and
+	// the CPU was fine.
+	logic [7:0] boardimg [0:0];
+	int board_sel = 8;
 
 	maincpu dut (
 		.clk(clk), .reset(reset), .board(board_sel[3:0]), .cpu_ce(cpu_ce),
@@ -80,6 +90,7 @@ module tb_maincpu;
 		.io_req(io_req), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata),
 		.io_uds(io_uds), .io_lds(io_lds), .io_sel(io_sel), .io_rdata(io_rdata),
 		.ipl_level(3'd0),
+		.iack(), .iack_level(),
 		.dbg_stb(dbg_stb), .dbg_addr(dbg_addr), .dbg_we(dbg_we), .dbg_data(dbg_data)
 	);
 
@@ -196,6 +207,13 @@ module tb_maincpu;
 
 		if ($value$plusargs("ROMLAT=%d", rom_latency))
 			$display("  ROM latency overridden to %0d cycles", rom_latency);
+		boardimg[0] = 8'hxx;
+		$readmemh("sim/maincpu_tb/board.hex", boardimg);
+		if ($isunknown(boardimg[0])) begin
+			$display("FAIL: sim/maincpu_tb/board.hex missing -- run scripts/prep_maincpu_tb.py");
+			$finish;
+		end
+		board_sel = boardimg[0];
 		void'($value$plusargs("BOARD=%d", board_sel));
 
 		$display("=== maincpu boot, diffed against MAME ===");

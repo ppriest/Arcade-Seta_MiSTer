@@ -87,7 +87,13 @@ module x1_010 (
 
 	function automatic logic signed [15:0] sat16(input logic signed [31:0] v);
 		if (v > 32'sd32767)       sat16 = 16'sd32767;
-		else if (v < -32'sd32768) sat16 = -16'sd32768;
+		// 16'sh8000, not -16'sd32768: the decimal form asks for the literal
+		// 32768 in a 16-bit SIGNED context, where the largest representable
+		// value is 32767, and Quartus is right to warn ("constant value
+		// overflow"). It happens to produce the intended 0x8000 anyway, which
+		// is exactly why it is worth writing the unambiguous form -- a warning
+		// that is always there is a warning nobody reads.
+		else if (v < -32'sd32768) sat16 = 16'sh8000;
 		else                      sat16 = v[15:0];
 	endfunction
 

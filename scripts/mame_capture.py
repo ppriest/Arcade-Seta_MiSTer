@@ -209,6 +209,21 @@ FAMILIES = {
         "sprcode": (0xe00000, 0x04000),
         "x1snd":   (0x100000, 0x04000),
     }, ((0x100000, 0x1000ff),)),
+    # pairlove_map -- sprites-only like thunderl, but nothing shares an
+    # address with it. 2048 palette entries (0x1000 bytes), and a 0x200-word
+    # "protection" block at 0x900000 that is not protection in the usual sense:
+    # prot_r returns the current value and then reverts that cell to the
+    # PREVIOUS value written to it, so it is a one-deep write history. Two
+    # small RAMs in RTL, no algorithm to work out.
+    "pairlove": ({
+        "workram": (0xf00000, 0x10000),
+        "palette": (0xb00000, 0x01000),
+        "protram": (0x900000, 0x00400),
+        "sprcode": (0xc00000, 0x04000),
+        "sprylow": (0xe00000, 0x00600),
+        "sprctrl": (0xe00600, 0x00008),
+        "x1snd":   (0xa00000, 0x04000),
+    }, ((0xa00000, 0xa000ff),)),
 }
 
 GAMES = {
@@ -234,9 +249,9 @@ GAMES = {
     "umanclub": "umanclub", "neobattl": "umanclub",
     "wits": "wits",
     "atehate": "atehate",
+    "pairlove": "pairlove",
     # NOT YET TRANSCRIBED -- read the map function in seta.cpp and add them:
-    #   eightfrc, oisipuzl, magspeed, krzybowl, orbs, keroppi, keroppij,
-    #   pairlove
+    #   eightfrc, oisipuzl, magspeed, krzybowl, orbs, keroppi, keroppij
     #
     # roms/ is a MERGED collection, so a clone is captured from its PARENT's
     # zip -- MAME resolves it from there. mame_capture.py passes the set name
@@ -260,6 +275,12 @@ def main():
                          "the layer control blocks, tagged with frame and the "
                          "SCANLINE in force -- the reference for the games "
                          "x1_012.cpp says MAME renders wrong")
+    ap.add_argument("--dip", action="append", default=[], metavar="NAME=SETTING",
+                    help="set a DIP switch by name before the game runs, e.g. "
+                         "--dip 'Flip Screen=On'. Repeatable. A name or setting "
+                         "the machine does not have is fatal, not ignored -- a "
+                         "silently unapplied DIP produces a reference frame that "
+                         "matches for the wrong reason.")
     ap.add_argument("--show", action="store_true",
                     help="render to a window instead of running headless")
     a = ap.parse_args()
@@ -305,10 +326,80 @@ def main():
         SETA_TAG=a.game,
         SETA_REGIONS=regions,
         SETA_TAPS=taps if a.wlog else "",
+        SETA_DIPS=";".join(a.dip),
         SETA_TRACE_N=str(a.boot_trace or 0),
         SETA_SCRIPT=(repo / "scripts" / "mame" /
                      ("boottrace.lua" if a.boot_trace else "capture.lua")).as_posix(),
     )
+
+    # PASS 1 of a --dip capture: let MAME author its own configuration file.
+    #
+    # MAME applies cfg/<set>.cfg at POWER-ON, before any autoboot script runs.
+    # That is the only moment early enough: most of these games read the DIP
+    # switches once during their own initialisation, so a switch set from the
+    # capture script never reaches them. Measured -- with the DIP set from the
+    # capture script only, thunderl came back flipped and wits, blockcar,
+    # umanclub, neobattl, atehate and pairlove did not.
+    #
+    # The cfg directory is per-capture, so nothing here touches the user's own
+    # MAME configuration, and the seed pass writes the file through MAME itself
+    # rather than hand-authoring XML that would have to track MAME's format.
+    cfg_dir = out / "cfg"
+    if a.dip:
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        seed = [
+            str(MAME_EXE), a.game, "-skip_gameinfo", "-nodebug", "-nothrottle",
+            "-sound", "none", "-video", "none", "-nowindow",
+            "-autoboot_delay", "0",
+            "-autoboot_script", (repo / "scripts" / "mame" / "setdip.lua").as_posix(),
+            "-cfg_directory", cfg_dir.as_posix(),
+            "-rompath", rompath(repo),
+            "-seconds_to_run", "10",
+        ]
+        sr = subprocess.run(seed, cwd=str(MAME_DIR), env=env,
+                            capture_output=True, text=True, timeout=300)
+        for line in (sr.stdout or "").splitlines():
+            if line.startswith("SEED") or line.startswith("LUAFAIL"):
+                print("  " + line)
+        written = cfg_dir / f"{a.game}.cfg"
+        info = out / "dipinfo.txt"
+        if not written.exists() or not info.exists():
+            print((sr.stdout or sr.stderr or "").strip()[-1200:])
+            sys.exit(f"the DIP seed pass produced no {written.name} / "
+                     f"{info.name}; nothing would be applied at power-on.")
+
+        # MAME saves a DIPSWITCH entry only when the wanted value is non-zero.
+        # thunderl's "On" is 0x200 and persisted; wits and blockcar have
+        # "On" = 0 -- the same switch, opposite sense -- and nothing was
+        # written. So build the <input> section from the port data setdip.lua
+        # reported, and keep the mameconfig version out of the file MAME itself
+        # just wrote rather than hardcoding one.
+        text = written.read_text(encoding="utf-8-sig", errors="replace")
+        ports = []
+        for line in info.read_text().splitlines():
+            f = line.split("\t")
+            if len(f) == 4:
+                tag, mask, defv, val = f[0], int(f[1]), int(f[2]), int(f[3])
+                ports.append('            <port tag="%s" type="DIPSWITCH" '
+                             'mask="%d" defvalue="%d" value="%d" />'
+                             % (tag, mask, defv, val))
+        if not ports:
+            sys.exit("%s named no ports; the DIP was never applied." % info)
+
+        block = "        <input>\n" + "\n".join(ports) + "\n        </input>\n"
+        if "<input>" in text:
+            head, _, rest = text.partition("        <input>\n")
+            _, _, tail = rest.partition("        </input>\n")
+            text = head + block + tail
+        else:
+            anchor = '<system name="%s">\n' % a.game
+            text = text.replace(anchor, anchor + block, 1)
+        written.write_text(text, encoding="utf8")
+
+        if "DIPSWITCH" not in written.read_text(errors="replace"):
+            sys.exit(f"no DIPSWITCH entry ended up in {written}. Without it the "
+                     f"capture would run with default switches and look like a "
+                     f"success.")
 
     cmd = [
         str(MAME_EXE), a.game,
@@ -327,6 +418,23 @@ def main():
         "-autoboot_script", (repo / "scripts" / "mame" / "run.lua").as_posix(),
         # Snapshots land beside the dumps rather than in MAME's own snap/ tree.
         "-snapshot_directory", out.as_posix(),
+        # NATIVE view: the screen's own bitmap, no cabinet rotation, no
+        # scaling, no artwork. Without it MAME writes the snapshot through the
+        # render pipeline, and over the seven Group A sets a ROT270 game's
+        # snapshot came out 180 degrees from screen space while ROT0 and ROT90
+        # came out unrotated. The file is 384x240 either way, so nothing about
+        # it says which -- the first sweep read as a renderer bug in exactly
+        # the games that happen to be vertical.
+        #
+        # The snapshot, not screen:pixels(), is the synchronised reference.
+        # video:snapshot() re-renders from the state that is live when it is
+        # called, which is the state the region dumps in the same notifier
+        # read; scr:pixels() returns the bitmap MAME rendered at the end of the
+        # VISIBLE area, one vblank earlier, before the game's vblank handler
+        # rewrote sprite RAM. Measured: model-vs-snapshot 0 pixels on all 24
+        # sweep frames, model-vs-pixels() up to 4.3% on frames where the game
+        # writes during vblank.
+        "-snapview", "native",
         # See rompath(): this repo's roms/ first, then mame.ini's own entries.
         "-rompath", rompath(repo),
         # A hard stop, so a script that never reaches its frame cannot leave
@@ -334,6 +442,8 @@ def main():
         # the guard is wall-clock emulated time, not real time.
         "-seconds_to_run", str(max(30, a.frame // 60 + 20)),
     ]
+    if a.dip:
+        cmd += ["-cfg_directory", cfg_dir.as_posix()]
     # mame.ini also sets `window 1`, so the headless case overrides it
     # explicitly rather than relying on -video none alone.
     cmd += (["-window", "-nomaximize"] if a.show

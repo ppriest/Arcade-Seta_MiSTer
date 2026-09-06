@@ -1,6 +1,3 @@
-set_global_assignment -name VERILOG_FILE rtl/lfsr.v
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/cos.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/mycore.v
 set_global_assignment -name SDC_FILE Seta.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE Seta.sv
 
@@ -40,3 +37,30 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/maincpu.sv
 
 # Sound -- X1-010, written from MAME (no FPGA implementation exists).
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/x1_010.sv
+
+# ---------------------------------------------------------------------------
+# Video
+#
+# screen_rotate_two.sv is vendored MiSTer-devel code (Sorgelig) and is left
+# UNTOUCHED: it references signals before declaring them, which Quartus accepts
+# and ModelSim rejects (vlog-2730). It is therefore excluded from simulation by
+# scripts/run_sim.sh rather than patched.
+# ---------------------------------------------------------------------------
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/x1_001.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_palette.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_video_timing.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_video.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/screen_rotate_two.sv
+
+# The sprite region's download-time layout permutation, and the SDRAM backend
+# that applies it.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/gfx_swizzle.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/seta_sdram_top.sv
+
+# Interrupts, per-game configuration, pairlove's write-history block, and the
+# core that ties the lot together.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/seta_irq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_board_cfg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_prot_pairlove.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_prot_thunderl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_core.sv

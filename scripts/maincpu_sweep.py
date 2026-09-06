@@ -44,6 +44,7 @@ BOARDS = {
     "umanclub": 10, "neobattl": 10,
     "blockcar": 11,
     "atehate": 12,
+    "pairlove": 13,
 }
 
 # One representative per family, for the default run.
@@ -75,7 +76,7 @@ def find_bash():
 
 ONE_PER_FAMILY = ["gundhara", "daioh", "extdwnhl", "kamenrid", "msgundam",
                   "blandia", "blandiap", "drgnunit", "thunderl", "wits",
-                  "umanclub", "blockcar", "atehate"]
+                  "umanclub", "blockcar", "atehate", "pairlove"]
 
 
 def owner_zip():

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Extract a set's maincpu ROM_START records straight from seta.cpp.
+"""Extract a set's ROM_START records for one region straight from seta.cpp.
 
-    python scripts/extract_romstart.py --emit          # the SETS table below
-    python scripts/extract_romstart.py gundhara daioha # just these
+    python scripts/extract_romstart.py --emit           # the maincpu SETS table
+    python scripts/extract_romstart.py gundhara daioha  # just these
+    python scripts/extract_romstart.py --region gfx1 thunderl atehate
 
 Point MAME_SRC at the driver (default E:/mame/src/mame/seta/seta.cpp).
 
@@ -46,8 +47,14 @@ def blocks(text):
     return out
 
 
-def maincpu_records(body):
-    """Records for the "maincpu" region only, plus anything unparsed."""
+def region_records(body, want="maincpu"):
+    """Records for ONE named region, plus anything in it that did not parse.
+
+    The region argument exists because the sprite and tile images need the same
+    treatment the program ROM got: "gfx1" is loaded with the same four record
+    kinds, and hand-transcribing it would reintroduce exactly the risk this
+    script was written to remove.
+    """
     records, unknown = [], []
     region = None
     for raw in body.split("\n"):
@@ -58,7 +65,7 @@ def maincpu_records(body):
         if m:
             region = m.group(2)
             continue
-        if region != "maincpu":
+        if region != want:
             continue
         m = re.match(r'(\w+)\(\s*"([^"]+)"\s*,\s*(0x[0-9a-fA-F]+)\s*,'
                      r'\s*(0x[0-9a-fA-F]+)(.*)', line)
@@ -84,6 +91,11 @@ def maincpu_records(body):
     return records, unknown
 
 
+def maincpu_records(body):
+    """The original entry point, kept because callers import it by name."""
+    return region_records(body, "maincpu")
+
+
 # Every set in docs/ROADMAP.md's scope, parents and clones.
 IN_SCOPE = """
 thunderl thunderla wits blockcar umanclub neobattl atehate pairlove orbs
@@ -99,6 +111,8 @@ blandia blandiap zombraid zombraidp zombraidpj
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("sets", nargs="*", help="default: every in-scope set")
+    ap.add_argument("--region", default="maincpu",
+                    help="ROM_REGION to extract (maincpu, gfx1, gfx2, gfx3, x1snd)")
     ap.add_argument("--emit", action="store_true",
                     help="print a Python SETS table ready to paste")
     a = ap.parse_args()
@@ -114,11 +128,11 @@ def main():
         if s not in all_blocks:
             problems.append(f"{s}: no ROM_START in the driver")
             continue
-        recs, unknown = maincpu_records(all_blocks[s])
+        recs, unknown = region_records(all_blocks[s], a.region)
         if unknown:
             problems.append(f"{s}: {len(unknown)} unrecognised line(s): {unknown[:2]}")
         if not recs:
-            problems.append(f"{s}: no maincpu records found")
+            problems.append(f"{s}: no {a.region} records found")
             continue
         table[s] = recs
 

@@ -7,8 +7,25 @@ module  pll_0002(
 	// interface 'reset'
 	input wire rst,
 
-	// interface 'outclk0'
+	// interface 'outclk0'  -- clk_sys, 96 MHz
 	output wire outclk_0,
+
+	// interface 'outclk1'  -- SDRAM_CLK, the same 96 MHz shifted 180 degrees
+	//
+	// The physical SDRAM clock pin is driven from HERE, not from sdram.sv --
+	// that module's own comment says so ("Real SDRAM_CLK phase generation is
+	// top-level") and it simply assigns SDRAM_CLK = clk, which is right for a
+	// simulation and wrong for a board.
+	//
+	// 180 degrees is 5208 ps of the 10417 ps period, and it is the value the
+	// Psikyo core proved on real MiSTer hardware; Fuuki took it unchanged for
+	// the same reason. At 266 degrees -- tuned for a different controller --
+	// Psikyo came up as a frozen pattern with the CPU never booting, because
+	// commands and read data were latched on the wrong edge. NO SIMULATION CAN
+	// CATCH THIS: the chip model has no notion of clock phase, which is why
+	// this is a value carried over from something that ran rather than one
+	// derived here.
+	output wire outclk_1,
 
 	// interface 'locked'
 	output wire locked
@@ -18,12 +35,12 @@ module  pll_0002(
 		.fractional_vco_multiplier("false"),
 		.reference_clock_frequency("50.0 MHz"),
 		.operation_mode("direct"),
-		.number_of_clocks(1),
-		.output_clock_frequency0("20.000000 MHz"),
+		.number_of_clocks(2),
+		.output_clock_frequency0("96.000000 MHz"),
 		.phase_shift0("0 ps"),
 		.duty_cycle0(50),
-		.output_clock_frequency1("0 MHz"),
-		.phase_shift1("0 ps"),
+		.output_clock_frequency1("96.000000 MHz"),
+		.phase_shift1("5208 ps"),
 		.duty_cycle1(50),
 		.output_clock_frequency2("0 MHz"),
 		.phase_shift2("0 ps"),
@@ -77,7 +94,7 @@ module  pll_0002(
 		.pll_subtype("General")
 	) altera_pll_i (
 		.rst	(rst),
-		.outclk	({outclk_0}),
+		.outclk	({outclk_1, outclk_0}),
 		.locked	(locked),
 		.fboutclk	( ),
 		.fbclk	(1'b0),

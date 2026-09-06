@@ -105,8 +105,256 @@ hardware.
   video engines still have to fit in the same period. And multicycle 6, which the 96/16 enable
   ratio does support, measured *worse* than 4, because by then the bottleneck had left the kernel.
 
-**Phase 0 is complete.** Not started: the video engines, the top level, any hardware. `Seta.sv` is
-still Template_MiSTer's demo core. The rest of this document is a plan, not a status report.
+**Phase 0 is complete.**
+
+### Phase 1 so far: the sprite engine renders correctly, and does not yet fit in a scanline
+
+- **The golden reference is closed at both ends.** `scripts/x1_001_model.py` transcribes
+  `x1_001.cpp` and reproduces MAME's own render of **24 captured frames across all eight Group A
+  sets, pixel for pixel** (`scripts/x1_001_sweep.py`). `rtl/video/x1_001.sv` then reproduces the
+  model over the same 24 frames at ROM latencies 6/12/24 — **72 of 72 runs, 92,160 pixels each,
+  zero mismatches** (`scripts/x1_001_rtl_sweep.py`). The two halves are compared separately
+  because MAME renders a whole frame from end-of-frame state while the RTL renders per scanline
+  from live RAM; each half compares like with like.
+
+- **Three findings that the register map does not give you**, all now transcribed rather than
+  reasoned: the bank expression `(ctrl2 ^ (~ctrl2 << 1)) & 0x40` means *bits 6 and 5 agree*, not
+  *bit 6 set* (thunderl draws from `spritecode[0x1000]` and never buffers); foreground and
+  background position y oppositely, one reflected through `screen.height()` and the other not; and
+  **no Group A game buffers sprites at all** — `setac_eof` is wired up by four `machine_config`s in
+  seta.cpp and none of them is in this phase.
+
+- **The line budget does not close, and this is the open problem.** A line is 512 dots at the
+  believed 8 MHz dot clock = **6144 clk_sys cycles**. Measured by the engine's own counters over
+  all 24 captures at latency 12:
+
+  | | worst line |
+  |---|---|
+  | cycles | 13,269 – 44,000 |
+  | sprites on that line | 155 – 544 |
+
+  Every capture, gameplay frames included. The cause is structural: the chip walks all 512
+  foreground entries every line, and a game using 40 of them leaves the other 472 holding one
+  stale y — so they all land on the same sixteen scanlines. An earlier estimate of 32–61 taken
+  from the frames rather than from the iteration was wrong by an order of magnitude, in the
+  direction that makes a design look finished.
+
+  **The engine walks front to back, takes a cutoff, and fetches a sprite row in one SDRAM
+  granule.** Reversing the walk and giving the line buffer a written bit -- first writer wins --
+  produces the identical picture (the two orders are duals), but changes what happens when time
+  runs out: the sprites dropped are the bottom-most rather than the ones on top. Then
+  `rtl/memory/gfx_swizzle.sv` permutes the sprite region's word addresses at download time so a
+  row is eight contiguous, 8-byte-aligned bytes -- one read instead of four.
+
+  Measured over the same 24 captures, `line_budget` = 6144, shown as *before the swizzle* to
+  *after*:
+
+  | ROM latency | identical to the model | sprites the worst line completed | pixels changed |
+  |---|---|---|---|
+  | 6  | 22/24 to **22/24** | 97 to **165** | 1,200 to **720** |
+  | 12 | 22/24 to **22/24** | 68 to **140** | 1,448 to **910** |
+  | 24 | 6/24 to **22/24**  | 43 to **108** | 168,094 to **1,120** |
+
+  The latency-24 row is the point: before the swizzle the picture fell apart if the SDRAM was
+  slow, and now it does not. Unbudgeted it is **72 of 72 runs pixel-identical** at all three
+  latencies.
+
+  The only capture that still loses anything at any latency is thunderl/thunderla frame 300 -- a
+  boot state with 536 entries stacked on one scanline -- losing 360 to 560 pixels of 92,160
+  (0.4-0.6%) on six lines at the bottom of the screen. Every gameplay frame in every set is
+  unchanged. **The cutoff now costs nothing visible across the whole plausible latency range.**
+
+  512 sprites in 6144 cycles is **12 cycles each**. The real chip evidently managed it: a 32-bit
+  sprite ROM bus at 16 MHz delivers 4096 bytes per 64 µs line, which is 512 rows of 8 bytes with
+  nothing spare — so it has a per-line limit too, and MAME's own comment agrees ("Draw up to 512
+  sprites, mjyuugi has glitches if you draw them all"). Three changes are needed and none is
+  speculative:
+
+  1. **DONE — front to back, first writer wins, with a cutoff.** A written bit per line-buffer
+     pixel replaces the write order as the priority mechanism, so running out of time drops the
+     bottom-most sprites instead of the ones on top.
+  2. **DONE — one ROM read per sprite row, not four** (`rtl/memory/gfx_swizzle.sv`). The
+     permutation is a **pure word-address bit permutation**: source word `{h, tile, yh, xh, yl}`
+     becomes destination `{tile, yh, yl, h, xh}`, and the plane bit — the only thing below word
+     granularity — is the low bit of both. Nothing needs shuffling inside a word, so the download
+     path can do it by rearranging address bits alone, leaving `sdram_download.sv`'s byte pairing
+     untouched. The engine's whole address calculation collapses to the granule `{tile, yh, yl}`.
+
+     The `.mra` could not have expressed it: `mra-tools-c` would have to extract a 16-on/16-off
+     stride, which is not one of its interleave forms. A 2-byte interleave of the two `RGN_FRAC`
+     halves *is* expressible and would have given two reads per row rather than one — worth
+     remembering for Phase 4, where the 6bpp layers raise the same question.
+
+     **Still to wire up:** the swizzle is verified through `sim/x1_001_tb`, which pushes the
+     natural region through the RTL module word by word and requires the engine reading the result
+     to match the model reading the natural region. It is not yet in the real download path —
+     that needs `rtl/memory/seta_sdram_top.sv` and its region map, which do not exist yet.
+  3. **NOT NEEDED YET — more than one pixel written per cycle**, so a 16-pixel blit costs 4 cycles
+     rather than 18. After (2) the blit is the largest remaining term, but with 108 sprites a line
+     at the worst plausible latency and every gameplay frame already unaffected, there is nothing
+     left for it to buy. An unaligned 16-pixel run spans five 4-pixel words, so it is not cheap.
+     Revisit only if a real game turns out to need it.
+
+- **The whole video path matches MAME's render, in RGB.** `rtl/video/seta_palette.sv` (X1-006,
+  5:5:5 with pal5bit), `rtl/video/seta_video_timing.sv` (counters, sync, the line cadence and the
+  two scanline interrupts) and `rtl/video/seta_video.sv` (the three tied together) are checked by
+  `sim/seta_video_tb`, which samples the output **the way the MiSTer framework does** -- on
+  `vga_ce` with `vga_de` high -- rather than reaching into the line buffer. Anything wrong about
+  *when* a pixel is presented is a real failure there.
+
+  **44 of 48 frames pixel-identical to MAME's own render**, over all eight Group A sets at three
+  frames each, at ROM latencies 12 and 24, with the line budget in force and **zero line
+  overruns**. The only failures are thunderl and thunderla at frame 300 -- the 536-sprite boot
+  state again -- at 460 and 565 pixels of 92,160 (0.5-0.6%).
+
+  Two things this test caught that nothing before it could:
+
+  * **The double buffer needs the engine TWO lines ahead, not one.** The buffers swap at
+    `line_start`, so the buffer written during line L is not read until L+1, which means the
+    engine started at the beginning of line L must be rendering L+1 -- and `line_start` fires at
+    the end of L-1, so the line it names is (L-1)+2. One short, the whole picture is displayed one
+    scanline late: 3,560 of 92,160 pixels wrong, spread as ones and twos along every horizontal
+    edge of 148 of 240 lines, which reads as sprite dropout rather than a timing error. Shifting
+    the captured frame down one line made it match exactly, which is what named it.
+  * **The line budget has to sit just below the line period, not at it.** At exactly 6144 the
+    cutoff and the buffer swap race, and the overrun path restarts the engine mid-render instead
+    of stopping it cleanly. 6100 gives 0 overruns and 49 clean cutoffs a frame, costing nothing
+    visible on any gameplay frame.
+
+- **Interrupts work against the real kernel.** `rtl/cpu/seta_irq.sv` holds a pending flag per
+  level with both of seta.cpp's clearing rules — HOLD_LINE, cleared when the CPU acknowledges, and
+  ASSERT_LINE, cleared only by the board's own ack write. `maincpu.sv` now connects the kernel's
+  `FC` and exposes `iack` (FC = 111 during an access) with the level the CPU latched off A3..A1.
+
+  `sim/irq_tb` runs a hand-assembled 68000 ISR through the real TG68K and checks four things: a
+  HOLD request is taken once and the acknowledge clears it; an ASSERT request re-enters until an
+  explicit write clears it (which is what blockcar relies on — it maps no ack at all); an
+  acknowledge clears the level the CPU *took*, not the highest pending; and a request arriving on
+  the acknowledge cycle survives. All pass, with 5 acknowledges observed at the right levels.
+
+  Two details had to be read rather than assumed. MAME's three-argument
+  `set_inputline(tag, line, value)` is `if (data) exec.set_input_line(linenum, value)` — it fires
+  on the rising edge only and never clears, so an ASSERT vblank source stays asserted after vblank
+  ends. And seta.cpp's ack names are by PIN, not level: `ipl0_ack_w` clears level 1, `ipl1_ack_w`
+  level 2, `ipl2_ack_w` level 4. Reading those as levels puts every acknowledge one step out.
+
+- **The memory backend composes.** `rtl/memory/seta_sdram_top.sv` puts every runtime ROM on the
+  one chip, with a fixed address map that `.mra` generation will be driven from, and applies the
+  sprite layout permutation on the way IN so `sdram_download.sv` itself is untouched — the
+  permutation preserves bit 0, so that module's byte-pair coalescing still works.
+
+  Port assignment is by deadline, not by convenience: sprites at port 0 (one scanline to build a
+  line, dropped sprites visible), the X1-010 at port 1 (a real deadline but one byte per voice per
+  sample step), and the CPU plus the download at port 2, because starving the CPU degrades
+  gracefully where starving either of the others does not. **This will change in Phase 2** — a
+  tilemap granule has a harder deadline than a sprite one, since the sprite engine renders a line
+  ahead and the tilemap engine does not. Re-partition then, with a measurement.
+
+  LAYOUT_A, the only map defined so far: maincpu 1 MB at 0x000000, gfx1 2 MB at 0x100000, x1snd
+  1 MB at 0x300000 — 4 MB. One map per layout rather than one sized for the largest game, or
+  thunderl's `.mra` would pad out to gundhara's 8 MB sprite base and ship megabytes of filler for
+  a 1.5 MB game.
+
+  `sim/sdram_top_tb` streams a real set in through the ioctl port and reads every region back
+  through the port the core will use it from. **thunderl: 1,523 reads, zero mismatches. atehate
+  (a 2 MB sprite region and a 1 MB program): 5,497 reads, zero mismatches.** The sprite check is
+  the interesting one — 816 and 2,832 sprite rows respectively, each required to be one 64-bit
+  granule in the right word order, with the expectation computed from the NATURAL region using
+  x1_001.sv's own layout arithmetic so a wrong permutation cannot agree with a wrong reader.
+
+- **The core exists, and it runs a real game.** `rtl/seta_core.sv` ties the CPU, interrupts,
+  sprites, palette, video timing, sound and SDRAM together; `rtl/seta_board_cfg.sv` turns the
+  `.mra` mod byte into every per-game constant, including which of maincpu.sv's memory maps to
+  use; `Seta.sv` is now the real top level (hps_io, PLL, inputs, DIPs, arcade_video, rotation)
+  with Template_MiSTer's demo core deleted.
+
+  Two pieces of game-specific hardware came out of this: thunderl's protection register
+  (`rtl/seta_prot_thunderl.sv` — a write anywhere in a 128 KB window latches eight bits derived
+  from the *address*, and one read address returns them) and pairlove's 0x900000 block
+  (`rtl/seta_prot_pairlove.sv` — a one-deep write history, where a read returns the current value
+  and reverts the cell to the previous one). pairlove also got its own memory map,
+  `BOARD_PAIRLOVE`; the maincpu boot sweep is **36 of 36 sets** with it.
+
+  **The acceptance test is a bus-trace diff against MAME.** `sim/seta_core_tb +TRACE=n` dumps the
+  core's own trace and `scripts/diff_core_trace.py` aligns it against MAME's for the same game.
+  Unlike `sim/maincpu_tb`, which uses a behavioural ROM and reads zero from every peripheral, this
+  is the real core against real peripherals and can follow a game past its own start-up:
+
+  > **thunderl: 93,775 of 100,000 accesses aligned (93.8%), and every matched access carried the
+  > same data.** The 6.2% unmatched are TG68K's prefetch and read-modify-write ordering, which
+  > `sim/maincpu_tb` already established as expected.
+
+  Zero data mismatches is the load-bearing number: it means the DIP bytes, the protection
+  register, the input ports and every decoded region return exactly what MAME's do.
+
+- **What the whole-core simulation cannot answer, and why.** The first version of that bench
+  required the palette and sprite RAM to have been written and an interrupt taken within a few
+  frames, and reported four failures when none had. None had happened in MAME either —
+  thunderl's start-up is a RAM fill still running at MAME's own **400,000th** bus access, tens of
+  frames in, and six frames of the full core takes thirteen minutes to simulate. So the bench now
+  fails only on things that cannot be explained by the game still booting (the CPU not running,
+  no video lines, no sprite fetches, any line overrun) and reports the rest as progress. "Does it
+  reach the title screen" is a hardware question.
+
+- **The `.mra` files exist, and each is proved byte for byte.** `scripts/build_mra.py` builds every
+  region's image from the driver's ROM_START semantics, TESTS candidate interleave forms against
+  that rather than deriving map digits, then re-reads the finished file with `scripts/mra.py` and
+  compares the whole assembled image, padding included. **8 of 8 Group A sets verified.**
+
+  Almost nothing is transcribed: region records from `extract_romstart`, the address map parsed out
+  of `seta_sdram_top.sv` (the RTL is the authority -- a `.mra` loading to different offsets than the
+  core reads from gives a black screen and no other symptom), DIP switches from the new
+  `scripts/extract_dips.py`, and title/year/manufacturer/parent/rotation from the `GAME()` line.
+
+- **The core fits, and the first full build found a missing constraint.** On the 5CSEBA6U23I7:
+  **20,871 / 41,910 ALMs (50%)**, 222/553 RAM blocks, 44/112 DSPs, 3/6 PLLs.
+
+  The first compile missed timing by **-7.954 ns** with **all thirty worst paths inside
+  `TG68KdotC_Kernel`** -- the same shape as Phase 0's *unconstrained* measurement. Not the sprite
+  engine, not the video path, not the SDRAM: `Seta.sdc` was still the template's two lines, and
+  Phase 0's audited multicycle had only ever existed in `rtl/synth_check/`. Carrying it across:
+  **-7.954 -> -3.956**. Registering the CPU interface into `x1_001`, `seta_palette` and
+  `seta_prot_pairlove`: **-3.956 -> -1.751**.
+
+  At that point the critical path left the CPU. All fifteen worst paths ran from `x1_001`'s
+  `spriteylow` RAM output through three chained 8-bit adders into the foreground hit test -- and
+  every term but the RAM byte is constant for the whole scan, so it is now pre-added once per line.
+  Verified 72/72 against the model, and by exhaustive equivalence of the old and new expressions
+  over 8,865,792 input combinations across both the flipped and unflipped branches. **The rebuild
+  that measures it is still running; -1.751 ns is the last completed measurement.**
+
+- **The flipped half of the sprite Y arithmetic is covered for six of the seven sets.** No Group A
+  game sets flip screen by itself, so all 24 ordinary captures have `spritectrl[0]` bit 6 clear and
+  the sweep's 72/72 never exercised it against MAME at all.
+
+  What works is MAME's own configuration file. `cfg/<set>.cfg` is applied at POWER-ON, before any
+  autoboot script runs, which is the only moment early enough for a game that reads the switches
+  once during its own initialisation. `mame_capture.py --dip "Flip Screen=On"` now runs a seed pass
+  (`scripts/mame/setdip.lua`) into a per-capture cfg directory, so nothing touches the user's own
+  MAME configuration. Two earlier attempts did not work: setting the DIP from the capture script is
+  too late for six of the seven, and `soft_reset()` from that script hangs the capture outright.
+
+  MAME saves a DIPSWITCH entry only when the wanted value is non-zero -- `thunderl`'s "On" is 0x200
+  and persisted, while `wits` and `blockcar` have "On" = 0, the same switch with the opposite sense,
+  and nothing was written. So the seed pass reports the port tag, mask and defvalue it used and the
+  `<input>` section is built from that, keeping the `mameconfig version` out of the file MAME itself
+  wrote.
+
+  **`wits`, `blockcar`, `umanclub`, `neobattl`, `atehate` and `pairlove` all produce genuinely
+  flipped frames** -- `ctrl0 = 0x50`, 48 to 314 foreground sprites, 12 to 16 floating-tilemap
+  columns -- and the model is pixel-identical to MAME on every one. The RTL sweep, now covering
+  those alongside the ordinary captures, is **90 of 90 runs identical to the model** at ROM
+  latencies 6, 12 and 24.
+
+  `thunderl` is the exception and is NOT covered: the cfg is loaded and honoured, but the game does
+  not set the sprite chip's flip bit at frame 300, 900 or 1800 -- at f900 `ctrl0` reads 0x00, so it
+  is mid-transition with the control register not yet written. It is the one set that DID flip
+  through the earlier runtime route, so its behaviour is timing-dependent in a way that is not
+  pinned down. `x1_001_sweep.py --flip` fails it explicitly rather than passing it.
+
+Not started: any hardware.
+`Seta.sv` is still Template_MiSTer's demo core. The rest of this document is a plan, not a status
+report.
 
 What *has* been done is the driver analysis this document records: the hardware tables, the memory
 map, the ROM inventory and the clock/bandwidth arithmetic in "Design decisions" are all derived

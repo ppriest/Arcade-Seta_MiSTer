@@ -512,6 +512,310 @@ propagation delay. Interface tuning (clock phase, drive strength, IOE registers)
 *external* margins by a fraction of a clock period; if a change that size makes no difference at
 all, the problem is not at the interface.
 
+### [Seta] Estimate the worst case from the hardware, not from the frames you happened to look at
+
+The sprite engine was budgeted against a count taken from the captured frames:
+a quick script said 32-61 sprites per scanline, against a budget of 6144
+clk_sys cycles, and the design that followed spent ~76 cycles per sprite and
+looked comfortable.
+
+The RTL's own per-line counter then measured **155 to 544 sprites on the
+busiest line of every single capture** -- 24 of 24, every game, gameplay frames
+included. Not a boot artefact. The reason is structural and obvious in
+hindsight: the chip walks all 512 foreground entries every line, and a game
+that uses 40 of them leaves the other 472 holding whatever they held last,
+which is usually one value. Every unused entry therefore has the SAME y, and
+they all land on the same sixteen scanlines.
+
+The estimate was not slightly wrong, it was wrong by an order of magnitude, and
+it was wrong in the direction that makes a design look finished. Two rules come
+out of it:
+
+  * A per-line worst case is a property of the HARDWARE's iteration, not of the
+    art. Count what the engine must WALK, not what the game meant to draw.
+  * Instrument the RTL rather than modelling the workload. `dbg_worst_line` and
+    `dbg_worst_sprites` are four lines of Verilog, they run inside the real
+    engine on real data, and they answer the question the Python script got
+    wrong. The same counters work on hardware, where `$time` does not exist.
+
+### [Seta] Never write a literal into a vector that does not start at bit 0
+
+`logic [7:1] hold` indexes interrupt LEVELS, so level 2 is bit 2. Written as a
+literal, `7'b0000110` numbers its bits from the MSB down to index 1 and means
+levels 3 and 2 -- not levels 1 and 2. Every pattern in the first version of
+sim/irq_tb was off by one that way.
+
+The failure was worse than a plain wrong answer: the checks that happened to
+use a level the wrong pattern also set PASSED, and the ones that did not
+FAILED, so the report read as a partly-broken RTL module rather than a
+mis-written stimulus. Two of four checks failing is a much more convincing lie
+than four of four.
+
+The fix is not to count more carefully, it is to stop counting: a two-line
+helper that takes level numbers and sets those bits removes the whole class.
+Anywhere a vector's indices mean something -- levels, channels, players -- name
+them; a literal is only safe when the vector starts at 0 AND the bits have no
+meaning worth writing down.
+
+### [Seta] A behavioural ROM in a bench must speak the transport's byte order
+
+sim/irq_tb hand-assembles a 68000 program into a behavioural ROM. Written the
+readable way round -- 0x00FF, 0xFFF0 for a stack pointer -- the CPU read
+0xFF00.. and ran away through NOPs across the whole address space, which looks
+exactly like a CPU that never started.
+
+maincpu.sv has ROM_BYTESWAP set, because sdram_download.sv pairs image bytes
+{odd, even} with the EVEN byte in the low half and the CPU swaps that back into
+a big-endian word. A behavioural ROM standing in for that transport has to
+present the same order, or it is not standing in for it.
+
+Same lesson as the fixtures for every other bench here, which are built by a
+script that already knows the order -- the moment a bench builds its own data
+by hand, that knowledge has to be restated. It is worth saying in the bench
+where the swap happens and why, rather than silently pre-swapping the table and
+leaving the next reader to work out why the program looks wrong.
+
+### [Seta] Backpressure: assert the write in the SAME step the wait clears
+
+A testbench feeding the ioctl port has to honour `ioctl_wait`. The obvious
+shape is wrong:
+
+    while (ioctl_wait) @(posedge clk);
+    @(posedge clk);                      // <- this
+    ioctl_addr <= a; ioctl_dout <= d; ioctl_wr <= 1;
+
+The extra edge lets `ioctl_wait` rise again in the gap, so the write is
+asserted into a stalled port and lost. The assignments have to follow the wait
+loop with no edge between them.
+
+It presented as every ODD word of the program coming back wrong, which reads as
+a byte-lane or pairing fault in `sdram_download` -- a module that does pair
+bytes {odd, even} and is exactly where you would start looking. The correct
+form was already in `sim/maincpu_sdram_tb`, written months of commits earlier;
+the new bench reinvented the wrong one.
+
+When writing a second bench against an interface a first bench already drives,
+copy the driver rather than rewriting it. The handshake details are the part
+that was hard to get right the first time.
+
+### [Seta] A liveness test needs a timescale, or it reports failure for being early
+
+The whole-core bench asked, after six simulated frames, whether the palette had
+been written, sprite RAM had been written, and an interrupt had been taken. All
+three were no, and it printed four failures. Hours went into the interrupt path
+before the obvious question got asked: WHAT DOES MAME DO IN SIX FRAMES?
+
+The answer was the same thing. thunderl's start-up is a RAM fill that is still
+running at MAME's own 400,000th bus access -- tens of frames -- and six frames
+of the full core is thirteen minutes of ModelSim. The bench was not detecting a
+dead core, it was detecting a live one that had not got there yet.
+
+Two rules:
+
+  * Before asserting that something should have happened by time T, MEASURE T
+    against the reference. MAME will tell you, in one command
+    (`mame_capture.py --boot-trace N`), how far a game gets in N accesses.
+  * A test that cannot be run long enough to answer its question should not ask
+    it. Split the checks: fail on what cannot be explained by being early (the
+    CPU not running at all, no video lines, a line overrun) and REPORT the rest
+    as progress.
+
+### [Seta] A constraint proved in a side project is not in your design
+
+Phase 0 built rtl/synth_check/ -- a standalone Quartus project holding the
+CPU, the sound chip and the SDRAM transport -- to answer whether 96 MHz was
+reachable. It was: +0.011 ns, after a TG68K kernel multicycle that took four
+attempts and a written gating audit to justify.
+
+The first compile of the REAL project came out at -7.954 ns with all thirty
+worst paths inside TG68KdotC_Kernel: the same shape, and nearly the same
+magnitude, as the UNCONSTRAINED Phase 0 measurement. Seta.sdc was still the
+template's two lines. The constraint had never left the side project.
+
+The measurement was not wrong and the audit was not wasted -- but neither was
+a property of the design until the constraint that produced them was in the
+design's own SDC. Two things follow:
+
+  * When a side project establishes a constraint, MOVE THE CONSTRAINT, not
+    just the conclusion, and do it in the same commit as the measurement.
+  * The shape of a failure identifies its cause faster than its size. "All
+    thirty worst paths inside one vendored module" is not a design problem,
+    it is a missing constraint on that module -- and it reads identically to
+    the measurement that led to writing the constraint in the first place.
+
+### [Seta] A branch no capture exercises is not covered, however many runs pass
+
+x1_001's foreground Y arithmetic has two halves, flipped and unflipped, and
+the RTL sweep reported 72 of 72 runs identical to the model. Checking what was
+actually in those captures: spritectrl[0] bit 6 is CLEAR in all 24 of them. No
+Group A game turns flip screen on by itself, so the flipped half had never
+been compared against MAME at all. The sweep was not wrong -- it was answering
+a narrower question than its summary line suggested.
+
+Flip Screen is a DIP in these games, so the obvious fix is a capture that sets
+it. mame_capture.py takes --dip "Flip Screen=On" and x1_001_sweep.py --flip
+captures into debug/flip-*, which the RTL sweep picks up alongside the ordinary
+ones. THE MECHANISM DOES NOT WORK YET, and the way it failed is the lesson.
+
+First attempt: the DIP is set from the autoboot script, which runs after the
+machine has already reset and begun executing. Six of seven sets came back with
+spritectrl[0] = 0x10 -- unflipped -- and the sweep printed PASS for all six. A
+capture that is not flipped cannot say anything about flipped rendering, however
+well it compares.
+
+Second attempt: soft_reset() from the same script, so the game re-reads the
+switches. That HANGS the capture -- all seven sets failed outright, MAME never
+reaching the target frame and never exiting. The frame notifier the script
+installs does not survive the reset it asks for.
+
+Where it stands: thunderl produced a genuinely flipped capture twice
+(spritectrl[0] = 0x50), and on it the model was pixel-identical to MAME and the
+RTL identical to the model at ROM latencies 6, 12 and 24. That result is real.
+It is also NOT CURRENTLY REPRODUCIBLE: the same command now returns an
+unflipped frame, with MAME's own log confirming the DIP was applied
+(raw 0x200). So the flipped arithmetic has been checked against MAME once, by a
+route that cannot presently be re-run, which is not the same as covered.
+
+The remaining way in is MAME's own configuration -- DIP settings live in
+cfg/<set>.cfg and are applied at power-on, before any Lua runs. Writing that
+file from the Python side is the next thing to try.
+
+Two smaller things fell out of it:
+
+  * A DIP that is silently not ACTED ON is the worst outcome available. The
+    capture succeeds, MAME renders unflipped, the RTL renders unflipped, they
+    match, and the test proves nothing while printing PASS. Making the Lua
+    setter's own failures fatal did not help at all -- the field was found and
+    set every time. Only checking the RESULT does: x1_001_sweep.py --flip now
+    fails any frame whose spritectrl[0] bit 6 is clear. Verify the effect, not
+    the action.
+
+  * The first count of flipped captures read byte 0 of the spritectrl dump and
+    found 0 of 24. Right answer, wrong byte: these are byte-wide registers on
+    odd addresses, so ctrl0 is byte 1 of the big-endian word dump. Byte 0
+    would have said "no flip" for a flipped capture too.
+
+### [Seta] Diff the whole core against MAME, not just the CPU
+
+sim/maincpu_tb diffs the CPU's bus trace against MAME's, and it was the test
+that proved the address decode. It cannot go far, because it runs against a
+behavioural ROM with every peripheral reading zero -- the first DIP read or
+protection read ends it.
+
+Tracing the WHOLE core and aligning that against MAME is a strictly better
+test and costs one plusarg plus a hundred lines of Python. On thunderl it
+aligned 93,775 of 100,000 accesses with ZERO data mismatches, which says
+something no component test can: every peripheral, every decoded region and
+every DIP byte returns what MAME's does, in the order the game asks.
+
+It also found two real gaps that no component test would have -- thunderl's
+protection register, and that its IRQ acknowledge fires on a READ as well as a
+write (seta.cpp maps `.rw(ipl1_ack_r, ipl1_ack_w)` and the read handler's whole
+body calls the write one).
+
+Two notes on building the comparison itself, both of which cost a run:
+
+  * The alignment must be able to skip on BOTH sides. A window that only looks
+    ahead in one stream stalls at the first access the other never makes; that
+    version reported 27 matches out of 20,000, which reads as a dead core.
+  * difflib does it correctly and is quadratic. At 100,000 entries it ran for
+    ten minutes without finishing. A bounded two-pointer walk is O(n * window),
+    and the window only has to cover a prefetch difference -- one or two
+    entries.
+
+### [Seta] A double buffer puts the renderer TWO lines ahead, not one
+
+The sprite engine renders into one line buffer while the video reads the other,
+and they swap at line_start. The obvious cadence -- "at the start of line L,
+render line L+1" -- is wrong by one, and the arithmetic says why: the buffer
+written during line L is not read until line L+1, so the engine running during
+L must be producing L+1; line_start fires at the END of L-1, so the line it
+names is (L-1)+2.
+
+The failure is nasty because it does not look like a timing error. The whole
+picture is displayed one scanline late, which on a real frame shows up as a
+few stray pixels along every horizontal edge -- measured against MAME, 3,560 of
+92,160 pixels, in ones and twos, on 148 of 240 lines. That reads as sprite
+dropout, and the sprite engine had a known dropout mechanism to blame it on.
+
+What named it was shifting the captured frame by a line and re-diffing: at
++1 line the difference was exactly zero. When a picture is *nearly* right,
+check rigid transforms of it before reading any logic -- the same move that
+settled MAME's snapshot orientation earlier in this project, and the second
+time it has paid here.
+
+### [Seta] Put a time budget just below the period, not at it
+
+The sprite engine has a line_budget that stops it when it runs out of time, and
+the natural value is the line period itself. At exactly the line period the
+cutoff and the buffer swap race: the swap arrives first often enough that the
+engine takes its "started while still busy" path, which RESTARTS it mid-render
+rather than stopping it cleanly, and the partially rendered buffer goes to the
+screen anyway. Measured, 49 lines a frame did that.
+
+Setting the budget 44 cycles below the period (6100 against 6144) gives zero
+overruns and 49 clean cutoffs, with identical output. A deadline that coincides
+with the event it is meant to pre-empt is not a deadline.
+
+### [Seta] Look for the permutation that lives above byte granularity
+
+The sprite ROM fetch cost four SDRAM round trips per 16-pixel row, because
+MAME's `RGN_FRAC(1,2)` layout puts the four words 16 bytes and half a region
+apart. The obvious fix -- rewrite the data so a row is contiguous -- looked
+expensive, because "rewrite the data" implies a byte-level shuffle somewhere in
+the loader, and the loader pairs ioctl bytes into 16-bit words as they stream.
+
+Writing the two addresses out side by side is what settled it:
+
+    source byte = h*(S/2) + tile*64 + yh*32 + xh*16 + yl*2 + p
+    dest   byte =          tile*128 + yh*64 + yl*8  + h*4  + xh*2 + p
+
+The plane bit `p` is the low bit of BOTH. Nothing below a 16-bit word moves, so
+there is no shuffle at all -- only a word-address bit permutation, which is
+free wherever the address is already being computed.
+
+Measured: reads per sprite row 4 to 1, worst line 39,497 to 20,017 cycles, and
+sprites completed per line at a 6144-cycle budget 68 to 140 (ROM latency 12)
+and 43 to 108 (latency 24). The last is the one that mattered -- before, a slow
+SDRAM broke the picture (6 of 24 captures correct); after, it does not (22 of
+24 at every latency tested).
+
+Before assuming a data-layout change needs the data touched, write the source
+and destination address expressions out and look for the shared low bits.
+
+### [Seta] The same width truncation, in the testbench this time
+
+The granule fetch indexed the behavioural ROM with `rom_hold_a[19:3]` where the
+array needs `[20:3]`. thunderl's 0.5 MB sprite region only needs 16 bits of
+granule index, so it passed; atehate's 2 MB region needs 18, and it failed --
+as wrong PEN VALUES on one game out of eight, which reads like a decode bug
+rather than an address one.
+
+Third instance in this project of the same shape (see the entry on the SDRAM
+bridge's 26-bit port taking a 27-bit connection): a slice wide enough for the
+small cases that silently drops the top bit for the large one. The tell is that
+exactly the biggest asset fails. When one game out of a set misbehaves, check
+the widths against THAT game's sizes before reading any logic -- and note that
+a part-select which is in range draws no warning from the simulator.
+
+### [Seta] A back-to-front line buffer cannot drop the right sprites
+
+Following on: 512 sprites in 6144 cycles is 12 cycles each, and the real chip
+plainly managed it -- a 32-bit sprite ROM bus at 16 MHz delivers exactly 4096
+bytes per 64 us line, which is 512 rows of 8 bytes with nothing to spare. So
+the real X1-001 has a per-line limit too, and MAME's own comment says as much
+("Draw up to 512 sprites, mjyuugi has glitches if you draw them all").
+
+An engine that draws back-to-front and stops when it runs out of time drops the
+sprites it has not reached yet -- and back-to-front means those are the LOWEST
+indices, which the chip draws LAST and therefore puts ON TOP. Exactly
+backwards: overflow would delete the player and keep the background.
+
+The fix is to stop encoding priority in the write order. Give each line-buffer
+entry the index that wrote it, write only when the new index is lower, and walk
+the list front to back. Order stops depending on time, and running out of time
+drops the bottom-most sprites, which is what an overflowing sprite chip does.
+
 ### [Seta] Relaxing a constraint that is no longer the bottleneck measures WORSE, not better
 
 The TG68K kernel multicycle went from 4 to 6 -- a value the clock-enable ratio

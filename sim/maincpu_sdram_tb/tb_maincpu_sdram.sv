@@ -187,6 +187,7 @@ module tb_maincpu_sdram;
 		.io_req(io_req), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata),
 		.io_uds(io_uds), .io_lds(io_lds), .io_sel(io_sel), .io_rdata(io_rdata),
 		.ipl_level(3'd0),
+		.iack(), .iack_level(),
 		.dbg_stb(dbg_stb), .dbg_addr(dbg_addr), .dbg_we(dbg_we), .dbg_data(dbg_data)
 	);
 
