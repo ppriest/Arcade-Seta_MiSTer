@@ -1,0 +1,122 @@
+# ---------------------------------------------------------------------------
+# Quartus build products
+# ---------------------------------------------------------------------------
+db
+greybox_tmp
+incremental_db
+output_files
+simulation
+hc_output
+scaler
+hps_isw_handoff
+vip
+*_sim
+.qsys_edit
+PLLJ_PLLSPE_INFO.txt
+*.qdf
+*.rpt
+*.smsg
+*.summary
+*.done
+*.jdi
+*.pin
+*.sof
+*.qws
+*.ppf
+*.ddb
+*.sopcinfo
+*.csv
+*.f
+*.cmp
+*.sip
+*.spd
+*.bsf
+*_netlist
+*.cdf
+c5_pin_model_dump.txt
+build_id.v
+
+# Staged-build worktree (scripts/build_staged.py): each build compiles a
+# snapshot of HEAD there, so Quartus scratch stays out of the repo root and
+# the main tree stays editable during the compile. See docs/WORKFLOW.md.
+build/
+quartus_*.log
+q_*.log
+sta*.log
+worst_*.rpt
+
+# ---------------------------------------------------------------------------
+# ModelSim
+# ---------------------------------------------------------------------------
+work/
+transcript
+vsim.wlf
+modelsim.ini
+*.vstf
+sim/**/*.log
+sim/**/*.bin
+sim/**/*.lst
+sim/**/*.hex
+sim/**/*.raw
+sim/**/*.dec
+sim/**/*dump*.txt
+# Vendored cores' SIMULATION-only dumps, written into whatever CWD the
+# simulator runs from.
+/*.raw
+
+# ---------------------------------------------------------------------------
+# Copyrighted MAME ROM dumps -- used locally for bring-up and for building
+# the ROM images the .mra files describe. NEVER committed, in any
+# subdirectory.
+# ---------------------------------------------------------------------------
+roms/
+
+# ---------------------------------------------------------------------------
+# Local hardware-debug scratch: screenshots pulled back off the MiSTer,
+# decoded probe captures, ad-hoc analysis output. Regenerable, and only
+# meaningful alongside the temporary debug build that produced them.
+# ---------------------------------------------------------------------------
+# Root-only: this is the MAME capture directory. Anchored with a leading
+# slash because a bare `debug/` matches ANY directory of that name at any
+# depth, which on the Fuuki core silently swallowed rtl/debug/ -- the core's
+# own instrumentation source.
+/debug/
+/*.png
+/*.txt
+scratch_*.png
+scratch_*.txt
+cfg.bin
+outfile.bin
+
+# Local MiSTer connection settings (host/user/password) for the deploy
+# scripts -- never committed.
+mister.env
+
+# ---------------------------------------------------------------------------
+# releases/ IS the right home for built bitstreams, but only a build VERIFIED
+# to actually run the games belongs in git. Committing one that merely
+# compiles is actively misleading. Add a good one deliberately:
+#   git add -f "releases/<name>.rbf"
+# ---------------------------------------------------------------------------
+releases/*.rbf
+
+# ---------------------------------------------------------------------------
+# Editor / OS / Python scratch
+# ---------------------------------------------------------------------------
+*.bak
+*.orig
+*.rej
+*~
+**/.DS_Store
+__pycache__/
+*.pyc
+
+# Testbench fixtures built from ROM data (scripts/prep_maincpu_tb.py). The
+# .hex files are already covered above; fixture.txt records which set and
+# trace produced them, so it is regenerable and equally ROM-derived.
+sim/**/fixture.txt
+
+# Standalone synth-check scratch (rtl/synth_check/): a Quartus project of its
+# own, so its logs and reports are build products like any other.
+compile.log
+worst.tcl

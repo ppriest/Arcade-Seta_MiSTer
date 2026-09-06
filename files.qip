@@ -1,0 +1,42 @@
+set_global_assignment -name VERILOG_FILE rtl/lfsr.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cos.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mycore.v
+set_global_assignment -name SDC_FILE Seta.sdc
+set_global_assignment -name SYSTEMVERILOG_FILE Seta.sv
+
+# Debug instrumentation, ported from Arcade-Fuuki_MiSTer (docs/WORKFLOW.md).
+# Listed here from the start so `scripts/build.sh --map` type-checks them on
+# every build, before anything instantiates them.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/debug_counter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/debug_tracer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/issp_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pause_control.sv
+
+# ---------------------------------------------------------------------------
+# CPU -- TG68K.C, vendored from Arcade-Fuuki_MiSTer. See
+# rtl/cpu/tg68k/PROVENANCE.md. TG68K.vhd is deliberately NOT compiled: it is an
+# async-68000-bus adapter that assumes CLK is the CPU clock, and this core
+# instantiates TG68KdotC_Kernel directly and owns the bus interface. The
+# package must come first.
+# ---------------------------------------------------------------------------
+set_global_assignment -name VHDL_FILE rtl/cpu/tg68k/TG68K_Pack.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/tg68k/TG68K_ALU.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/tg68k/TG68KdotC_Kernel.vhd
+
+# ---------------------------------------------------------------------------
+# Memory transport, vendored from Arcade-Fuuki_MiSTer (which took sdram.sv from
+# Psikyo, which took it from Sorgelig). See rtl/memory/sdram/PROVENANCE.md.
+# ---------------------------------------------------------------------------
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram/sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram_phy.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram_arbiter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram_download.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram_narrow_bridge.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/rom_loader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ddram_phy.sv
+
+# Main CPU wrapper: the TG68K kernel plus address decode and bus sequencing.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/maincpu.sv
+
+# Sound -- X1-010, written from MAME (no FPGA implementation exists).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/x1_010.sv

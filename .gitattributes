@@ -1,0 +1,20 @@
+# Shell scripts MUST keep LF endings, whatever core.autocrlf says.
+#
+# This is not a tidiness preference. With CRLF, `set -euo pipefail` becomes
+# `set -euo pipefail\r` and bash rejects it as "invalid option name", so the
+# script dies on line 1. It bit here after a `git reset --hard`, which rewrote
+# the working tree through autocrlf: scripts/run_sim.sh still ran under the
+# MSYS bash on PATH but failed under the Git bash a Python subprocess picked,
+# so the same script passed interactively and failed from a wrapper.
+*.sh text eol=lf
+
+# Same reasoning for anything else with a shebang or a strict parser -- but
+# SCOPED to this project's own scripts. A bare `*.tcl` also matches sys/*.tcl,
+# which is vendored MiSTer framework code; rewriting its line endings would
+# diverge from upstream Template_MiSTer for no benefit and make the next sys/
+# update a needless conflict.
+scripts/**/*.tcl text eol=lf
+scripts/**/*.lua text eol=lf
+
+# Verilog/VHDL and docs are read by tools that do not care; leave them to
+# core.autocrlf so Windows editors behave normally.

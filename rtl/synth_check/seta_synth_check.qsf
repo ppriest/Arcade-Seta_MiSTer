@@ -1,0 +1,44 @@
+# Standalone synthesis + timing check for the Phase 0 subsystem: maincpu (with
+# TG68K.C under it), the X1-010, and the SDRAM transport they fetch through.
+# NOT part of the core build.
+#
+# It answers two questions cheaply, before a whole-core top level exists:
+#
+#   1. Does it elaborate for QUARTUS? ModelSim accepts SystemVerilog Quartus
+#      rejects outright, so "it simulates" is not evidence that it synthesizes.
+#   2. What is Fmax on the real device and speed grade? docs/ROADMAP.md picks
+#      clk_sys = 96 MHz and the line-based sprite renderer depends on it.
+#      Psikyo measured 48.74 MHz for TG68K on this exact device, and Fuuki
+#      44.25 MHz -- both shipped anyway, because the kernel is clock-enabled.
+#      Confirm the number EARLY; discovering it after a video engine exists is
+#      expensive.
+#
+# Run:
+#   cd rtl/synth_check
+#   <quartus>/quartus_sh --flow compile seta_synth_check
+#   then read output_files/seta_synth_check.sta.summary -- Fmax Summary first.
+#
+# Device settings mirror sys/sys.tcl exactly; a different speed grade makes the
+# Fmax number meaningless.
+set_global_assignment -name FAMILY "Cyclone V"
+set_global_assignment -name DEVICE 5CSEBA6U23I7
+set_global_assignment -name DEVICE_FILTER_PACKAGE UFBGA
+set_global_assignment -name DEVICE_FILTER_PIN_COUNT 672
+set_global_assignment -name DEVICE_FILTER_SPEED_GRADE 7
+
+set_global_assignment -name TOP_LEVEL_ENTITY seta_synth_top
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+
+set_global_assignment -name VHDL_FILE ../cpu/tg68k/TG68K_Pack.vhd
+set_global_assignment -name VHDL_FILE ../cpu/tg68k/TG68K_ALU.vhd
+set_global_assignment -name VHDL_FILE ../cpu/tg68k/TG68KdotC_Kernel.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE ../cpu/maincpu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../sound/x1_010.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../memory/sdram_phy.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../memory/sdram_arbiter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../memory/sdram_download.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../memory/sdram_narrow_bridge.sv
+set_global_assignment -name SYSTEMVERILOG_FILE seta_synth_top.sv
+set_global_assignment -name SDC_FILE seta_synth_check.sdc
+
+set_global_assignment -name LAST_QUARTUS_VERSION "17.0.2 Lite Edition"
