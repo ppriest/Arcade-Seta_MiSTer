@@ -48,7 +48,12 @@ package seta_game_pkg;
 		GAME_UMANCLUB  = 4'd4,
 		GAME_NEOBATTL  = 4'd5,
 		GAME_ATEHATE   = 4'd6,
-		GAME_PAIRLOVE  = 4'd7
+		GAME_PAIRLOVE  = 4'd7,
+		// ---- Group B, one 4bpp tilemap layer ----
+		GAME_DRGNUNIT  = 4'd8,
+		GAME_STG       = 4'd9,
+		GAME_QZKKLOGY  = 4'd10,
+		GAME_QZKKLGY2  = 4'd11
 	} game_t;
 endpackage
 
@@ -84,6 +89,31 @@ module seta_board_cfg (
 	// and it passes HOLD_LINE for both.
 	output logic        has_ack,          // an explicit ack address exists
 	output logic [23:1] ack_addr,
+	// blockcar alone acknowledges on a DATA CONDITION rather than on the
+	// write itself: blockcar_interrupt_w clears level 3 only when bit 0 of
+	// the byte written is LOW. Off everywhere else, so no other board's
+	// acknowledge behaviour changes.
+	output logic        ack_d0_low,
+	// The driver's own ROT for this set: 0 = ROT0, 1 = ROT90, 2 = ROT270.
+	// Only the OSD's Auto rotation setting reads it. Nothing in the
+	// rendering path is orientation-aware: the core always draws the board's
+	// native raster and rotation is a framebuffer tap.
+	output logic  [1:0] game_rot,
+
+	// ---- Phase 2, the X1-012 tile layer ------------------------------------
+	// Every Group A set leaves has_l0 low, which holds the layer in reset and
+	// leaves the mixer taking the sprite buffer alone -- so adding this cannot
+	// change a Group A picture. layout_b picks the SDRAM map that has a gfx2
+	// region in it.
+	output logic        has_l0,
+	output logic        layout_b,
+	output logic signed [8:0] l0_xoffs, l0_xoffs_flip,
+	output logic [10:0] l0_colorbase,
+	output logic [15:0] l0_code_mask,
+	// screen_vblank_seta_buffer_sprites -> x1_001_device::setac_eof. NO GROUP A
+	// GAME WIRES IT; every Group B set does, and qzkklogy and qzkklgy2 have
+	// spritectrl bit 5 clear, so the copy actually runs on them every frame.
+	output logic        buffer_sprites,
 	output logic  [2:0] ack_level,
 
 	// ---- extras ---------------------------------------------------------------
@@ -109,11 +139,14 @@ module seta_board_cfg (
 	output logic  [9:0] vtotal, vs_start, vs_end, vact_start, vact_end
 );
 
-	// set_fg_xoffsets(flip, noflip) and friends, from every Group A
-	// machine_config. The flipped values are transcribed and are checked only
-	// against scripts/x1_001_model.py -- no captured frame has flip screen set.
-	assign fg_xoffs      =  9'sd0;
-	assign fg_xoffs_flip =  9'sd0;
+	// set_fg_yoffsets(flip, noflip) and friends. Every Group A AND Group B
+	// machine_config uses these same y and bg values -- drgnunit's are
+	// set_fg_yoffsets(-0x12, 0x0e) and set_bg_yoffsets(0x1, -0x1), identical to
+	// thunderl's. The flipped values are transcribed and checked only against
+	// scripts/x1_001_model.py; no captured frame has flip screen set.
+	//
+	// fg_xoffs is NOT here: it is the one of the eight that varies per game,
+	// and Group B is the first family to move it. It lives in the case block.
 	assign fg_yoffs      =  9'sd14;      //  0x0e
 	assign fg_yoffs_flip = -9'sd18;      // -0x12
 	assign bg_xoffs      =  9'sd0;
@@ -131,18 +164,45 @@ module seta_board_cfg (
 	assign screen_h    = 9'd256;
 	assign backdrop    = 11'h1f0;
 
-	// Screen timing. EVERY NUMBER IS A HYPOTHESIS -- see
-	// rtl/video/seta_video_timing.sv's header and docs/ROADMAP.md. MAME has no
-	// raw timings for this hardware; 8 MHz dot clock and htotal 512 are
-	// inferred from the XTAL, and vtotal 260 is what reproduces the 60 Hz every
-	// Group A machine_config declares. The sync positions inside the blanking
-	// are plausible and self-consistent, not measured.
+	// Screen timing. MAME has no raw timings for this hardware: 8 MHz dot clock
+	// and htotal 512 are inferred from the XTAL, and the sync positions inside
+	// the blanking are plausible and self-consistent rather than measured.
+	//
+	// VTOTAL 272 GIVES 57.4449 Hz, WHICH IS DAIOH'S -- and daioh's is the only
+	// refresh rate in seta.cpp that anyone measured. Counting what the driver
+	// actually declares across all 33 machine_configs:
+	//
+	//     60        x28, every one of them a bare number with NO COMMENT
+	//     57.42          "verified on PCB"          <- daioh
+	//     57.42          "approximation from PCB video"
+	//     57.42          "taken from other games but seems to better match
+	//                     PCB videos"
+	//     56.66          "between 56 and 57 to match a real PCB's game speed"
+	//     59.1851        (crazyfgt, no comment, not Seta hardware)
+	//
+	// Every number that came from looking at a real board is between 56.66 and
+	// 57.42. Every 60 is uncommented -- a nominal value, not a measurement. So
+	// vtotal 260, chosen here originally to reproduce that 60, was reproducing
+	// a placeholder to four significant figures.
+	//
+	// The geometry backs it up: daioh declares the SAME set_size(64*8, 32*8)
+	// and the SAME set_visarea as every Group A game, on the same 16 MHz X1-001.
+	// Nothing in the driver suggests these boards differed in video timing --
+	// only in what someone typed for the refresh rate.
+	//
+	// 512 x 272 at 8 MHz = 57.4449 Hz, 0.043% from the verified 57.42, on the
+	// same htotal as before. The active area is untouched, so every frame this
+	// core has been diffed against MAME is unaffected; what changes is the
+	// number of blanked lines after it, and therefore the refresh rate.
+	//
+	// Still a hypothesis in the details -- but now one anchored to the single
+	// measurement that exists, instead of to a default.
 	assign htotal     = 10'd512;
 	assign hact_start = 10'd0;
 	assign hact_end   = 10'd383;
 	assign hs_start   = 10'd400;
 	assign hs_end     = 10'd448;
-	assign vtotal     = 10'd260;
+	assign vtotal     = 10'd272;
 	assign vact_start = 10'd8;
 	assign vact_end   = 10'd247;
 	assign vs_start   = 10'd250;
@@ -167,9 +227,20 @@ module seta_board_cfg (
 		irq_vbl_level   = 3'd0;
 		irq_vbl_hold    = 1'b0;
 		irq_sl240_level = 3'd0;
+		fg_xoffs        = 9'sd0;
+		fg_xoffs_flip   = 9'sd0;
+		buffer_sprites  = 1'b0;
 		irq_sl112_level = 3'd0;
 		has_ack         = 1'b0;
 		ack_addr        = 23'h000000;
+		ack_d0_low      = 1'b0;
+		game_rot        = 2'd2;   // thunderl's ROT270, with the other defaults
+		has_l0          = 1'b0;
+		layout_b        = 1'b0;
+		l0_xoffs        = 9'sd0;
+		l0_xoffs_flip   = 9'sd0;
+		l0_colorbase    = 11'd0;
+		l0_code_mask    = 16'h1fff;
 		ack_level       = 3'd0;
 		has_prot        = 1'b0;
 		has_tl_prot     = 1'b0;
@@ -197,6 +268,7 @@ module seta_board_cfg (
 		end
 
 		GAME_WITS: begin
+			game_rot = 2'd0;   // ROT0
 			map_board = 4'd9;  cpu_div = 5'd12;
 			gfx_half_words = 23'h20000;  code_mask = 16'h0fff;
 			irq_vbl_level = 3'd2; irq_vbl_hold = 1'b0;
@@ -205,23 +277,108 @@ module seta_board_cfg (
 
 		// blockcar: 8 MHz, and its vblank asserts IPL 3 with NO ack mapped
 		// anywhere. MAME's three-argument set_inputline never clears on the
-		// falling edge, so the request stays pending for good and the game
-		// masks it in SR instead. Reproduced, not tidied.
+		// blockcar: vblank asserts IPL 3 with ASSERT_LINE, and it IS
+		// acknowledged -- blockcar_interrupt_w, mapped at byte 0x200001:
+		//
+		//     void seta_state::blockcar_interrupt_w(u8 data)
+		//     {
+		//         // ? 0/1 (IRQ acknowledge?)
+		//         if (!BIT(data, 0))
+		//             m_maincpu->set_input_line(3, CLEAR_LINE);
+		//     }
+		//
+		// This was recorded here, and in docs/ROADMAP.md's list of behaviour
+		// followed from MAME, as "no acknowledge is mapped anywhere, so the
+		// request stays pending for good and the game masks it in SR instead".
+		// That was wrong: the handler above is the acknowledge, and without it
+		// the CPU re-enters the level 3 handler forever and the game cannot
+		// reach its main loop. On hardware that looked like a game that draws
+		// something and then does nothing useful.
+		//
+		// Byte 0x200001 is word 0x200000, which is 23'h100000 on a [23:1] bus
+		// -- the same value thunderl uses for its own, different, acknowledge.
 		GAME_BLOCKCAR: begin
+			game_rot = 2'd1;   // ROT90
 			map_board = 4'd11; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			irq_vbl_level = 3'd3; irq_vbl_hold = 1'b0;
+			has_ack = 1'b1; ack_addr = 23'h100000; ack_level = 3'd3;
+			ack_d0_low = 1'b1;
 		end
 
 		// umanclub / neobattl: 16 MHz, vblank HOLD_LINE at IPL 3.
+		// umanclub is ROT0 and neobattl ROT270: the two share a board and a
+		// machine_config but NOT an orientation.
 		GAME_UMANCLUB, GAME_NEOBATTL: begin
+			game_rot = (game == GAME_NEOBATTL) ? 2'd2 : 2'd0;
 			map_board = 4'd10; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			irq_vbl_level = 3'd3; irq_vbl_hold = 1'b1;
 		end
 
+		// =================================================================
+		// GROUP B -- drgnunit_map, one X1-012 layer. All four run the drgnunit
+		// machine_config and then override; the overrides are the whole
+		// difference between them, and in Phase 2's model assuming they were
+		// absent cost 0.3% to 26% of the pixels on six of nine frames.
+		//
+		// Sprite offsets are set_fg_xoffsets, layer offsets set_xoffsets, both
+		// (flip, noflip). Every one of the four is 8 MHz except qzkklgy2.
+		// =================================================================
+		GAME_DRGNUNIT: begin                 // ROT0
+			map_board = 4'd7; cpu_div = 5'd12;
+			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; layout_b = 1'b1;
+			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
+			l0_code_mask = 16'h1fff;
+			fg_xoffs = 9'sd2;  fg_xoffs_flip = 9'sd2;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+			buffer_sprites = 1'b1;
+		end
+
+		GAME_STG: begin                      // ROT270, set_fg_xoffsets(0, 0)
+			map_board = 4'd7; cpu_div = 5'd12;
+			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
+			game_rot = 2'd2;
+			has_l0 = 1'b1; layout_b = 1'b1;
+			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
+			l0_code_mask = 16'h1fff;
+			fg_xoffs = 9'sd0;  fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+			buffer_sprites = 1'b1;
+		end
+
+		GAME_QZKKLOGY: begin                 // ROT0, (1,1) and (-1,-1)
+			map_board = 4'd7; cpu_div = 5'd12;
+			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; layout_b = 1'b1;
+			l0_xoffs = -9'sd1; l0_xoffs_flip = -9'sd1;
+			l0_code_mask = 16'h1fff;
+			fg_xoffs = 9'sd1;  fg_xoffs_flip = 9'sd1;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+			buffer_sprites = 1'b1;
+		end
+
+		// qzkklgy2 is the odd one twice over: a 16 MHz CPU, and 2 MB of tiles
+		// where its three siblings have 1 MB -- which is why LAYOUT_B's gfx2
+		// region is 2 MB and x1snd sits above it.
+		GAME_QZKKLGY2: begin                 // ROT0, (0,0) and (-3,-1)
+			map_board = 4'd7; cpu_div = 5'd6;
+			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; layout_b = 1'b1;
+			l0_xoffs = -9'sd3; l0_xoffs_flip = -9'sd1;
+			l0_code_mask = 16'h3fff;
+			fg_xoffs = 9'sd0;  fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+			buffer_sprites = 1'b1;
+		end
+
 		// atehate: 16 MHz, 2 MB of sprites, seta_interrupt_1_and_2.
 		GAME_ATEHATE: begin
+			game_rot = 2'd0;   // ROT0
 			map_board = 4'd12; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
@@ -231,6 +388,7 @@ module seta_board_cfg (
 		// 0x200, seta_interrupt_1_and_2, and the 0x900000 write-history block
 		// seta.cpp calls protection.
 		GAME_PAIRLOVE: begin
+			game_rot = 2'd2;   // ROT270
 			map_board = 4'd13; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			pal_entries = 12'd2048;

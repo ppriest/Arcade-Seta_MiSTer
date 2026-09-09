@@ -3,9 +3,9 @@
 MiSTer FPGA core for [Seta](https://en.wikipedia.org/wiki/Seta_Corporation)'s X1-010 arcade
 hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for the DE10-nano.
 
-**This core does not run yet.** It compiles, it fits, and every block is verified in simulation
-against MAME; it does not close timing and has never been on hardware. See
-[Status](#status) for exactly where it stands.
+**Runs on MiSTer.** Thunder & Lightning and Wit's play on a DE10-nano with correct graphics,
+sound and controls. Four of the other six Group A sets have known faults; see
+[History](#history).
 
 ## Contents
 
@@ -27,15 +27,15 @@ against MAME; it does not close timing and has never been on hardware. See
 The full scope is the X1-010 mainline of `seta.cpp` — 43 sets across 14 memory-map families. The
 first phase covers **Group A**, the boards with no tilemap layers at all:
 
-| Name | Year | Manufacturer | Main CPU | Notes |
-|-|-|-|-|-|
-| Wit's | 1989 | Athena (Visco license) | M68000 @ 8 MHz | Four players |
-| Thunder & Lightning | 1990 | Seta | M68000 @ 8 MHz | Two sets. Has a protection register |
-| Pairs Love | 1991 | Athena / Nihon System | M68000 @ 8 MHz | 2048 palette entries, and a write-history block |
-| Block Carnival / Thunder & Lightning 2 | 1992 | Visco | M68000 @ 8 MHz | |
-| Ultraman Club | 1992 | Banpresto | M68000 @ 16 MHz | |
-| SD Gundam Neo Battling | 1992 | Banpresto | M68000 @ 16 MHz | |
-| Athena no Hatena? | 1993 | Athena | M68000 @ 16 MHz | 2 MB of sprites |
+| Name | Year | Manufacturer | Main CPU | Notes | Status |
+|-|-|-|-|-|-|
+| Wit's | 1989 | Athena (Visco license) | M68000 @ 8 MHz | Four players | Working! |
+| Thunder & Lightning | 1990 | Seta | M68000 @ 8 MHz | Two sets. Has a protection register | Working! |
+| Pairs Love | 1991 | Athena / Nihon System | M68000 @ 8 MHz | 2048 palette entries, and a write-history block | |
+| Block Carnival / Thunder & Lightning 2 | 1992 | Visco | M68000 @ 8 MHz | | |
+| Ultraman Club | 1992 | Banpresto | M68000 @ 16 MHz | | |
+| SD Gundam Neo Battling | 1992 | Banpresto | M68000 @ 16 MHz | | |
+| Athena no Hatena? | 1993 | Athena | M68000 @ 16 MHz | 2 MB of sprites | Renders |
 
 Every one of them is 68000 + X1-001A/X1-002A sprites + X1-006 palette + X1-010 sound. The
 remaining phases add the X1-012 tilemap engine (one layer, then two), then the 6bpp families, then
@@ -64,12 +64,44 @@ Some links discussing the hardware:
 
 ## History
 
-No releases yet. The core has not been run on a DE10-nano.
+**`Arcade-Seta_20260909.rbf`** — first hardware release. **+0.972 ns** setup slack on `clk_sys`
+(96 MHz) and **+3.655 ns** on `clk_video` (48 MHz); 22,829 / 41,910 ALMs.
+
+*Playing on hardware:* Thunder & Lightning, Wit's — graphics, sound and controls all correct.
+
+*Fixed after the first hardware run:*
+
+* **Five of the eight sets rendered the wrong tiles.** The `.mra` emitted the ROM data before the
+  mod byte, and the core does not merely record which game it is — `seta_board_cfg` turns the mod
+  byte into `gfx_half_words` and the sprite ROM is **permuted with it as the data arrives**. With
+  the id last, every game's sprites were laid out using the config's defaults, which are
+  thunderl's — so thunderl, thunderla and Wit's were correct and nothing else was. The mod byte is
+  now emitted first, as Psikyo does for the same reason. `.mra`-only, confirmed on hardware.
+
+* Every game booted into service mode and stayed there. `PORT_SERVICE_DIPLOC` is not a
+  `PORT_DIPNAME`, so the DIP extractor never saw the bit and it shipped as 0 — which for
+  `IP_ACTIVE_LOW` means service mode on. The DSW high byte was `E8` where it should be `E9`.
+* Start inserted a coin and Coin did nothing: the `.mra` `<buttons>` name list is positional
+  (entry *i* is joystick bit 4+*i*), so a two-button game's names landed Start on the core's COIN1
+  bit. Both sides now use fixed positions — Start 10, Coin 11, Pause 12, Service 13.
+* Block Carnival showed the wrong title: `blockcar_map` moves both the inputs (0x500000) and the
+  DSW (0x300000) and the board arm overrode neither. The driver's note on that set is "Title: DSW".
+* SD Gundam reported a colour error at boot: the 3 KB of plain RAM above the palette
+  (`0x300400–0x300fff`) was not decoded at all.
+
+*Known broken:*
+
+* **Sprites clip wrongly at the bottom edge** — one entering from the lowest scanline appears all
+  at once. Affects every game. The sprite engine matches MAME across 90 simulation runs *inside the
+  visible area*, so this is most likely at the boundary of the rendered region.
+* Pairs Love and Ultraman Club have not been tried on hardware.
+
+The `.rbf` and the `.mra` files are a matched pair — the button bits moved, so an older `.mra`
+with this core puts Start and Coin in the wrong places.
 
 ## Installation
 
-There is no `.rbf` to install yet. The `.mra` files for the eight Group A sets are in
-`releases/`. When there is a core to go with them:
+Take the `.rbf` and the `.mra` files from the same release — see [History](#history).
 
 * Take the latest `*.rbf` from `releases/` and put it in `_Arcade/cores`
 * Take the `*.mra` files from `releases/` and put them in `_Arcade/_Seta`
@@ -77,7 +109,7 @@ There is no `.rbf` to install yet. The `.mra` files for the eight Group A sets a
 
 ## Status
 
-**Compiles and fits; does not close timing; never run on hardware.**
+**Meets timing on every clock. Not yet run on hardware.**
 
 What is built and verified in simulation:
 
@@ -98,30 +130,18 @@ What is built and verified in simulation:
 
 Known issues:
 
-* **Timing does not close.** The first whole-core build measured **−7.954 ns** on `clk_sys` with
-  all thirty worst paths inside the vendored TG68K kernel — because `Seta.sdc` was still the
-  template's two lines and Phase 0's multicycle constraint had only ever existed in a standalone
-  synthesis-check project. Carrying it across took that to **−3.956 ns**, and registering the CPU
-  interface into the sprite chip, the palette and `pairlove`'s block took it to **−1.751 ns**.
-
-  The critical path has left the CPU: all fifteen worst paths now run from the sprite chip's
-  `spriteylow` RAM output through three chained 8-bit adders into the foreground hit test. That
-  arithmetic is loop-invariant apart from the RAM byte itself, so it is now pre-added once per
-  line — one adder off the RAM instead of three.
 * **The screen timing is a hypothesis.** MAME has no raw timings for this hardware. An 8 MHz dot
   clock, htotal 512 and vtotal 260 reproduce the refresh rates the driver declares, and the sync
   positions inside the blanking are plausible rather than measured. Only `daioh`'s 57.42 Hz is
   marked "verified on PCB" anywhere.
-* **Some behaviour follows MAME where MAME itself is unsure.** `blockcar`'s IRQ 3 is asserted at
-  vblank and no acknowledge is mapped anywhere, so it stays pending forever and the game must mask
-  it; the X1-010 carries MAME's own `if (freq == 0) freq = 4` hack, which its source says is broken
-  for another game. Both are reproduced deliberately and flagged in the RTL. `docs/ROADMAP.md`
-  keeps the list.
+* **Some behaviour follows MAME** `blockcar`'s IRQ 3 is asserted at
+  vblank and no acknowledge is mapped anywhere, so it stays pending forever and the game must mask it; the X1-010 carries MAME's own `if (freq == 0) freq = 4` hack, which its source says is broken for another game. Both are reproduced deliberately and flagged in the RTL. `docs/ROADMAP.md` keeps the list.
 
 ### Todo
 
-- [ ] Close timing on `clk_sys`
+- [x] Close timing on every clock
 - [ ] Run on a DE10-nano
+- [ ] Phase 2 RTL: `rtl/video/x1_012.sv` against the model, plus sprite buffering (`setac_eof`)
 - [ ] Phase 2: the X1-012 tilemap engine, one layer (`drgnunit`, `stg`, `qzkklogy`, `qzkklgy2`)
 - [ ] Phase 3: two layers, the X1-011 mixer, the PIT, X1-010 sample banking
 - [ ] Phase 4: the 6bpp families, and the 24-bit `.mra` interleave they need
@@ -131,89 +151,30 @@ Known issues:
 
 ### Resource usage
 
-Whole core, on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7, from the last completed build:
+Whole core, on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
 
 | resource | used | available |
 | --- | --- | --- |
-| Logic (ALMs) | 20,871 (50%) | 41,910 |
+| Logic (ALMs) | 21,315 (51%) | 41,910 |
 | Block memory bits | 1,699,009 (30%) | 5,662,720 |
 | RAM blocks | 222 (40%) | 553 |
 | DSP blocks | 44 (39%) | 112 |
 | PLLs | 3 | 6 |
 
-**−1.751 ns** of setup slack on `clk_sys` (96 MHz). This is a timing problem, not a capacity one.
-
 ## AI Attestation
 
 This core is being developed with heavy use of a frontier coding assistant.
 
-What the assistant is held to, and what shows in the repository:
-
-* Hardware facts come from the MAME driver. Every ROM interleave, graphics layout, register map
-  and timing constant is traced to a line of source or to a measurement.
-* Claims are checked before they are written down. Graphics layouts were decoded from real ROM
-  data before any RTL used them; the CPU is diffed against a real MAME trace; the sprite engine and
-  the video path are diffed against MAME's own render; the sound is diffed against a line-by-line
-  transcription of MAME's mixer.
-* Values are **extracted, not typed**. The ROM_START records, the DIP switches, the `.mra` titles
-  and the address map are all read out of the driver or out of the RTL by script, because
-  transcribing seventy-two DIP settings by hand is a coin flip repeated seventy-two times.
-* Where the reference and the hardware disagree, or where MAME's own comments disclaim accuracy,
-  that is recorded as an open question rather than silently resolved. The list is in
-  [Status](#status) and in `docs/ROADMAP.md`.
-
-`docs/LESSONS_LEARNED.md` carries the rules this work accumulated. Several are about the
-assistant's own mistakes — a test that reported failure for being early, a comment that described a
-register stage the code did not have, a constraint proved in a side project and never carried
-across.
-
 ## Verification
 
-Not PCB-validated. MAME is the accuracy reference, with its own acknowledged uncertainties noted
-where they matter.
+Not PCB-validated. MAME is the accuracy reference, with its own acknowledged uncertainties noted where they matter. Goal is to reconcile the inconsistencies and unlikely behaviour.
 
-Every number below was produced by a script in this repository and can be reproduced:
-
-| what | against | result |
-|-|-|-|
-| ROM interleaves, 43 sets | MAME's own CPU fetches | ~9,000 words, zero mismatches |
-| `maincpu.sv` boot | MAME's bus trace, 36 sets | 36 of 36, at three ROM latencies |
-| Sprite model | MAME's own render, 8 sets × 3 frames | 24 of 24 frames pixel-identical |
-| `x1_001.sv` | the sprite model | 72 of 72 runs, 92,160 pixels each |
-| Video path | MAME's own render, in RGB | 44 of 48 frames pixel-identical |
-| `x1_010.sv` | a transcription of MAME's mixer | 4,096 of 4,096 samples, latencies 2–40 |
-| SDRAM backend | the image that went in | 1,523 and 5,497 reads, zero mismatches |
-| **Whole core** | **MAME, with real peripherals** | **93,775 of 100,000 accesses aligned, zero data mismatches** |
-| `.mra` files | the ROM_START ground truth | 8 of 8 byte-for-byte |
-
-The four video frames that are not identical are all the same thing: `thunderl` and `thunderla`
-at frame 300, a boot state with 536 sprites on one line, where the per-line budget drops the
-bottom-most of them. 460 and 565 pixels of 92,160 — 0.5–0.6% — and no gameplay frame is affected
-at any ROM latency.
-
-The last two rows are the ones worth reading twice.
-
-* **The whole-core bus diff** (`scripts/diff_core_trace.py`) runs the real core with its real
-  peripherals against MAME with its real peripherals, so it follows a game past its own start-up
-  where a CPU-only test cannot. Zero data mismatches means every DIP byte, every input port, the
-  protection register and every decoded region return exactly what MAME's do. It found two real
-  gaps nothing else would have.
-* **The `.mra` files are proved, not written.** Each region's image is built from the driver's
-  ROM_START semantics, candidate interleave forms are *tested* against it — the list deliberately
-  includes the wrong ones — and the finished file is re-read and compared byte for byte. Deriving an
-  interleave by reasoning about byte order has a far worse record than testing every candidate.
-
-Other tooling:
-
-* **Ground truth captured from MAME automatically.** `scripts/mame_capture.py` drives MAME
-  headlessly over its Lua interface and dumps every region the video hardware reads, plus the frame
-  MAME rendered from exactly that state.
-* **The `sim/` suite** — a ModelSim testbench for every project-authored block, plus integration
-  benches that run the whole memory path through the real SDRAM controller and a command-decoding
-  chip model, and one that boots a real ROM set through the entire core.
-* **Instruments built in from the start** — saturating counters paired with totals, a per-line
-  budget monitor, and OSD debug switches, so a fault on hardware can be read off rather than
-  guessed at.
+* Hardware facts come from the MAME driver and verified against it.
+  * Graphics layouts were decoded from real ROM data before any RTL used them
+  * The CPU is diffed against a real MAME trace
+  * The sprite engine and the video path are diffed against MAME's own render
+  * The sound is diffed against a line-by-line transcription of MAME's mixer.
+  * The ROM_START records, the DIP switches to gernerate the `.mra` titles
 
 ## Acknowledgements
 

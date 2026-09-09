@@ -643,6 +643,47 @@ design's own SDC. Two things follow:
     it is a missing constraint on that module -- and it reads identically to
     the measurement that led to writing the constraint in the first place.
 
+### [Seta] Two MAME conventions that read backwards, and how the wrong pixels named them
+
+The X1-012 model was transcribed from x1_012.cpp and got the whole structure
+right first time -- banks, scroll, composition. Two conventions in MAME's own
+framework, neither of them in the Seta source at all, cost most of a session.
+
+  * IN A gfx_layout, THE FIRST PLANE LISTED IS THE MOST SIGNIFICANT BIT of the
+    pen. Reading `{ STEP4(0,4) }` as plane 0 -> bit 0 does not produce a wrong
+    picture; it produces a RECOGNISABLE picture with a third of the pixels
+    wrong, which reads as a subtly bad layout rather than an inverted bit
+    order. Scoring sixteen candidate layouts against MAME's render settled it
+    in one run: every ascending-plane variant scored 33-34%, the transcription
+    read MSB-first scored 100.00%.
+
+  * TILE_FLIPXY TRANSPOSES ITS TWO BITS:
+        TILE_FLIPXY(xy) = ((xy & 2) >> 1) | ((xy & 1) << 1)
+    with TILE_FLIPX = 1 and TILE_FLIPY = 2. So for the usual
+    TILE_FLIPXY((word & 0xc000) >> 14), bit 14 is FLIPY and bit 15 is FLIPX --
+    the opposite way round to what the name reads like.
+
+The second one is the more instructive failure. It costs 2-5% of the pixels,
+only on frames containing a flipped tile, and only on those tiles -- so
+drgnunit was pixel-exact on all three of its frames while the other three sets
+failed on five frames out of nine. That pattern says "per-game configuration",
+and two hours went into per-game offsets before anything looked at the pixels
+themselves. The offsets were genuinely wrong too, which made the wrong
+diagnosis fit.
+
+What found it was asking what the WRONG PIXELS HAD IN COMMON rather than which
+GAMES were wrong: every one of them was in a tile whose flip bits were
+non-zero. Two cheap questions got there, and both are worth asking first next
+time:
+
+  * Are the differing pixels in the layer, or in the sprites? Rendering with
+    and without the sprite pass and bucketing the mismatches by which one drew
+    them said "0 wrong under sprites, all wrong in the tilemap" -- and killed
+    a plausible sprite-buffering theory outright, since drgnunit and stg have
+    spritectrl bit 5 set and never buffer at all.
+  * Do they cluster? Contiguous 64-row bands are not a decode error smeared
+    over the frame; they are specific map entries.
+
 ### [Seta] A branch no capture exercises is not covered, however many runs pass
 
 x1_001's foreground Y arithmetic has two halves, flipped and unflipped, and

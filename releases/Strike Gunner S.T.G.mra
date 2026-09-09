@@ -1,0 +1,53 @@
+<misterromdescription>
+    <name>Strike Gunner S.T.G</name>
+    <setname>stg</setname>
+    <rbf>Seta</rbf>
+    <mameversion>0286</mameversion>
+    <year>1991</year>
+    <manufacturer>Athena / Tecmo</manufacturer>
+    <category>Arcade</category>
+    <rotation>vertical</rotation>
+
+    <!-- which game, for rtl/seta_board_cfg.sv. FIRST, because the download is permuted with it. -->
+    <rom index="1"><part>09</part></rom>
+
+    <rom index="0" zip="stg.zip" md5="none">
+        <!-- maincpu -->
+        <interleave output="16">
+            <part name="att01003.u27" map="01"/>
+            <part name="att01001.u9" map="10"/>
+        </interleave>
+        <interleave output="16">
+            <part name="att01004.u33" map="01"/>
+            <part name="att01002.u17" map="10"/>
+        </interleave>
+        <part repeat="262144">00</part>
+        <!-- pad to 0x100000 -->
+        <part repeat="262144">00</part>
+        <!-- gfx1 -->
+        <part name="att01006.u32"/>
+        <part name="att01005.u26"/>
+        <!-- gfx2 -->
+        <interleave output="16">
+            <part name="att01008.u39" map="01"/>
+            <part name="att01007.u42" map="10"/>
+        </interleave>
+        <!-- pad to 0x400000 -->
+        <part repeat="1048576">00</part>
+        <!-- x1snd -->
+        <part name="att01009.u47"/>
+        <part name="att01010.u55"/>
+    </rom>
+
+    <switches default="FF,FF,00" base="0">
+        <dip name="Unused" bits="0" ids="On,Off"/>
+        <dip name="Flip Screen" bits="1" ids="On,Off"/>
+        <dip name="Service Mode" bits="2" ids="On,Off"/>
+        <dip name="Coin A" bits="4,5" ids="2 Coins/3 Credits,2 Coins/1 Credit,1 Coin/2 Credits,1 Coin/1 Credit"/>
+        <dip name="Demo Sounds" bits="6" ids="Off,On"/>
+        <dip name="Difficulty" bits="8,9" ids="Hardest,Hard,Easy,Normal"/>
+        <dip name="Lives" bits="12,13" ids="2,1,5,3"/>
+    </switches>
+
+    <buttons names="Button 1,Button 2,-,-,-,-,Start,Coin,Pause,Service" default="A,B,Start,Select,L,R" count="2"/>
+</misterromdescription>

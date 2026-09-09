@@ -171,6 +171,38 @@ def parse_ports(body, all_blocks, missing, depth=0):
             last[3][_num(m.group(1))] = _label(m.group(2), missing)
             continue
 
+        # PORT_SERVICE / PORT_SERVICE_DIPLOC -- A REAL DIP THAT LOOKS LIKE
+        # NOTHING. It is not a PORT_DIPNAME, so a parser that only knows
+        # PORT_DIPNAME/PORT_DIPSETTING drops the bit from the switch list AND
+        # from the default byte, shipping it as 0.
+        #
+        # thunderl declares PORT_SERVICE_DIPLOC(0x0100, IP_ACTIVE_LOW, "SW1:1"),
+        # and 0 on that bit means service mode ON. The generated .mra defaulted
+        # the DSW high byte to 0xE8 instead of 0xE9, and the game booted into
+        # the service menu and stayed there. Found on hardware, on the first
+        # run of the first game.
+        #
+        # Semantics from emu/ioport.cpp's onoff_alloc, not assumed:
+        #     field_alloc(IPT_DIPSWITCH, defval, mask, name)
+        #     setting_alloc( defval & mask, "Off")
+        #     setting_alloc(~defval & mask, "On")
+        # and the macro passes (_mask, _default) in that order, with
+        # IP_ACTIVE_LOW = 0xffffffff. So for the line above: default 0x0100,
+        # Off = 0x0100, On = 0x0000.
+        m = re.match(rf'PORT_SERVICE(?:_DIPLOC)?\(\s*{_NUM}\s*,\s*'
+                     r'(IP_ACTIVE_LOW|IP_ACTIVE_HIGH|[0-9a-fA-Fx]+)', line)
+        if m:
+            mask = _num(m.group(1))
+            d = m.group(2)
+            defval = 0xffffffff if d == "IP_ACTIVE_LOW" else (
+                0 if d == "IP_ACTIVE_HIGH" else int(d, 0))
+            off = defval & mask
+            on = (~defval) & mask
+            ports[cur].append(("Service Mode", mask, off,
+                               {off: "Off", on: "On"}))
+            last = None
+            continue
+
         # Not emitted as a switch, but its default is part of the byte.
         m = re.match(rf'PORT_DIPUNUSED(?:_DIPLOC)?\(\s*{_NUM}\s*,\s*{_NUM}',
                      line)

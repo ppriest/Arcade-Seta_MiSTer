@@ -14,31 +14,25 @@
 
 # --- field table: {name lo hi format} -------------------------------------
 #
-# *** PROVISIONAL -- no Seta probe bus exists yet. ***
-# This is the layout docs/ROADMAP.md's "Instrumentation this core needs" calls
-# for, written down so the RTL has a target. REPLACE IT with the real layout
-# the first time a probe bus is built, and keep the two in step from then on.
+# THE REAL LAYOUT, built in Seta.sv's issp_probe instance. Keep the two in
+# step: the bus is defined where it is BUILT, not here.
 #
-# The rule this file exists to enforce: the probe bus layout is defined where
-# the bus is BUILT, not here. A silently shifted field decodes as plausible
-# nonsense rather than as an error, which is worse than a crash. On Fuuki a
-# field kept the label `board_fg3` after the layout moved and decoded an FG-2
-# game as an FG-3 board -- exactly that failure.
+# A silently shifted field decodes as plausible nonsense rather than as an
+# error, which is worse than a crash. On Fuuki a field kept the label
+# `board_fg3` after the layout moved and decoded an FG-2 game as an FG-3 board
+# -- exactly that failure.
 set fields {
-    {frames           0  15 dec}
-    {core_resets     16  23 dec}
-    {cpu_cycles      24  39 dec}
-    {spr_seen        40  55 dec}
-    {spr_drawn       56  71 dec}
-    {lb_overrun      72  79 dec}
-    {sdram_stall     80  95 dec}
-    {sdram_worst     96 103 dec}
-    {x1snd_fetch    104 111 dec}
-    {max_dl_addr4k  112 123 dec}
-    {download_seen  124 124 bit}
-    {pause_latched  125 125 bit}
-    {ring_frozen    126 126 bit}
-    {pll_unlock     127 127 bit}
+    {lines            0  15 dec}
+    {sprites         16  31 dec}
+    {line_overrun    32  47 dec}
+    {lines_cut       48  63 dec}
+    {worst_sprites   64  79 dec}
+    {snd_samples     80  95 dec}
+    {snd_rom_reads   96 111 dec}
+    {snd_overrun    112 119 dec}
+    {irq_pending    120 126 hex}
+    {pll_locked     127 127 bit}
+}
 }
 
 # WHAT EACH ONE ANSWERS

@@ -15,6 +15,7 @@ module pll (
 		input  wire  rst,      //   reset.reset
 		output wire  outclk_0, // outclk0.clk -- clk_sys, 96 MHz
 		output wire  outclk_1, // outclk1.clk -- SDRAM_CLK, 96 MHz shifted 180
+		output wire  outclk_2, // outclk2.clk -- clk_video, 48 MHz (clk_sys / 2)
 		output wire  locked    //  locked.export
 	);
 
@@ -23,6 +24,7 @@ module pll (
 		.rst      (rst),      //   reset.reset
 		.outclk_0 (outclk_0), // outclk0.clk
 		.outclk_1 (outclk_1), // outclk1.clk
+		.outclk_2 (outclk_2), // outclk2.clk
 		.locked   (locked)    //  locked.export
 	);
 

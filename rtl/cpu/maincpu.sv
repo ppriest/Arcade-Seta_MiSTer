@@ -342,7 +342,16 @@ module maincpu (
 			BOARD_UMANCLUB: begin                    // umanclub_map
 				rom_end    = 24'h0FFFFF;
 				wram_end   = 24'h20FFFF;
-				wram2_base = NONE; has_wram2 = 1'b0;
+				// THE 3 KB OF PLAIN RAM DIRECTLY ABOVE THE PALETTE.
+				// umanclub_map is:
+				//     map(0x300000, 0x3003ff) palette
+				//     map(0x300400, 0x300fff) ram()
+				// and leaving the second undecoded is what neobattl reports as
+				// a COLOR ERROR at boot: its self-test writes across the whole
+				// window and reads back, and everything above 0x3003ff came
+				// back as whatever the io mux happened to present.
+				wram2_base = 24'h300400; wram2_end = 24'h300FFF;
+				has_wram2  = 1'b1;
 				pal_base   = 24'h300000; pal_end = 24'h3003FF;
 				l0v_base = NONE; l1v_base = NONE; l0c_base = NONE; l1c_base = NONE;
 				has_l0 = 1'b0; has_l1 = 1'b0;
@@ -350,9 +359,27 @@ module maincpu (
 			end
 
 			BOARD_BLOCKCAR: begin                    // blockcar_map
+				// INPUTS AND DSW ARE BOTH MOVED on this board, and inheriting
+				// the defaults for them was silent in simulation and obvious on
+				// hardware: seta.cpp's GAME line says "Title: DSW", so reading
+				// the switches from 0x600000 instead of 0x300000 selected the
+				// wrong title outright. The inputs were reading 0x400000
+				// instead of 0x500000 at the same time.
+				//
+				// Checked against the driver for every board in scope, not just
+				// this one: thunderl, wits and atehate are 0xb00000/0x600000,
+				// umanclub is 0x400000/0x600000 (the defaults), pairlove and
+				// blockcar are 0x500000/0x300000. blockcar was the only one
+				// missing its override.
+				in_base    = 24'h500000; dsw_base = 24'h300000;
 				rom_end    = 24'h0FFFFF;
 				wram_base  = 24'hF00000; wram_end = 24'hF03FFF;
-				wram2_base = NONE; has_wram2 = 1'b0;
+				// The two "Backup RAM?" blocks, 0xf04000-0xf041ff and
+				// 0xf05000-0xf050ff. Covered as one window: the gap between
+				// them is undecoded on the real board, and answering there
+				// instead of floating costs nothing a game can see.
+				wram2_base = 24'hF04000; wram2_end = 24'hF05FFF;
+				has_wram2  = 1'b1;
 				pal_base   = 24'hB00000; pal_end  = 24'hB003FF;
 				l0v_base = NONE; l1v_base = NONE; l0c_base = NONE; l1c_base = NONE;
 				has_l0 = 1'b0; has_l1 = 1'b0;
@@ -438,22 +465,70 @@ module maincpu (
 	// on its own tick, and a one-cycle assertion is missed on nearly every
 	// access (LESSONS_LEARNED, "DTACK/ready must be a held level").
 	// =====================================================================
-	// S_MEM..S_MEM3: three cycles for a block-RAM or peripheral access.
+	// S_MEM..S_MEM4: FOUR cycles for a block-RAM or peripheral access.
 	//
-	// One would do for a plain registered RAM. Three is what it takes for a
+	// One would do for a plain registered RAM. Three was what it took for a
 	// peripheral that registers the CPU interface on the way in -- which the
 	// X1-010 does, because with its RAM hanging combinationally off this bus
 	// the worst paths in the whole subsystem ran from TG68K's register file
 	// into that RAM's inputs. Registering there and spending a cycle here
 	// removes the path structurally instead of relaxing a constraint over it.
 	//
+	// THE FOURTH CYCLE BUYS THE SAME THING ONE LEVEL FURTHER OUT. With the
+	// peripherals and both work RAMs registered, the whole-core build measured
+	// -0.935 ns and every one of the fifteen worst paths launched from the same
+	// place -- TG68K's register file -- ending either in a peripheral's own
+	// input register (x1_001|k_wdata) or in rd_data. Both are this module
+	// handing the CPU's raw outputs straight across:
+	//
+	//   * the WRITE path: cpu_dout fans out combinationally to every
+	//     peripheral's input register at once.
+	//   * the READ path: addr24 decodes to is_wram/io_sel, and that decode is
+	//     the SELECT of the return mux, so the CPU's own address is in series
+	//     with the mux feeding rd_data.
+	//
+	// So the address, the write data and the DECODE are all registered here in
+	// S_MEM, io_req moves to S_MEM2, and the capture moves to S_MEM4. What
+	// leaves this module is then register-driven and low fanout, and the
+	// select on the return mux comes from a register rather than from the CPU.
+	//
 	// It costs nothing: the CPU is stalled for the whole bus cycle and steps
-	// only once every six clk_sys cycles, so there is room for four.
-	typedef enum logic [2:0] { S_IDLE, S_ROM, S_MEM, S_MEM2, S_MEM3, S_DONE } state_t;
+	// only once every six clk_sys cycles, so four cycles fit inside one
+	// enable gap on the fastest board in scope.
+	typedef enum logic [3:0] { S_IDLE, S_ROM, S_MEM, S_MEM2, S_MEM3, S_MEM4, S_DONE } state_t;
 	state_t state;
+
+	// Declared here, ABOVE the FSM that reads them.
+	wire [23:0] wram_off = (addr24 - wram_base) & wram_mask;
+
+	wire [15:0] io_sel_comb = {1'b0,  // 15 unused
+	                   is_prot,       // 14 IO_PROT
+	                   1'b0,          // 13 IO_MISC -- decoded in the core, not here
+	                   is_wram2,      // 12
+	                   is_dsw,        // 11
+	                   is_inputs,     // 10
+	                   is_vregs,      //  9
+	                   is_x1,         //  8
+	                   is_l1c,        //  7
+	                   is_l0c,        //  6
+	                   is_l1v,        //  5
+	                   is_l0v,        //  4
+	                   is_sprcode,    //  3
+	                   is_sprc,       //  2
+	                   is_spry,       //  1
+	                   is_pal};       //  0
 
 	logic [15:0] rd_data;
 	logic        acc_ready;
+
+	// THE REGISTERED REQUEST STAGE. Everything that crosses out of this module
+	// during an access is taken from these, not from the CPU's outputs.
+	logic [23:1] q_addr;
+	logic [15:0] q_wdata;
+	logic        q_we, q_uds, q_lds;
+	logic        q_wram, q_wram_wel, q_wram_weh;
+	logic [19:1] q_wram_addr;
+	logic [15:0] q_sel;
 
 	// Latch the ROM word on its valid pulse. NOTHING in the path from sdram.sv
 	// to here holds it: the arbiter assigns c_data combinationally from a
@@ -489,8 +564,8 @@ module maincpu (
 							rom_req <= 1'b1;
 							state   <= S_ROM;
 						end else begin
-							// Block RAM and I/O: one cycle of registered read
-							// latency, spent rather than assumed.
+							// Block RAM and I/O: registered read latency,
+							// spent rather than assumed.
 							state <= S_MEM;
 						end
 					end
@@ -504,12 +579,33 @@ module maincpu (
 					end
 				end
 
-				// io_req is asserted in S_MEM only; the peripheral latches the
-				// address and data on that edge.
-				S_MEM:  state <= S_MEM2;
-				S_MEM2: state <= S_MEM3;
-				S_MEM3: begin
-					rd_data   <= is_wram ? wram_rdata : io_rdata;
+				// S_MEM captures the request; io_req is asserted in S_MEM2
+				// only, and the peripheral latches address and data on that
+				// edge into its own input register.
+				S_MEM: begin
+					q_addr      <= addr24[23:1];
+					q_wdata     <= cpu_dout;
+					q_we        <= acc_write;
+					q_uds       <= ~n_uds;
+					q_lds       <= ~n_lds;
+					q_sel       <= io_sel_comb;
+					q_wram      <= is_wram;
+					q_wram_addr <= wram_off[19:1];
+					q_wram_wel  <= is_wram && acc_write && !n_lds;
+					q_wram_weh  <= is_wram && acc_write && !n_uds;
+					state       <= S_MEM2;
+				end
+				S_MEM2: begin
+					// One cycle of write enable, from a register.
+					q_wram_wel <= 1'b0;
+					q_wram_weh <= 1'b0;
+					state      <= S_MEM3;
+				end
+				S_MEM3: state <= S_MEM4;
+				S_MEM4: begin
+					// The select is q_wram, a register -- not the CPU's
+					// address decoded on the way past.
+					rd_data   <= q_wram ? wram_rdata : io_rdata;
 					acc_ready <= 1'b1;
 					state     <= S_DONE;
 				end
@@ -537,39 +633,23 @@ module maincpu (
 
 	assign rom_addr   = addr24[23:1];
 
-	wire [23:0] wram_off = (addr24 - wram_base) & wram_mask;
-	assign wram_addr  = wram_off[19:1];
-	assign wram_wdata = cpu_dout;
-	assign wram_wel   = is_wram && acc_write && (state == S_MEM) && !n_lds;
-	assign wram_weh   = is_wram && acc_write && (state == S_MEM) && !n_uds;
+	assign wram_addr  = q_wram_addr;
+	assign wram_wdata = q_wdata;
+	assign wram_wel   = q_wram_wel;
+	assign wram_weh   = q_wram_weh;
 
-	assign io_req   = (state == S_MEM);
-	assign io_we    = acc_write;
-	assign io_addr  = addr24[23:1];
-	assign io_wdata = cpu_dout;
-	assign io_uds   = ~n_uds;
-	assign io_lds   = ~n_lds;
+	assign io_req   = (state == S_MEM2);
+	assign io_we    = q_we;
+	assign io_addr  = q_addr;
+	assign io_wdata = q_wdata;
+	assign io_uds   = q_uds;
+	assign io_lds   = q_lds;
+	assign io_sel   = q_sel;
 	// SIXTEEN ELEMENTS FOR A SIXTEEN-BIT PORT, one per IO_* index, including the
 	// undriven ones. A short concatenation zero-extends on the LEFT, so adding
 	// a signal at the top silently shifts every index below it -- which is how
 	// is_prot first landed on IO_MISC's bit. Written out in full so the
 	// positions are visible rather than inferred from the element count.
-	assign io_sel   = {1'b0,          // 15 unused
-	                   is_prot,       // 14 IO_PROT
-	                   1'b0,          // 13 IO_MISC -- decoded in the core, not here
-	                   is_wram2,      // 12
-	                   is_dsw,        // 11
-	                   is_inputs,     // 10
-	                   is_vregs,      //  9
-	                   is_x1,         //  8
-	                   is_l1c,        //  7
-	                   is_l0c,        //  6
-	                   is_l1v,        //  5
-	                   is_l0v,        //  4
-	                   is_sprcode,    //  3
-	                   is_sprc,       //  2
-	                   is_spry,       //  1
-	                   is_pal};       //  0
 
 // synthesis translate_off
 	// A board value with no case arm silently gets the two-layer map, which

@@ -27,6 +27,26 @@ module  pll_0002(
 	// derived here.
 	output wire outclk_1,
 
+	// interface 'outclk2' -- clk_video, 48 MHz, EXACTLY HALF of clk_sys.
+	//
+	// The scandoubler and the HQ2x blender run on this instead of clk_sys.
+	// After the four-cycle io access landed, every path still failing in the
+	// whole design was inside arcade_video's Hq2x|Blend -- vendored framework
+	// logic, nothing of this core's -- at -0.229 ns. The blender needs about
+	// 10.65 ns; at 48 MHz it has 20.83.
+	//
+	// HALF, specifically, so this stays SYNCHRONOUS: every 48 MHz edge is also
+	// a 96 MHz edge, so there is no clock-domain crossing to get wrong and no
+	// SDC exception to justify. A 64 MHz output would have divided the pixel
+	// more evenly but 96:64 is 3:2, which is a real CDC.
+	//
+	// The uneven division does not matter: scandoubler.v MEASURES the input
+	// pixel length itself (pixsz <= pl, then pixsz2 = pl/2, pixsz4 = pl/4) and
+	// fires its four sub-phase enables from that, so it adapts to whatever
+	// ratio it is given. At 96 MHz an 8 MHz pixel is 12 cycles and the enables
+	// land on 3/6/9/12; at 48 MHz it is 6 cycles and they land on 1/3/4/6.
+	output wire outclk_2,
+
 	// interface 'locked'
 	output wire locked
 );
@@ -35,14 +55,14 @@ module  pll_0002(
 		.fractional_vco_multiplier("false"),
 		.reference_clock_frequency("50.0 MHz"),
 		.operation_mode("direct"),
-		.number_of_clocks(2),
+		.number_of_clocks(3),
 		.output_clock_frequency0("96.000000 MHz"),
 		.phase_shift0("0 ps"),
 		.duty_cycle0(50),
 		.output_clock_frequency1("96.000000 MHz"),
 		.phase_shift1("5208 ps"),
 		.duty_cycle1(50),
-		.output_clock_frequency2("0 MHz"),
+		.output_clock_frequency2("48.000000 MHz"),
 		.phase_shift2("0 ps"),
 		.duty_cycle2(50),
 		.output_clock_frequency3("0 MHz"),
@@ -94,7 +114,14 @@ module  pll_0002(
 		.pll_subtype("General")
 	) altera_pll_i (
 		.rst	(rst),
-		.outclk	({outclk_1, outclk_0}),
+		// THE BUS, NOT JUST THE PARAMETERS. number_of_clocks(3) and
+		// output_clock_frequency2 are not enough on their own: this
+		// concatenation is the actual wiring, and leaving it two wide left
+		// outclk_2 dangling. clk_video was then undriven, every register in
+		// arcade_video went "Stuck at GND due to stuck port clock", and the
+		// whole video chain was optimised away -- 4,000 ALMs, 35 RAM blocks
+		// and 9 DSPs lighter, reporting +0.238 ns and TIMING MET.
+		.outclk	({outclk_2, outclk_1, outclk_0}),
 		.locked	(locked),
 		.fboutclk	( ),
 		.fbclk	(1'b0),

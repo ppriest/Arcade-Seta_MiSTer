@@ -8,6 +8,9 @@
     <category>Arcade</category>
     <rotation>vertical</rotation>
 
+    <!-- which game, for rtl/seta_board_cfg.sv. FIRST, because the download is permuted with it. -->
+    <rom index="1"><part>05</part></rom>
+
     <rom index="0" zip="neobattl.zip" md5="none">
         <!-- maincpu -->
         <interleave output="16">
@@ -24,9 +27,6 @@
         <part name="bp923-005.u4"/>
     </rom>
 
-    <!-- which game, for rtl/seta_board_cfg.sv -->
-    <rom index="1"><part>05</part></rom>
-
     <switches default="FF,FF,00" base="0">
         <dip name="Lives" bits="0,1" ids="4,3,1,2"/>
         <dip name="Difficulty" bits="2,3" ids="Hardest,Hard,Easy,Normal"/>
@@ -41,5 +41,5 @@
         <dip name="Service Mode" bits="15" ids="On,Off"/>
     </switches>
 
-    <buttons names="Button 1,Start,Coin,Service" default="A,Start,Select,R" count="4"/>
+    <buttons names="Button 1,-,-,-,-,-,Start,Coin,Pause,Service" default="A,Start,Select,L,R" count="1"/>
 </misterromdescription>

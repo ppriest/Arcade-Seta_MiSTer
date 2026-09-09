@@ -60,20 +60,42 @@ assign AUDIO_MIX = 0;
 // 384x240 with square-ish pixels. The three games on a 14.318181 MHz XTAL are
 // 304x240 and are not in this phase.
 wire [1:0] ar = status[122:121];
-wire [11:0] base_arx = 12'd8;
-wire [11:0] base_ary = 12'd5;
 
-wire       rotate_en  = status[63];
-wire       rotate_ccw = status[64];
+wire  [1:0] game_rot;   // from seta_core, driven by the mod byte
+
+// ROTATION. Auto is the default and follows the driver's own ROT for the set
+// -- five of the eight Group A games are vertical, and coming up sideways until
+// someone finds the menu is not a sensible default. The explicit settings stay
+// for a cabinet that is already turned round, or a monitor that is not.
+//
+// game_rot comes from rtl/seta_board_cfg.sv: 0 = ROT0, 1 = ROT90, 2 = ROT270.
+// A ROT270 game needs the picture turned counter-clockwise to stand upright.
+wire [1:0] rot_sel   = status[64:63];
+wire       rotate_en = (rot_sel == 2'd0) ? (game_rot != 2'd0)
+                     : (rot_sel != 2'd1);
+wire       rotate_ccw = (rot_sel == 2'd0) ? (game_rot == 2'd2)
+                      : (rot_sel == 2'd3);
 wire       flip_180   = status[65];
+
+// Aspect ratio. THE PHYSICAL SCREEN IS 4:3 -- these boards drive an ordinary
+// arcade monitor -- and 384x240 of active video on it means the pixels are NOT
+// square. 8:5 is the pixel-count ratio, which is what was here, and it renders
+// the picture too wide.
+//
+// When the output is rotated to portrait the original aspect becomes 3:4, so
+// the two swap with rotate_en. Arcade-Psikyo_MiSTer has the same pair, for
+// boards that are vertical rather than optionally rotated, and records that
+// leaving it at a hardcoded 4:3 is what made its Original/Full Screen toggle
+// look like it did nothing.
+wire [11:0] base_arx = rotate_en ? 12'd3 : 12'd4;
+wire [11:0] base_ary = rotate_en ? 12'd4 : 12'd3;
 
 `include "build_id.v"
 localparam CONF_STR = {
 	"Seta;;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	"O[63],Rotate,Off,On;",
-	"O[64],Rotate direction,CW,CCW;",
+	"O[64:63],Rotation,Auto,Off,CW,CCW;",
 	"O[65],Flip 180,Off,On;",
 	"O[68:66],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"O[70:69],Crop,Off,216 lines,224 lines;",
@@ -93,7 +115,13 @@ localparam CONF_STR = {
 	"-;",
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
-	"J1,Button 1,Button 2,Start,Coin,Service;",
+	// THE SAME POSITIONAL RULE AS THE .mra's <buttons> LIST: entry i is
+	// joystick bit 4 + i. This line named five buttons, which put Start on
+	// bit 6 -- the bit the core reads as COIN1 -- and it has to be padded to
+	// hold Start, Coin, Pause and Service at 10, 11, 12 and 13. The unused
+	// four are named rather than left empty so the alignment is visible and
+	// does not depend on how the OSD treats a blank entry.
+	"J1,Button 1,Button 2,Button 3,Button 4,Button 5,Button 6,Start,Coin,Pause,Service;",
 	"jn,A,B,Start,Select,R;",
 	"v,0;",
 	"V,v",`BUILD_DATE
@@ -149,7 +177,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 // phase is carried over from Psikyo, where it is proven on real hardware; no
 // simulation can check it, because the chip model has no notion of phase. See
 // rtl/pll/pll_0002.v.
-wire clk_sys, clk_sdram_shifted, pll_locked;
+wire clk_sys, clk_sdram_shifted, clk_video, pll_locked;
 
 pll pll
 (
@@ -157,6 +185,7 @@ pll pll
 	.rst(0),
 	.outclk_0(clk_sys),
 	.outclk_1(clk_sdram_shifted),
+	.outclk_2(clk_video),
 	.locked(pll_locked)
 );
 
@@ -218,9 +247,22 @@ wire [15:0] dsw_in = {sw[0], sw[1]};
 //
 // MiSTer's joystick word is 0 = Right, 1 = Left, 2 = Down, 3 = Up, then
 // buttons from bit 4.
+//
+// START AND COIN ARE AT FIXED JOYSTICK BITS, and the .mra's <buttons> name
+// list is positional -- entry i is bit 4 + i -- so the two have to agree.
+// They did not: the core read COIN1 from bit 6 and START1 from bit 8 while the
+// .mra named bit 6 "Start" and bit 7 "Coin". On hardware, Start inserted a
+// coin and Coin did nothing.
+//
+//     bit  4  5  6  7  8  9  10     11    12     13
+//          B1 B2 -  -  -  -  Start  Coin  Pause  Service
+//
+// Those are Arcade-Psikyo_MiSTer's positions, which is why its six-button and
+// three-button sets both work. scripts/build_mra.py pads the name list to
+// match.
 wire [15:0] p1_in = ~{
 	8'h00,
-	joystick_0[8],    // 7 START1
+	joystick_0[10],   // 7 START1
 	1'b0,             // 6 unused
 	joystick_0[5],    // 5 BUTTON2
 	joystick_0[4],    // 4 BUTTON1
@@ -232,7 +274,7 @@ wire [15:0] p1_in = ~{
 
 wire [15:0] p2_in = ~{
 	8'h00,
-	joystick_1[8],
+	joystick_1[10],
 	1'b0,
 	joystick_1[5],
 	joystick_1[4],
@@ -249,10 +291,30 @@ wire [15:0] coins_in = {
 	8'hff,
 	sw[2][7:4],
 	1'b1,               // 3 TILT, never asserted
-	~joystick_0[9],     // 2 SERVICE1
-	~joystick_1[6],     // 1 COIN2
-	~joystick_0[6]      // 0 COIN1
+	~joystick_0[13],    // 2 SERVICE1
+	~joystick_1[11],    // 1 COIN2
+	~joystick_0[11]     // 0 COIN1
 };
+
+// PAUSE. Edge-triggered toggle, not a level: the button is momentary, so a
+// level would only pause while held.
+//
+// Bit 12 is a function of the button lists above -- the .mra's <buttons> and
+// the OSD's J1 -- never a constant copied from another core. Both put Pause
+// there, and rtl/seta_core.sv already gates cpu_ce on pause_cpu, so this is
+// the whole of it.
+//
+// The OSD's own "Pause CPU" switch on the Debug page stays, ORed in: it is
+// the one that can be left on while poking at a frozen frame, where a toggle
+// button is awkward.
+wire pause_btn = joystick_0[12] | joystick_1[12];
+reg  pause_btn_d, pause_toggle;
+always @(posedge clk_sys) begin
+	pause_btn_d <= pause_btn;
+	if (reset)                          pause_toggle <= 1'b0;
+	else if (pause_btn & ~pause_btn_d)  pause_toggle <= ~pause_toggle;
+end
+wire pause_core = pause_toggle | status[82];
 
 // wits alone has four players; the other seven boards never read these.
 wire [15:0] p3_in = 16'hffff;
@@ -262,6 +324,19 @@ wire [15:0] p4_in = 16'hffff;
 
 wire [7:0] core_r, core_g, core_b;
 wire       core_hs, core_vs, core_hb, core_vb, core_de, core_ce;
+
+// core_ce IS ONE clk_sys CYCLE WIDE, which is half a clk_video cycle -- a
+// clk_video edge can fall either side of it. Stretched to two clk_sys cycles,
+// exactly one clk_video edge samples it high, whichever parity it lands on.
+//
+// Without this the design still works or does not work DETERMINISTICALLY --
+// an 8 MHz pixel is 12 clk_sys cycles, an even number, so every enable lands
+// on the same parity and the video chain would see all of them or none. "None"
+// is a black screen with every register correct, which is a bad hour on
+// hardware; two cycles costs one flip-flop.
+reg core_ce_d;
+always @(posedge clk_sys) core_ce_d <= core_ce;
+wire core_ce_v = core_ce | core_ce_d;
 
 wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun;
 wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped;
@@ -279,6 +354,7 @@ seta_core seta_core
 	.init(~pll_locked),
 
 	.game(mod_byte[3:0]),
+	.game_rot(game_rot),
 
 	.SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ),
 	.SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
@@ -294,7 +370,7 @@ seta_core seta_core
 	.p1_in(p1_in), .p2_in(p2_in), .coins_in(coins_in),
 	.p3_in(p3_in), .p4_in(p4_in), .dsw_in(dsw_in),
 
-	.pause_cpu(status[82]),
+	.pause_cpu(pause_core),
 	.en_spr(~status[80]),
 	.en_pcm(~status[81]),
 
@@ -316,6 +392,46 @@ seta_core seta_core
 	.dbg_cpu_we(dbg_cpu_we), .dbg_cpu_data(dbg_cpu_data)
 );
 
+// ---------------------------------------------------------------------------
+// JTAG READBACK. The counters above were wired out of the core from the start
+// and then went nowhere -- rtl/debug/ held the probe, files.qip compiled it,
+// and nothing instantiated it. On the first hardware run that meant the
+// instruments existed everywhere except where they were needed.
+//
+// PROBE LAYOUT, 128 bits. Keep scripts/read_issp.tcl's decode in step: a
+// shifted field reads as plausible nonsense rather than as an error.
+//
+//   [ 15:  0]  dbg_lines           scanlines the sprite engine started
+//   [ 31: 16]  dbg_sprites         sprites blitted
+//   [ 47: 32]  dbg_overrun         line_start while still rendering (a fault)
+//   [ 63: 48]  dbg_dropped         lines cut short by the per-line budget
+//   [ 79: 64]  dbg_worst_sprites   most sprites completed on one line
+//   [ 95: 80]  dbg_snd_samples     X1-010 output samples
+//   [111: 96]  dbg_snd_rom_reads   X1-010 PCM/wave fetches from SDRAM
+//   [119:112]  dbg_snd_overrun[7:0]  sample generated before the last finished
+//   [126:120]  dbg_irq_pending[7:1]
+//   [    127]  pll_locked
+//
+// The two sound counters are the ones that matter first: samples with no ROM
+// reads means the chip is running but starved, ROM reads with no samples means
+// the opposite, and both at zero means the CPU never programmed it.
+issp_probe #(.INSTANCE_ID("F"), .PROBE_W(128), .SOURCE_W(8)) u_issp (
+	.clk(clk_sys),
+	.probe({
+		pll_locked,
+		dbg_irq_pending,
+		dbg_snd_overrun[7:0],
+		dbg_snd_rom_reads,
+		dbg_snd_samples,
+		dbg_worst_sprites,
+		dbg_dropped,
+		dbg_overrun,
+		dbg_sprites,
+		dbg_lines
+	}),
+	.source()
+);
+
 ///////////////////////   VIDEO   ////////////////////////////////
 
 // CLK_VIDEO and CE_PIXEL are OUTPUTS of arcade_video -- it drives CLK_VIDEO
@@ -325,10 +441,28 @@ seta_core seta_core
 // caused it.
 wire vga_de_raw;
 
+// THE VIDEO CHAIN RUNS AT 48 MHz, NOT clk_sys.
+//
+// arcade_video's scandoubler and HQ2x blender were the last thing in the whole
+// design still failing timing: -0.229 ns with TNS -3.273, every failing path
+// inside Hq2x|Blend, and not one path belonging to this core. That is vendored
+// framework logic, so it cannot be retimed here -- but it can be given a
+// slower clock. It needs about 10.65 ns; 48 MHz gives it 20.83.
+//
+// This is the fix Arcade-Psikyo_MiSTer's SDC names as the structurally correct
+// one, having tried and then REMOVED the obvious alternative: a setup-2
+// multicycle on the blender is not backed by the hardware, because
+// scandoubler.v force-asserts Blend's clock enable on hsync, so one transition
+// per scanline gets no second cycle. That trade is what "HQ2x intentionally
+// broken to close timing" means in other cores' release notes.
+//
+// 48 MHz is EXACTLY HALF of clk_sys, from the same PLL, so every clk_video
+// edge is also a clk_sys edge. There is no clock-domain crossing here, and no
+// SDC exception to write or audit.
 arcade_video #(.WIDTH(384), .DW(24), .GAMMA(1)) arcade_video
 (
-	.clk_video(clk_sys),
-	.ce_pix(core_ce),
+	.clk_video(clk_video),
+	.ce_pix(core_ce_v),
 
 	.RGB_in({core_r, core_g, core_b}),
 	.HBlank(core_hb),

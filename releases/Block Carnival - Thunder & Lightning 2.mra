@@ -8,6 +8,9 @@
     <category>Arcade</category>
     <rotation>vertical</rotation>
 
+    <!-- which game, for rtl/seta_board_cfg.sv. FIRST, because the download is permuted with it. -->
+    <rom index="1"><part>03</part></rom>
+
     <rom index="0" zip="blockcar.zip" md5="none">
         <!-- maincpu -->
         <interleave output="16">
@@ -25,9 +28,6 @@
         <part name="bl-snd-0.u39.a13"/>
     </rom>
 
-    <!-- which game, for rtl/seta_board_cfg.sv -->
-    <rom index="1"><part>03</part></rom>
-
     <switches default="FF,FF,00" base="0">
         <dip name="Flip Screen" bits="1" ids="On,Off"/>
         <dip name="Demo Sounds" bits="2" ids="Off,On"/>
@@ -41,5 +41,5 @@
         <dip name="Title" bits="20" ids="Block Carnival,Thunder &amp; Lightning 2"/>
     </switches>
 
-    <buttons names="Button 1,Button 2,Start,Coin,Service" default="A,B,Start,Select,R" count="5"/>
+    <buttons names="Button 1,Button 2,-,-,-,-,Start,Coin,Pause,Service" default="A,B,Start,Select,L,R" count="2"/>
 </misterromdescription>

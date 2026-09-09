@@ -45,11 +45,37 @@ module seta_video #(
 	input  wire  [8:0] spritelimit,
 	input  wire  [3:0] transpen,
 	input  wire        bgflag_opaque,
+	// setac_eof, for the Group B sets that buffer their sprite RAM.
+	input  wire        buffer_sprites,
 	input  wire [LB_W-1:0] colorbase_fg, colorbase_bg,
 	input  wire  [8:0] screen_h, vis_max_y,
 	input  wire [LB_W-1:0] backdrop,
 	input  wire [15:0] code_mask,
 	input  wire [15:0] line_budget,
+
+	// ---- the X1-012 tile layer, LAYOUT_B only ------------------------------
+	// has_l0 low leaves the whole layer idle and the mixer takes the sprite
+	// buffer alone, which is exactly Group A's behaviour -- so the one video
+	// path serves both phases and Group A cannot regress into a tilemap it
+	// does not have.
+	input  wire        has_l0,
+	input  wire        l0_vram_we,
+	input  wire [12:0] l0_vram_addr,
+	input  wire [15:0] l0_vram_wdata,
+	input  wire        l0_vram_uds, l0_vram_lds,
+	output wire [15:0] l0_vram_rdata,
+	input  wire        l0_ctrl_we,
+	input  wire  [1:0] l0_ctrl_addr,
+	input  wire [15:0] l0_ctrl_wdata,
+	input  wire        l0_ctrl_uds, l0_ctrl_lds,
+	output wire [15:0] l0_ctrl_rdata,
+	input  wire signed [8:0] l0_xoffs, l0_xoffs_flip,
+	input  wire [LB_W-1:0]   l0_colorbase,
+	input  wire [15:0] l0_code_mask,
+	output wire        tile_req,
+	output wire [23:3] tile_addr,
+	input  wire        tile_valid,
+	input  wire [63:0] tile_data,
 
 	// ---- CPU: sprite chip --------------------------------------------------
 	input  wire        code_we,
@@ -118,6 +144,11 @@ module seta_video #(
 	// ---- sprites ------------------------------------------------------------
 	logic  [8:0] lb_addr;
 	wire [LB_W-1:0] lb_data;
+	wire         lb_hit;
+	// The sprite chip's flip bit, which is where the layer's comes from.
+	wire         flipscr_l0;
+	// visible_area().height(), which update_scroll centres the map against.
+	wire   [8:0] vis_dimy = vact_end[8:0] - vact_start[8:0] + 9'd1;
 
 	x1_001 #(.LB_W(LB_W)) u_spr (
 		.clk(clk), .reset(reset),
@@ -133,13 +164,15 @@ module seta_video #(
 		.bg_yoffs(bg_yoffs), .bg_yoffs_flip(bg_yoffs_flip),
 		.bank_size(bank_size), .spritelimit(spritelimit), .transpen(transpen),
 		.bgflag_opaque(bgflag_opaque),
+		.buffer_sprites(buffer_sprites), .vblank_rise(vblank_rise),
 		.colorbase_fg(colorbase_fg), .colorbase_bg(colorbase_bg),
 		.screen_h(screen_h), .vis_max_y(vis_max_y), .backdrop(backdrop),
 		.code_mask(code_mask), .line_budget(line_budget),
 		.line_start(line_start), .line(line), .line_done(), .busy(),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
-		.lb_addr(lb_addr), .lb_data(lb_data),
+		.lb_addr(lb_addr), .lb_data(lb_data), .lb_hit(lb_hit),
+		.flipscr_out(flipscr_l0),
 		.dbg_lines(dbg_lines), .dbg_sprites(dbg_sprites),
 		.dbg_fetches(dbg_fetches), .dbg_overrun(dbg_overrun),
 		.dbg_worst_line(dbg_worst_line), .dbg_worst_sprites(dbg_worst_sprites),
@@ -186,10 +219,48 @@ module seta_video #(
 		end
 	end
 
+	// ---- the tile layer ----------------------------------------------------
+	// Driven from the SAME line_start and line as the sprite engine, so the two
+	// line buffers are always for the same scanline and the mixer needs no
+	// alignment of its own.
+	wire [LB_W-1:0] l0_lb_data;
+
+	x1_012 #(.LB_W(LB_W)) u_l0 (
+		.clk(clk), .reset(reset | ~has_l0),
+		.vram_we(l0_vram_we), .vram_addr(l0_vram_addr),
+		.vram_wdata(l0_vram_wdata), .vram_uds(l0_vram_uds),
+		.vram_lds(l0_vram_lds), .vram_rdata(l0_vram_rdata),
+		.vctrl_we(l0_ctrl_we), .vctrl_addr(l0_ctrl_addr),
+		.vctrl_wdata(l0_ctrl_wdata), .vctrl_uds(l0_ctrl_uds),
+		.vctrl_lds(l0_ctrl_lds), .vctrl_rdata(l0_ctrl_rdata),
+		.xoffs(l0_xoffs), .xoffs_flip(l0_xoffs_flip),
+		.flipscr(flipscr_l0),
+		.vis_dimy(vis_dimy), .colorbase(l0_colorbase), .code_mask(l0_code_mask),
+		.line_start(line_start & has_l0), .line(line),
+		.line_budget(line_budget), .line_done(), .busy(),
+		.rom_req(tile_req), .rom_addr(tile_addr),
+		.rom_valid(tile_valid), .rom_data(tile_data),
+		.lb_addr(lb_addr), .lb_data(l0_lb_data),
+		.dbg_lines(), .dbg_tiles(), .dbg_overrun()
+	);
+
+	// COMPOSITION, for a one-layer game:
+	//
+	//     seta_layers_update -> bitmap.fill(0)
+	//                        -> layer 0 drawn OPAQUE
+	//                        -> sprites over it
+	//
+	// so the sprite pixel wins wherever a sprite actually wrote one, and the
+	// layer shows through everywhere else. lb_hit is that "actually wrote",
+	// which is the same bit the sprite engine uses to make front-to-back
+	// drawing work. With has_l0 low the mixer takes the sprite buffer alone --
+	// Group A, unchanged.
+	wire [LB_W-1:0] mixed = (has_l0 && !lb_hit) ? l0_lb_data : lb_data;
+
 	// lb_data lands two cycles after lb_addr is registered; the palette needs
 	// its index registered too, and both are settled long before the next
 	// ce_pix twelve cycles later.
-	always_ff @(posedge clk) pal_index <= lb_data[PAW-1:0];
+	always_ff @(posedge clk) pal_index <= mixed[PAW-1:0];
 
 endmodule
 

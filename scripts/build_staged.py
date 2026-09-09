@@ -98,6 +98,42 @@ def report_resources(stage):
             print("  " + ln.strip())
 
 
+# Every block that MUST survive to the fitted netlist, by the name Quartus
+# writes into the fit report. A build that passes timing because part of the
+# design was optimised away is the worst kind of green, and it has happened
+# here once already: widening the PLL to a third output set number_of_clocks(3)
+# and the frequency but left the altera_pll instance's `.outclk` concatenation
+# two wide, so outclk_2 dangled. clk_video was undriven, every register in
+# arcade_video went "Stuck at GND due to stuck port clock", the whole video
+# chain vanished -- 4,000 ALMs, 35 RAM blocks and 9 DSPs lighter -- and the
+# build reported +0.238 ns, TIMING MET.
+#
+# Slack alone cannot catch that. Presence has to be asserted separately.
+REQUIRED_INSTANCES = (
+    "TG68KdotC_Kernel",   # the CPU
+    "x1_001",             # sprites
+    "x1_010",             # sound
+    "seta_video",         # palette, timing, the two scanline interrupts
+    "sdram",              # the memory backend
+    "arcade_video",       # the framework video chain...
+    "Hq2x",               # ...including the scandoubler's blender
+)
+
+
+def check_present(stage):
+    """Fail if a block that must exist is missing from the fitted netlist."""
+    rpt = os.path.join(stage, "output_files", "%s.fit.rpt" % REV)
+    try:
+        text = open(rpt, errors="replace").read()
+    except OSError:
+        print("  (no fit report at %s -- cannot check)" % rpt)
+        return []
+    missing = [n for n in REQUIRED_INSTANCES if n not in text]
+    for n in REQUIRED_INSTANCES:
+        print("  %-18s %s" % (n, "present" if n in text else "MISSING"))
+    return missing
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int,
@@ -197,9 +233,22 @@ def main():
     print("==== resource usage ====")
     report_resources(stage)
     print("")
+    print("==== the design is still there ====")
+    missing = check_present(stage)
+
+    print("")
     print("==== timing ====")
     violations = read_slacks(
         os.path.join(stage, "output_files", "%s.sta.summary" % REV))
+
+    if missing:
+        sys.exit(
+            "\nDESIGN INCOMPLETE -- %s missing from the fitted netlist.\n"
+            "Whatever this build's timing says, it is not a measurement of the\n"
+            "design you think you built. Look for an undriven clock or reset:\n"
+            "  grep 'Stuck at GND due to stuck port clock' %s\n"
+            % (", ".join(missing),
+               os.path.join(stage, "output_files", "%s.map.rpt" % REV)))
 
     if not ok:
         sys.exit("BUILD FAILED -- see %s" % log_path)

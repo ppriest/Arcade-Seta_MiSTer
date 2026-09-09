@@ -78,6 +78,8 @@ module seta_core (
 	// ---- instrumentation ------------------------------------------------------
 	output wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun,
 	output wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped,
+	// The driver's ROT for this set, for the top level's Auto rotation.
+	output wire  [1:0] game_rot,
 	output wire [15:0] dbg_snd_samples, dbg_snd_overrun, dbg_snd_rom_reads,
 	output wire  [7:1] dbg_irq_pending,
 	output wire        dbg_cpu_stb,
@@ -98,6 +100,7 @@ module seta_core (
 	wire  [2:0] irq_vbl_level, irq_sl240_level, irq_sl112_level;
 	wire        irq_vbl_hold, has_ack, has_prot, has_tl_prot;
 	wire [23:1] ack_addr;
+	wire        ack_d0_low;
 	wire  [2:0] ack_level;
 	wire [23:0] tl_prot_base, tl_prot_size, tl_prot_rd;
 	wire signed [8:0] fg_xoffs, fg_xoffs_flip, fg_yoffs, fg_yoffs_flip;
@@ -111,8 +114,18 @@ module seta_core (
 	wire  [9:0] htotal, hs_start, hs_end, hact_start, hact_end;
 	wire  [9:0] vtotal, vs_start, vs_end, vact_start, vact_end;
 
+	// DECLARED BEFORE THE INSTANCE. ModelSim implicitly declares a net at a
+	// port connection, so a declaration further down is a DUPLICATE and the
+	// error names the wrong line. LESSONS_LEARNED carries this one already.
+	wire        buffer_sprites;
+	wire        has_l0, layout_b;
+	wire signed [8:0] l0_xoffs, l0_xoffs_flip;
+	wire [10:0] l0_colorbase;
+	wire [15:0] l0_code_mask;
+
 	seta_board_cfg u_cfg (
 		.game(game),
+		.game_rot(game_rot),
 		.map_board(map_board), .cpu_div(cpu_div),
 		.gfx_half_words(gfx_half_words), .code_mask(code_mask),
 		.pal_entries(pal_entries),
@@ -120,6 +133,11 @@ module seta_core (
 		.irq_vbl_level(irq_vbl_level), .irq_vbl_hold(irq_vbl_hold),
 		.irq_sl240_level(irq_sl240_level), .irq_sl112_level(irq_sl112_level),
 		.has_ack(has_ack), .ack_addr(ack_addr), .ack_level(ack_level),
+		.ack_d0_low(ack_d0_low),
+		.has_l0(has_l0), .layout_b(layout_b),
+		.buffer_sprites(buffer_sprites),
+		.l0_xoffs(l0_xoffs), .l0_xoffs_flip(l0_xoffs_flip),
+		.l0_colorbase(l0_colorbase), .l0_code_mask(l0_code_mask),
 		.has_prot(has_prot),
 		.has_tl_prot(has_tl_prot), .tl_prot_base(tl_prot_base),
 		.tl_prot_size(tl_prot_size), .tl_prot_rd(tl_prot_rd),
@@ -192,7 +210,12 @@ module seta_core (
 	// io_sel bit positions, from maincpu.sv. Written out there in full for the
 	// same reason they are named here: a shifted index decodes to the wrong
 	// peripheral and looks like a CPU fault.
+	// THESE MUST MATCH rtl/cpu/maincpu.sv's io_region_t, which is where io_sel
+	// is built. Two copies of the same index list is the arrangement that put
+	// is_prot on IO_MISC's bit once already; they are written out in full at
+	// both ends so a mismatch is visible rather than inferred.
 	localparam int IO_PALETTE = 0, IO_SPRYLOW = 1, IO_SPRCTRL = 2, IO_SPRCODE = 3;
+	localparam int IO_L0VRAM = 4, IO_L0CTRL = 6;
 	localparam int IO_X1SND = 8, IO_INPUTS = 10, IO_DSW = 11, IO_WRAM2 = 12;
 	localparam int IO_PROT = 14;
 
@@ -256,6 +279,13 @@ module seta_core (
 	// =====================================================================
 	// Video
 	// =====================================================================
+	// The tile layer's fetch and CPU-side readback.
+	wire         tile_req;
+	wire  [23:3] tile_addr;
+	wire         tile_valid;
+	wire  [63:0] tile_data;
+	wire  [15:0] l0_vram_rdata, l0_ctrl_rdata;
+
 	wire        spr_req;
 	wire [23:3] spr_addr;
 	wire        spr_valid;
@@ -283,9 +313,30 @@ module seta_core (
 		.bg_yoffs(bg_yoffs), .bg_yoffs_flip(bg_yoffs_flip),
 		.bank_size(bank_size), .spritelimit(spritelimit), .transpen(transpen),
 		.bgflag_opaque(1'b0),
+		.buffer_sprites(buffer_sprites),
 		.colorbase_fg(colorbase_fg), .colorbase_bg(colorbase_bg),
 		.screen_h(screen_h), .vis_max_y(vact_end[8:0]), .backdrop(backdrop),
 		.code_mask(code_mask), .line_budget(line_budget),
+
+		// ---- the X1-012 tile layer, Phase 2 --------------------------------
+		// has_l0 comes from the board config and is low for every Group A set,
+		// which leaves the layer held in reset and the mixer taking the sprite
+		// buffer alone. maincpu.sv has decoded IO_L0VRAM and IO_L0CTRL since
+		// Phase 1; nothing was listening.
+		.has_l0(has_l0),
+		.l0_vram_we(io_req && io_we && io_sel[IO_L0VRAM]),
+		.l0_vram_addr(io_addr[13:1]), .l0_vram_wdata(io_wdata),
+		.l0_vram_uds(io_uds), .l0_vram_lds(io_lds),
+		.l0_vram_rdata(l0_vram_rdata),
+		.l0_ctrl_we(io_req && io_we && io_sel[IO_L0CTRL]),
+		.l0_ctrl_addr(io_addr[2:1]), .l0_ctrl_wdata(io_wdata),
+		.l0_ctrl_uds(io_uds), .l0_ctrl_lds(io_lds),
+		.l0_ctrl_rdata(l0_ctrl_rdata),
+		.l0_xoffs(l0_xoffs), .l0_xoffs_flip(l0_xoffs_flip),
+		.l0_colorbase(l0_colorbase), .l0_code_mask(l0_code_mask),
+		.tile_req(tile_req), .tile_addr(tile_addr),
+		.tile_valid(tile_valid), .tile_data(tile_data),
+
 		.code_we(io_req && io_we && io_sel[IO_SPRCODE]),
 		.code_addr(io_addr[13:1]), .code_wdata(io_wdata),
 		.code_uds(io_uds), .code_lds(io_lds), .code_rdata(code_rdata),
@@ -345,7 +396,10 @@ module seta_core (
 		// -- so a read acknowledges too, and a core that only decoded writes
 		// would leave the request pending for a game that acknowledges by
 		// reading.
-		if (has_ack && io_req && io_addr == ack_addr && ack_level != 3'd0)
+		// ack_d0_low is blockcar's: it acknowledges only when bit 0 of the
+		// byte written is low, so a write of 1 must NOT clear the request.
+		if (has_ack && io_req && io_addr == ack_addr && ack_level != 3'd0
+		    && (!ack_d0_low || !io_wdata[0]))
 			irq_clr[ack_level] = 1'b1;
 	end
 
@@ -429,6 +483,8 @@ module seta_core (
 		// independent of where the inputs window happens to end.
 		if      (tl_prot_rd_hit)     io_rdata = {8'h00, tl_prot_value};
 		else if (io_sel[IO_PALETTE]) io_rdata = pal_rdata;
+		else if (io_sel[IO_L0VRAM])  io_rdata = l0_vram_rdata;
+		else if (io_sel[IO_L0CTRL])  io_rdata = l0_ctrl_rdata;
 		else if (io_sel[IO_SPRCODE]) io_rdata = code_rdata;
 		else if (io_sel[IO_SPRYLOW]) io_rdata = {8'h00, ylow_rdata};
 		else if (io_sel[IO_SPRCTRL]) io_rdata = {8'h00, ctrl_rdata};
@@ -470,6 +526,9 @@ module seta_core (
 		.gfx_half_words(gfx_half_words),
 		.cpu_req(rom_req), .cpu_addr(rom_addr),
 		.cpu_valid(rom_valid), .cpu_data(rom_data),
+		.layout_b(layout_b),
+		.tile_req(tile_req), .tile_addr(tile_addr),
+		.tile_valid(tile_valid), .tile_data(tile_data),
 		.spr_req(spr_req), .spr_addr(spr_addr),
 		.spr_valid(spr_valid), .spr_data(spr_data),
 		.snd_req(snd_rom_req), .snd_addr(snd_rom_addr),

@@ -46,6 +46,23 @@
 //     x1snd    0x300000  1 MB   (every Group A set)
 //     total             4 MB
 //
+//   LAYOUT_B -- Group B, one 4bpp tilemap layer
+//     maincpu  0x000000  1 MB   (all four sets are 0.75 MB)
+//     gfx1     0x100000  1 MB   (all four)
+//     gfx2     0x200000  2 MB   (qzkklgy2; the other three are 1 MB)
+//     x1snd    0x400000  1 MB   (all four)
+//     total             5 MB
+//
+//   X1SND MOVES BETWEEN THE LAYOUTS. gfx2 is 2 MB because qzkklgy2's is --
+//   measured from the ROM_START records, not assumed from its three siblings,
+//   which are 1 MB each. Sizing it at 1 MB would have overlapped x1snd with
+//   the top half of qzkklgy2's tiles and broken exactly one game's graphics
+//   and sound together.
+//
+//   Sizes come from the records rather than being rounded up for comfort:
+//   scripts/build_mra.py reads this map out of THIS FILE, so a region declared
+//   larger than it needs pads every .mra by the difference.
+//
 // ---------------------------------------------------------------------------
 // THE SPRITE LAYOUT PERMUTATION HAPPENS HERE, on the way in.
 //
@@ -124,10 +141,23 @@ module seta_sdram_top (
 	output wire [15:0] cpu_data,
 
 	// ---- sprite graphics: one 64-bit granule per row ------------------------
+	// LAYOUT_B puts a tilemap region at 0x200000 and shrinks the swizzle
+	// window to match. One bit, because the two layouts in scope differ only
+	// in that.
+	input  wire        layout_b,
+
 	input  wire        spr_req,
 	input  wire [23:3] spr_addr,      // granule address within "gfx1"
 	output wire        spr_valid,
 	output wire [63:0] spr_data,
+
+	// Tile graphics, LAYOUT_B only. Shares the sprite phy: both are per-line
+	// graphics fetches with the same deadline, and the tilemap asks for at
+	// most 100 granules a line against the sprite engine's several hundred.
+	input  wire        tile_req,
+	input  wire [23:3] tile_addr,     // granule address within "gfx2"
+	output wire        tile_valid,
+	output wire [63:0] tile_data,
 
 	// ---- X1-010 PCM samples --------------------------------------------------
 	input  wire        snd_req,
@@ -140,9 +170,21 @@ module seta_sdram_top (
 	// LAYOUT_A. See the header.
 	// =====================================================================
 	localparam logic [25:0] BASE_MAINCPU = 26'h000_0000;   // 1 MB
-	localparam logic [25:0] BASE_GFX1    = 26'h010_0000;   // 2 MB
-	localparam logic [25:0] BASE_X1SND   = 26'h030_0000;   // 1 MB
-	localparam logic [25:0] SIZE_GFX1    = 26'h020_0000;
+	localparam logic [25:0] BASE_GFX1    = 26'h010_0000;   // 2 MB in A, 1 MB in B
+	localparam logic [25:0] BASE_GFX2    = 26'h020_0000;   // 2 MB, LAYOUT_B only
+	// x1snd sits above gfx2, which is only present in LAYOUT_B. BOTH VALUES
+	// ARE localparams so scripts/build_mra.py can still read the map out of
+	// this file -- it parses localparam declarations, and a bare wire would
+	// have hidden the layout from the .mra generator, which is the one place
+	// that must agree with it exactly.
+	localparam logic [25:0] BASE_X1SND_A = 26'h030_0000;
+	localparam logic [25:0] BASE_X1SND_B = 26'h040_0000;
+	wire   [25:0] BASE_X1SND = layout_b ? BASE_X1SND_B : BASE_X1SND_A;
+	// The swizzle window. In LAYOUT_B gfx1 is only 1 MB, but permuting a 2 MB
+	// window there would reach into gfx2 -- which must NOT be swizzled, because
+	// layout_tilemap is RGN_FRAC(1,1) and its rows are already four chunks in
+	// one region rather than two halves. So the window follows the layout.
+	wire   [25:0] SIZE_GFX1 = layout_b ? 26'h010_0000 : 26'h020_0000;
 
 	// =====================================================================
 	// Download: swizzle the sprite region's word addresses on the way in.
@@ -240,13 +282,31 @@ module seta_sdram_top (
 		else if (spr_req)   spr_req_l <= 1'b1;
 	end
 
-	sdram_arbiter #(.N(1)) u_arb0 (
+	// The tile client, held the same way the sprite one is: c_req is a LEVEL
+	// until the matching c_valid.
+	logic tile_req_l = 1'b0;
+	always_ff @(posedge clk) begin
+		if (reset)               tile_req_l <= 1'b0;
+		else if (tile_valid)     tile_req_l <= 1'b0;
+		else if (tile_req)       tile_req_l <= 1'b1;
+	end
+
+	wire [1:0]  arb0_valid;
+	wire [63:0] arb0_rdata;
+	assign spr_valid  = arb0_valid[0];
+	assign spr_data   = arb0_rdata;
+	assign tile_valid = arb0_valid[1];
+	assign tile_data  = arb0_rdata;
+
+	sdram_arbiter #(.N(2)) u_arb0 (
 		.clk(clk), .reset(reset),
 		.phy_req(phy_req[0]), .phy_we(phy_we[0]), .phy_we16(phy_we16[0]),
 		.phy_addr(phy_addr[0]), .phy_wdata(phy_wdata[0]),
 		.phy_busy(phy_busy[0]), .phy_valid(phy_valid[0]), .phy_rdata(phy_rdata[0]),
-		.c_req(spr_req_l), .c_addr({2'd0, spr_addr, 3'd0} + BASE_GFX1),
-		.c_valid(spr_valid), .c_rdata(spr_data),
+		.c_req({tile_req_l, spr_req_l}),
+		.c_addr({{2'd0, tile_addr, 3'd0} + BASE_GFX2,
+		         {2'd0, spr_addr,  3'd0} + BASE_GFX1}),
+		.c_valid(arb0_valid), .c_rdata(arb0_rdata),
 		.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
 	);
 

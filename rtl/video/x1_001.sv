@@ -82,10 +82,39 @@
 //   LOWEST byte address, which sdram_narrow_bridge.sv documents and indexes
 //   with addr[2:1].
 //
+// SPRITE BUFFERING -- setac_eof, added for Phase 2
+//
+//   void x1_001_device::setac_eof()
+//   {
+//       int const ctrl2 = m_spritectrl[1];
+//       if (~ctrl2 & 0x20)
+//       {
+//           if (ctrl2 & 0x40)
+//               std::copy_n(&m_spritecode[0x1000], 0x800, &m_spritecode[0x0000]);
+//           else
+//               std::copy_n(&m_spritecode[0x0000], 0x800, &m_spritecode[0x1000]);
+//       }
+//   }
+//
+//   Gated on BIT 5 CLEAR, direction on bit 6. No Group A game wires it, and
+//   measured on the Phase 2 captures drgnunit and stg have bit 5 SET -- so the
+//   copy never runs for them either. Only qzkklogy and qzkklgy2 buffer, and
+//   they do it every frame. buffer_sprites keeps it off everywhere else.
+//
+//   IT USES THE ENGINE'S READ PORT, not the CPU's. The code RAM already has
+//   two read ports -- one for the CPU, one for the engine -- and adding a
+//   third would stop Quartus inferring block RAM for 8192 words and build it
+//   out of logic instead. The engine is idle during vblank, which is exactly
+//   when the copy runs, so its port is free.
+//
+//   WHERE THIS DIVERGES FROM MAME, stated rather than discovered later: MAME's
+//   copy is instantaneous at the vblank edge. This one takes 2048 cycles --
+//   about 21 us at 96 MHz -- and holds the write port for that time, so a CPU
+//   write into the DESTINATION half during those first 21 us of vblank is
+//   overwritten by the copy where MAME would keep it. The window is small and
+//   the alternative is a second write port on a RAM this size.
+//
 // NOT IMPLEMENTED HERE, DELIBERATELY
-//   * setac_eof, the buffering copy. Four machine_configs in seta.cpp wire it
-//     up and none of them is in Group A, so no Phase 1 game buffers. The bank
-//     SELECT still applies and is implemented.
 //   * m_bgflag, which makes the background opaque, is written by exactly one
 //     memory map in seta.cpp -- crazyfgt_map, which is out of scope. The input
 //     exists so the omission is visible rather than silent.
@@ -162,6 +191,9 @@ module x1_001 #(
 	input  wire   [8:0] spritelimit,        // m_spritelimit, 0x1ff
 	input  wire   [3:0] transpen,           // m_transpen, 0
 	input  wire         bgflag_opaque,      // m_bgflag & 0x80 -- always 0 in scope
+	// screen_vblank_seta_buffer_sprites, on the RISING edge of vblank.
+	input  wire         buffer_sprites,
+	input  wire         vblank_rise,
 	input  wire [LB_W-1:0] colorbase_fg,    // gfx colorbase + m_colorbase*16
 	input  wire [LB_W-1:0] colorbase_bg,    // gfx colorbase alone
 	input  wire   [8:0] screen_h,           // screen.height() -- 256, NOT 240
@@ -196,6 +228,16 @@ module x1_001 #(
 	// ---- line buffer readback ----------------------------------------------
 	input  wire   [8:0] lb_addr,
 	output logic [LB_W-1:0] lb_data,
+	// Whether a sprite actually wrote this dot. The line buffer already
+	// carries the bit -- it is what makes front-to-back drawing work, first
+	// writer wins -- and it was simply not brought out. Phase 2 needs it: a
+	// tilemap layer is drawn OPAQUE underneath and the sprites go over, so the
+	// mixer picks the sprite pixel only where there is one.
+	output logic        lb_hit,
+	// m_spritegen->is_flipped(). seta_layers_update takes the TILE LAYER's
+	// flip from the sprite chip, not from a register of its own, so it has to
+	// leave here.
+	output wire         flipscr_out,
 
 	// ---- instrumentation ---------------------------------------------------
 	// Every bad-event counter is paired with a total, so a zero can be told
@@ -253,12 +295,54 @@ module x1_001 #(
 		k_we <= ctrl_we; k_addr <= ctrl_addr; k_wdata <= ctrl_wdata;
 	end
 
+	// ctrl2 gates and directs the buffering copy as well as selecting the
+	// bank, so it is declared before both uses.
+	wire [7:0] ctrl2 = ctrlmem[2];
+
+	// ---- setac_eof --------------------------------------------------------
+	logic        eof_busy = 1'b0;
+	logic [10:0] eof_i;
+	logic        eof_dir;              // ctrl2 bit 6: 1 = 0x1000 -> 0x0000
+	logic        eof_wr;
+	logic [12:0] eof_waddr;
+
+	wire [12:0] eof_src = {1'b0, ~eof_dir, eof_i};
+	wire [12:0] eof_dst = {1'b0,  eof_dir, eof_i};
+
 	always_ff @(posedge clk) begin
-		if (c_we && c_lds) codemem[c_addr][7:0]  <= c_wdata[7:0];
-		if (c_we && c_uds) codemem[c_addr][15:8] <= c_wdata[15:8];
+		eof_wr <= 1'b0;
+		if (reset) begin
+			eof_busy <= 1'b0;
+		end else if (!eof_busy) begin
+			// ~ctrl2 & 0x20 -- bit 5 CLEAR means buffer.
+			if (vblank_rise && buffer_sprites && !ctrl2[5]) begin
+				eof_busy <= 1'b1;
+				eof_dir  <= ctrl2[6];
+				eof_i    <= 11'd0;
+			end
+		end else begin
+			// The word read on the previous cycle is written this one.
+			eof_wr    <= 1'b1;
+			eof_waddr <= eof_dst;
+			if (eof_i == 11'h7ff) eof_busy <= 1'b0;
+			else eof_i <= eof_i + 11'd1;
+		end
+	end
+
+	always_ff @(posedge clk) begin
+		// The copy owns the write port while it runs.
+		if (eof_wr) begin
+			codemem[eof_waddr] <= eng_code_q;
+		end else begin
+			if (c_we && c_lds) codemem[c_addr][7:0]  <= c_wdata[7:0];
+			if (c_we && c_uds) codemem[c_addr][15:8] <= c_wdata[15:8];
+		end
 		code_rdata <= codemem[c_addr];
 	end
-	always_ff @(posedge clk) eng_code_q <= codemem[eng_code_addr];
+
+	// The engine's read port, borrowed by the copy while the engine is idle.
+	wire [12:0] eng_rd_addr = eof_busy ? eof_src : eng_code_addr;
+	always_ff @(posedge clk) eng_code_q <= codemem[eng_rd_addr];
 
 	always_ff @(posedge clk) begin
 		if (y_we) ylowmem[y_addr] <= y_wdata;
@@ -276,7 +360,6 @@ module x1_001 #(
 	// however it is written.
 	wire [7:0] ctrl0 = ctrlmem[0];
 	wire [7:0] ctrl1 = ctrlmem[1];
-	wire [7:0] ctrl2 = ctrlmem[2];
 	wire [7:0] ctrl3 = ctrlmem[3];
 
 	// =====================================================================
@@ -321,6 +404,7 @@ module x1_001 #(
 	// by one cycle to line up with the registered RAM output above.
 	always_ff @(posedge clk) disp_bank <= ~render_bank;
 	assign lb_data = disp_bank ? lb_q1[LB_W-1:0] : lb_q0[LB_W-1:0];
+	assign lb_hit  = disp_bank ? lb_q1[LB_W]     : lb_q0[LB_W];
 	// ...and the engine probes the one it IS writing.
 	wire [LBE-1:0] blit_q = render_bank ? lb_q1 : lb_q0;
 
@@ -330,6 +414,7 @@ module x1_001 #(
 	wire        use_bank = ((ctrl1 ^ (~ctrl1 << 1)) & 8'h40) != 8'h00;
 	wire [12:0] bank_off = use_bank ? bank_size : 13'd0;
 	wire        flipscr  = ctrl0[6];
+	assign flipscr_out = flipscr;
 
 	wire signed [8:0] fgx = flipscr ? fg_xoffs_flip : fg_xoffs;
 	wire signed [8:0] fgy = flipscr ? fg_yoffs_flip : fg_yoffs;

@@ -71,8 +71,32 @@ ROMS = REPO / "roms"
 OUT_DIR = REPO / "releases"
 
 # The order the regions occupy in the image. Their offsets come from the RTL.
-REGION_ORDER = ["maincpu", "gfx1", "x1snd"]
-BASE_NAME = {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1", "x1snd": "BASE_X1SND"}
+# ONE ORDER AND ONE BASE TABLE PER LAYOUT, because the two differ in more than
+# whether gfx2 exists: LAYOUT_B's x1snd sits at 0x400000 rather than 0x300000,
+# since qzkklgy2's 2 MB of tiles pushes it up. A .mra built with the wrong
+# layout loads every region after the first mismatch to the wrong address, and
+# the symptom is a black screen with no other clue.
+LAYOUTS = {
+    "A": (["maincpu", "gfx1", "x1snd"],
+          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1",
+           "x1snd": "BASE_X1SND_A"}),
+    "B": (["maincpu", "gfx1", "gfx2", "x1snd"],
+          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1",
+           "gfx2": "BASE_GFX2", "x1snd": "BASE_X1SND_B"}),
+}
+
+# Which layout a set uses is decided by the RTL's own game numbering: the Group
+# B sets are the ones seta_board_cfg.sv gives a tile layer to. Listed by name
+# rather than by mod byte so adding a game cannot silently renumber this.
+LAYOUT_B_SETS = {"drgnunit", "stg", "qzkklogy", "qzkklgy2"}
+
+
+def layout_of(setname):
+    return "B" if setname in LAYOUT_B_SETS else "A"
+
+
+REGION_ORDER = LAYOUTS["A"][0]
+BASE_NAME = LAYOUTS["A"][1]
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +109,8 @@ def read_sdram_map():
             r"localparam\s+logic\s*\[\d+:\d+\]\s*(BASE_\w+)\s*=\s*\d+'h([0-9a-fA-F_]+)",
             txt):
         bases[m.group(1)] = int(m.group(2).replace("_", ""), 16)
-    missing = [BASE_NAME[r] for r in REGION_ORDER if BASE_NAME[r] not in bases]
+    missing = sorted({n for _, tbl in LAYOUTS.values() for n in tbl.values()}
+                     - set(bases))
     if missing:
         sys.exit(f"{SDRAM_SV.name} does not define {', '.join(missing)}")
     return bases
@@ -294,10 +319,29 @@ def split_ports(ports, setname):
 
 
 def buttons_xml(nbuttons):
-    names = ["Button 1", "Button 2"][:nbuttons] + ["Start", "Coin", "Service"]
-    default = ["A", "B"][:nbuttons] + ["Start", "Select", "R"]
+    """The <buttons> element, with Start and Coin at FIXED joystick bits.
+
+    THE NAME LIST IS POSITIONAL: entry i is joystick bit 4 + i. Writing the
+    names in the order a game happens to use them therefore MOVES Start and
+    Coin, and the core reads fixed bits -- so a two-button game put "Start" on
+    the bit the core reads as COIN1, and Coin on a bit nothing read at all.
+    Measured on hardware: pressing Start inserted a coin, and Coin did nothing.
+
+    So the list is padded to keep the positions fixed, which is what
+    Arcade-Psikyo_MiSTer does and why its six-button and three-button sets
+    both work:
+
+        bit  4  5  6  7  8  9  10     11    12     13
+             B1 B2 -  -  -  -  Start  Coin  Pause  Service
+
+    Seta.sv reads exactly those bits. Keep the two in step.
+    """
+    names = (["Button 1", "Button 2"][:nbuttons]
+             + ["-"] * (6 - nbuttons)
+             + ["Start", "Coin", "Pause", "Service"])
+    default = ["A", "B"][:nbuttons] + ["Start", "Select", "L", "R"]
     return (f'<buttons names="{esc(",".join(names))}" '
-            f'default="{esc(",".join(default))}" count="{nbuttons + 3}"/>')
+            f'default="{esc(",".join(default))}" count="{nbuttons}"/>')
 
 
 def mra_filename(title):
@@ -315,6 +359,9 @@ def mra_filename(title):
 
 # ---------------------------------------------------------------------------
 def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
+    # THE LAYOUT IS PER SET. Group B has a gfx2 region and its x1snd sits a
+    # megabyte higher, so the region list and the base table both change.
+    REGION_ORDER, BASE_NAME = LAYOUTS[layout_of(setname)]
     if setname not in gl:
         sys.exit(f"{setname}: no GAME() line in the driver")
     info = gl[setname]
@@ -371,7 +418,7 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         base = bases[BASE_NAME[region]]
         if len(image) > base:
             sys.exit(f"{setname}: {region} would start at {len(image):#x}, past "
-                     f"its base {base:#x} -- LAYOUT_A is too small for this set")
+                     f"its base {base:#x} -- LAYOUT_{layout_of(setname)} is too small for this set")
         image += bytes(base - len(image))
         image += truths[region]
 
@@ -393,6 +440,24 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     zips = Path(zippath).name
     if info["parent"] != "0" and Path(zippath).stem != setname:
         zips = f"{setname}.zip|{zips}"
+    # THE MOD BYTE COMES FIRST. The MiSTer loader sends the <rom> elements in
+    # file order, and the core does not merely record which game it is -- it
+    # PERMUTES THE SPRITE ROM WITH IT AS THE DATA ARRIVES. rtl/seta_board_cfg.sv
+    # turns the mod byte into gfx_half_words, and seta_sdram_top applies the
+    # swizzle to ioctl_addr during the download.
+    #
+    # With the data first, the whole sprite region was swizzled using the
+    # board config's DEFAULTS, which are thunderl's (gfx_half_words 0x20000).
+    # So thunderl, thunderla and wits -- the three sets whose value IS 0x20000
+    # -- were laid out correctly and every other game's sprite ROM was laid out
+    # wrong. On hardware that is exactly what it looked like: two games perfect,
+    # the rest rendering the wrong tiles.
+    #
+    # Arcade-Psikyo_MiSTer emits index 1 first for the same reason.
+    lines.append(f'    <!-- which game, for rtl/seta_board_cfg.sv. FIRST, '
+                 f'because the download is permuted with it. -->')
+    lines.append(f'    <rom index="1"><part>{mod:02X}</part></rom>')
+    lines.append('')
     lines.append(f'    <rom index="0" zip="{esc(zips)}" md5="none">')
     pos = 0
     for region in REGION_ORDER:
@@ -418,9 +483,6 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
             lines.append(f'        <part repeat="{declared - got}">00</part>')
             pos += declared - got
     lines.append('    </rom>')
-    lines.append('')
-    lines.append(f'    <!-- which game, for rtl/seta_board_cfg.sv -->')
-    lines.append(f'    <rom index="1"><part>{mod:02X}</part></rom>')
     lines.append('')
 
     ports = extract_dips.parse_ports(dip_blocks[info["inputs"]], dip_blocks, set())
