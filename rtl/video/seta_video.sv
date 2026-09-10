@@ -77,6 +77,29 @@ module seta_video #(
 	input  wire        tile_valid,
 	input  wire [63:0] tile_data,
 
+	// ---- the second X1-012, LAYOUT_C only ---------------------------------
+	input  wire        has_l1,
+	input  wire        l1_vram_we,
+	input  wire [12:0] l1_vram_addr,
+	input  wire [15:0] l1_vram_wdata,
+	input  wire        l1_vram_uds, l1_vram_lds,
+	output wire [15:0] l1_vram_rdata,
+	input  wire        l1_ctrl_we,
+	input  wire  [1:0] l1_ctrl_addr,
+	input  wire [15:0] l1_ctrl_wdata,
+	input  wire        l1_ctrl_uds, l1_ctrl_lds,
+	output wire [15:0] l1_ctrl_rdata,
+	input  wire signed [8:0] l1_xoffs, l1_xoffs_flip,
+	input  wire [LB_W-1:0]   l1_colorbase,
+	input  wire [15:0] l1_code_mask,
+	output wire        tile1_req,
+	output wire [23:3] tile1_addr,
+	input  wire        tile1_valid,
+	input  wire [63:0] tile1_data,
+	// m_vregs. Bit 0 swaps the layers, bit 1 puts the sprites above the
+	// frontmost one. Bit 2 is blandia's palette effect -- Phase 5.
+	input  wire  [7:0] vregs,
+
 	// ---- CPU: sprite chip --------------------------------------------------
 	input  wire        code_we,
 	input  wire [12:0] code_addr,
@@ -244,6 +267,27 @@ module seta_video #(
 		.dbg_lines(), .dbg_tiles(), .dbg_overrun()
 	);
 
+	wire [LB_W-1:0] l1_lb_data;
+
+	x1_012 #(.LB_W(LB_W)) u_l1 (
+		.clk(clk), .reset(reset | ~has_l1),
+		.vram_we(l1_vram_we), .vram_addr(l1_vram_addr),
+		.vram_wdata(l1_vram_wdata), .vram_uds(l1_vram_uds),
+		.vram_lds(l1_vram_lds), .vram_rdata(l1_vram_rdata),
+		.vctrl_we(l1_ctrl_we), .vctrl_addr(l1_ctrl_addr),
+		.vctrl_wdata(l1_ctrl_wdata), .vctrl_uds(l1_ctrl_uds),
+		.vctrl_lds(l1_ctrl_lds), .vctrl_rdata(l1_ctrl_rdata),
+		.xoffs(l1_xoffs), .xoffs_flip(l1_xoffs_flip),
+		.flipscr(flipscr_l0),
+		.vis_dimy(vis_dimy), .colorbase(l1_colorbase), .code_mask(l1_code_mask),
+		.line_start(line_start & has_l1), .line(line),
+		.line_budget(line_budget), .line_done(), .busy(),
+		.rom_req(tile1_req), .rom_addr(tile1_addr),
+		.rom_valid(tile1_valid), .rom_data(tile1_data),
+		.lb_addr(lb_addr), .lb_data(l1_lb_data),
+		.dbg_lines(), .dbg_tiles(), .dbg_overrun()
+	);
+
 	// COMPOSITION, for a one-layer game:
 	//
 	//     seta_layers_update -> bitmap.fill(0)
@@ -255,7 +299,32 @@ module seta_video #(
 	// which is the same bit the sprite engine uses to make front-to-back
 	// drawing work. With has_l0 low the mixer takes the sprite buffer alone --
 	// Group A, unchanged.
-	wire [LB_W-1:0] mixed = (has_l0 && !lb_hit) ? l0_lb_data : lb_data;
+	wire [LB_W-1:0] mixed_1l = (has_l0 && !lb_hit) ? l0_lb_data : lb_data;
+
+	// TWO LAYERS -- seta_layers_update's order, resolved per dot.
+	//
+	//   order = vregs
+	//   bit 0  Layer 0 Above Layer 1   (swap: layer 1 becomes the bottom)
+	//   bit 1  Sprites Above Frontmost Layer
+	//
+	// The BOTTOM layer is drawn TILEMAP_DRAW_OPAQUE, so it always has a pixel;
+	// the TOP layer is transparent on pen 0, and pen 0 of a tile is
+	// colorbase + colour*16 + 0 -- which is why "did the top layer draw here"
+	// is its low four bits being non-zero, not a written bit.
+	wire            swap    = vregs[0];
+	wire [LB_W-1:0] bot_px  = swap ? l1_lb_data : l0_lb_data;
+	wire [LB_W-1:0] top_px  = swap ? l0_lb_data : l1_lb_data;
+	wire            top_op  = |top_px[3:0];
+
+	// Sprites above the frontmost layer, or between the two.
+	wire [LB_W-1:0] under_spr = top_op ? top_px : bot_px;
+	wire [LB_W-1:0] mixed_2l  = vregs[1]
+	        // sprites go on before the top layer, so the top layer covers them
+	        ? (top_op ? top_px : (lb_hit ? lb_data : bot_px))
+	        // sprites go on last, over everything
+	        : (lb_hit ? lb_data : under_spr);
+
+	wire [LB_W-1:0] mixed = has_l1 ? mixed_2l : mixed_1l;
 
 	// lb_data lands two cycles after lb_addr is registered; the palette needs
 	// its index registered too, and both are settled long before the next

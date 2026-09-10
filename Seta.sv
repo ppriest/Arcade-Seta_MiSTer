@@ -353,7 +353,7 @@ seta_core seta_core
 	.mem_reset(mem_reset),
 	.init(~pll_locked),
 
-	.game(mod_byte[3:0]),
+	.game(mod_byte[4:0]),
 	.game_rot(game_rot),
 
 	.SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ),

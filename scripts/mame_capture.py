@@ -108,6 +108,19 @@ FAMILIES = {
                  ((0x500000, 0x500007), (0x900000, 0x900005),
                   (0x980000, 0x980005), (0xe00000, 0xe000ff))),
     # kamenrid_map / madshark_map -- vregs at 0x600003, not 0x500003
+    # oisipuzl_map: the standard two-layer video addresses, but the palette is
+    # at 0xc00400 and the sound at 0x700000.
+    "oisipuzl": (_variant(_TWO_LAYER, workram=(0x200000, 0x10000),
+                          palette=(0xc00400, 0xc00),
+                          x1snd=(0x700000, 0x4000)),
+                 _TWO_LAYER_TAPS),
+    # magspeed_map: work RAM at 0x200000, palette at 0x700400.
+    # magspeed_map: work RAM at 0x200000, palette at 0x700400, and vregs at
+    # 0x500015 -- past the 8 bytes _TWO_LAYER_TAPS logs, so this one taps wider.
+    "magspeed": (_variant(_TWO_LAYER, workram=(0x200000, 0x10000),
+                          palette=(0x700400, 0xc00)),
+                 ((0x500000, 0x500017), (0x900000, 0x900005),
+                  (0x100000, 0x1000ff))),
     "kamenrid": (_variant(_TWO_LAYER, x1snd=(0xd00000, 0x4000)),
                  ((0x600000, 0x600007), (0x900000, 0x900005),
                   (0x980000, 0x980005), (0xd00000, 0xd000ff))),
@@ -228,6 +241,9 @@ FAMILIES = {
 
 GAMES = {
     "rezon": "two_layer", "rezono": "two_layer", "zingzip": "two_layer",
+    # eightfrc runs zingzip_map, which is the plain two-layer map.
+    "eightfrc": "two_layer",
+    "oisipuzl": "oisipuzl",
     "gundharac": "two_layer", "jjsquawko": "two_layer",
     "zombraidp": "two_layer", "zombraidpj": "two_layer",
     "wrofaero": "two_layer", "gundhara": "two_layer", "gundharac": "two_layer",
@@ -240,6 +256,7 @@ GAMES = {
     "daiohp": "two_layer", "daiohp2": "two_layer",
     "extdwnhl": "extdwnhl", "sokonuke": "extdwnhl",
     "kamenrid": "kamenrid", "madshark": "kamenrid",
+    "magspeed": "magspeed",
     "msgundam": "msgundam", "msgundam1": "msgundam",
     "blandia": "blandia", "blandiap": "blandiap",
     "drgnunit": "drgnunit", "stg": "drgnunit",

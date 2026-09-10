@@ -32,7 +32,7 @@ module seta_core (
 	input  wire        init,           // ~pll_locked, for the SDRAM chip
 
 	// ---- which game, from the .mra mod byte ---------------------------------
-	input  wire  [3:0] game,
+	input  wire  [4:0] game,
 
 	// ---- SDRAM pins ----------------------------------------------------------
 	output wire [12:0] SDRAM_A,
@@ -118,10 +118,15 @@ module seta_core (
 	// port connection, so a declaration further down is a DUPLICATE and the
 	// error names the wrong line. LESSONS_LEARNED carries this one already.
 	wire        buffer_sprites;
-	wire        has_l0, layout_b;
-	wire signed [8:0] l0_xoffs, l0_xoffs_flip;
-	wire [10:0] l0_colorbase;
-	wire [15:0] l0_code_mask;
+	wire        has_x1_bank;
+	wire  [2:0] vregs_ofs;
+	wire        tilemaps_flip;
+	wire        gfx1_invert;
+	wire        has_l0, has_l1;
+	wire  [1:0] layout;
+	wire signed [8:0] l0_xoffs, l0_xoffs_flip, l1_xoffs, l1_xoffs_flip;
+	wire [10:0] l0_colorbase, l1_colorbase;
+	wire [15:0] l0_code_mask, l1_code_mask;
 
 	seta_board_cfg u_cfg (
 		.game(game),
@@ -134,10 +139,17 @@ module seta_core (
 		.irq_sl240_level(irq_sl240_level), .irq_sl112_level(irq_sl112_level),
 		.has_ack(has_ack), .ack_addr(ack_addr), .ack_level(ack_level),
 		.ack_d0_low(ack_d0_low),
-		.has_l0(has_l0), .layout_b(layout_b),
+		.has_l0(has_l0), .has_l1(has_l1), .layout(layout),
+		.has_x1_bank(has_x1_bank),
+		.vregs_ofs(vregs_ofs),
+		.tilemaps_flip(tilemaps_flip),
+		.narrow_320(), .short_224(),
+		.gfx1_invert(gfx1_invert),
 		.buffer_sprites(buffer_sprites),
 		.l0_xoffs(l0_xoffs), .l0_xoffs_flip(l0_xoffs_flip),
 		.l0_colorbase(l0_colorbase), .l0_code_mask(l0_code_mask),
+		.l1_xoffs(l1_xoffs), .l1_xoffs_flip(l1_xoffs_flip),
+		.l1_colorbase(l1_colorbase), .l1_code_mask(l1_code_mask),
 		.has_prot(has_prot),
 		.has_tl_prot(has_tl_prot), .tl_prot_base(tl_prot_base),
 		.tl_prot_size(tl_prot_size), .tl_prot_rd(tl_prot_rd),
@@ -215,7 +227,9 @@ module seta_core (
 	// is_prot on IO_MISC's bit once already; they are written out in full at
 	// both ends so a mismatch is visible rather than inferred.
 	localparam int IO_PALETTE = 0, IO_SPRYLOW = 1, IO_SPRCTRL = 2, IO_SPRCODE = 3;
-	localparam int IO_L0VRAM = 4, IO_L0CTRL = 6;
+	localparam int IO_L0VRAM = 4, IO_L1VRAM = 5, IO_L0CTRL = 6, IO_L1CTRL = 7;
+	localparam int IO_VREGS = 9;
+	localparam int IO_PIT = 15;
 	localparam int IO_X1SND = 8, IO_INPUTS = 10, IO_DSW = 11, IO_WRAM2 = 12;
 	localparam int IO_PROT = 14;
 
@@ -280,11 +294,22 @@ module seta_core (
 	// Video
 	// =====================================================================
 	// The tile layer's fetch and CPU-side readback.
-	wire         tile_req;
-	wire  [23:3] tile_addr;
-	wire         tile_valid;
-	wire  [63:0] tile_data;
+	wire         tile_req, tile1_req;
+	wire  [23:3] tile_addr, tile1_addr;
+	wire         tile_valid, tile1_valid;
+	wire  [63:0] tile_data, tile1_data;
 	wire  [15:0] l0_vram_rdata, l0_ctrl_rdata;
+	wire  [15:0] l1_vram_rdata, l1_ctrl_rdata;
+
+	// m_vregs, written by seta_vregs_w. Bits 3-5 are the X1-010 sample bank,
+	// which is why this register is not purely a video one.
+	logic  [7:0] vregs = 8'd0;
+	always_ff @(posedge clk) begin
+		if (reset) vregs <= 8'd0;
+		else if (io_req && io_we && io_sel[IO_VREGS] && io_lds
+		         && io_addr[2:1] == vregs_ofs[2:1])
+			vregs <= io_wdata[7:0];
+	end
 
 	wire        spr_req;
 	wire [23:3] spr_addr;
@@ -337,6 +362,21 @@ module seta_core (
 		.tile_req(tile_req), .tile_addr(tile_addr),
 		.tile_valid(tile_valid), .tile_data(tile_data),
 
+		.has_l1(has_l1),
+		.l1_vram_we(io_req && io_we && io_sel[IO_L1VRAM]),
+		.l1_vram_addr(io_addr[13:1]), .l1_vram_wdata(io_wdata),
+		.l1_vram_uds(io_uds), .l1_vram_lds(io_lds),
+		.l1_vram_rdata(l1_vram_rdata),
+		.l1_ctrl_we(io_req && io_we && io_sel[IO_L1CTRL]),
+		.l1_ctrl_addr(io_addr[2:1]), .l1_ctrl_wdata(io_wdata),
+		.l1_ctrl_uds(io_uds), .l1_ctrl_lds(io_lds),
+		.l1_ctrl_rdata(l1_ctrl_rdata),
+		.l1_xoffs(l1_xoffs), .l1_xoffs_flip(l1_xoffs_flip),
+		.l1_colorbase(l1_colorbase), .l1_code_mask(l1_code_mask),
+		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
+		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
+		.vregs(vregs),
+
 		.code_we(io_req && io_we && io_sel[IO_SPRCODE]),
 		.code_addr(io_addr[13:1]), .code_wdata(io_wdata),
 		.code_uds(io_uds), .code_lds(io_lds), .code_rdata(code_rdata),
@@ -367,6 +407,12 @@ module seta_core (
 	// =====================================================================
 	// Interrupts
 	// =====================================================================
+	// Declared before the IRQ assembly that reads it.
+	wire pit_out0;
+	logic pit_out0_d;
+	always_ff @(posedge clk) pit_out0_d <= pit_out0;
+	wire  pit_rise = pit_out0 & ~pit_out0_d;
+
 	logic [7:1] irq_set, irq_hold, irq_clr;
 
 	always_comb begin
@@ -381,6 +427,11 @@ module seta_core (
 		if (irq_vbl_level   != 3'd0 && irq_vbl_pulse)   irq_set[irq_vbl_level]   = 1'b1;
 		if (irq_sl240_level != 3'd0 && irq_sl240_pulse) irq_set[irq_sl240_level] = 1'b1;
 		if (irq_sl112_level != 3'd0 && irq_sl112_pulse) irq_set[irq_sl112_level] = 1'b1;
+
+		// pit_out0 -> ASSERT_LINE on IPL 4, on the RISING edge, which is what
+		// pit_out0() does. It is cleared by ipl2_ack_w, which the board's ack
+		// address decodes -- not here.
+		if (pit_rise) irq_set[3'd4] = 1'b1;
 
 		if (irq_vbl_level   != 3'd0) irq_hold[irq_vbl_level]   = irq_vbl_hold;
 		// seta_interrupt_1_and_2 passes HOLD_LINE for both of its scanlines.
@@ -411,10 +462,51 @@ module seta_core (
 	);
 
 	// =====================================================================
+	// The uPD71054C, channel 0 -> IPL 4
+	//
+	// 16 MHz / 2 / 8 = 1 MHz on every board that has one, and clk_sys is
+	// 96 MHz, so the enable is one clock in 96. Derived from clk_sys rather
+	// than from cpu_ce, because the PIT's clock is the board's, not the CPU's
+	// -- the two differ on every 8 MHz set.
+	logic  [6:0] pit_div = 7'd0;
+	wire         pit_ce  = (pit_div == 7'd0);
+	always_ff @(posedge clk) begin
+		if (reset)               pit_div <= 7'd0;
+		else if (pit_div == 7'd95) pit_div <= 7'd0;
+		else                     pit_div <= pit_div + 7'd1;
+	end
+
+	seta_pit u_pit (
+		.clk(clk), .reset(reset), .ce(pit_ce),
+		.we(io_req && io_we && io_sel[IO_PIT] && io_lds),
+		.addr(io_addr[2:1]), .wdata(io_wdata[7:0]),
+		.out0(pit_out0)
+	);
+
+	// =====================================================================
 	// Sound
 	// =====================================================================
 	wire        snd_rom_req;
 	wire [19:0] snd_rom_addr;
+
+	// X1-010 SAMPLE BANKING, from seta.cpp's blandia_x1_map:
+	//
+	//     map(0x00000, 0xbffff).rom();
+	//     map(0xc0000, 0xfffff).bankr("x1_bank");
+	//
+	// with init_bankx1 configuring eight entries of 0x40000 from the start of
+	// the region, and the entry selected by m_vregs bits 5:3. So the top
+	// quarter of the chip's address space is a window onto any of eight
+	// 256 KB slices of a 2 MB region, and the bottom three quarters are the
+	// first 768 KB directly.
+	//
+	// Only the games whose machine_config calls set_addrmap(0,
+	// blandia_x1_map) have it: blandia, eightfrc and zombraid. has_x1_bank is
+	// low everywhere else, and then this is the identity.
+	wire        snd_banked = has_x1_bank && (snd_rom_addr >= 20'hc0000);
+	wire [20:0] snd_phys   = snd_banked
+	        ? ({1'b0, vregs[5:3], 18'd0} + {1'b0, snd_rom_addr - 20'hc0000})
+	        : {1'b0, snd_rom_addr};
 	wire        snd_rom_valid;
 	wire  [7:0] snd_rom_data;
 	wire [15:0] x1_rdata;
@@ -485,6 +577,8 @@ module seta_core (
 		else if (io_sel[IO_PALETTE]) io_rdata = pal_rdata;
 		else if (io_sel[IO_L0VRAM])  io_rdata = l0_vram_rdata;
 		else if (io_sel[IO_L0CTRL])  io_rdata = l0_ctrl_rdata;
+		else if (io_sel[IO_L1VRAM])  io_rdata = l1_vram_rdata;
+		else if (io_sel[IO_L1CTRL])  io_rdata = l1_ctrl_rdata;
 		else if (io_sel[IO_SPRCODE]) io_rdata = code_rdata;
 		else if (io_sel[IO_SPRYLOW]) io_rdata = {8'h00, ylow_rdata};
 		else if (io_sel[IO_SPRCTRL]) io_rdata = {8'h00, ctrl_rdata};
@@ -526,12 +620,14 @@ module seta_core (
 		.gfx_half_words(gfx_half_words),
 		.cpu_req(rom_req), .cpu_addr(rom_addr),
 		.cpu_valid(rom_valid), .cpu_data(rom_data),
-		.layout_b(layout_b),
+		.layout(layout), .gfx1_invert(gfx1_invert),
 		.tile_req(tile_req), .tile_addr(tile_addr),
 		.tile_valid(tile_valid), .tile_data(tile_data),
+		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
+		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.spr_req(spr_req), .spr_addr(spr_addr),
 		.spr_valid(spr_valid), .spr_data(spr_data),
-		.snd_req(snd_rom_req), .snd_addr(snd_rom_addr),
+		.snd_req(snd_rom_req), .snd_addr(snd_phys),
 		.snd_valid(snd_rom_valid), .snd_data(snd_rom_data)
 	);
 

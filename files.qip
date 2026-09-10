@@ -60,6 +60,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/seta_sdram_top.sv
 
 # Interrupts, per-game configuration, pairlove's write-history block, and the
 # core that ties the lot together.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/seta_pit.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/seta_irq.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_board_cfg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_prot_pairlove.sv

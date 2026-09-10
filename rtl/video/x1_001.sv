@@ -329,14 +329,20 @@ module x1_001 #(
 		end
 	end
 
+	// ONE WRITE ADDRESS, MUXED -- not two branches writing different addresses.
+	// Written the obvious way, with the copy in an if and the CPU in the else,
+	// this RAM stops inferring as block RAM and Quartus builds 8192 words out
+	// of logic: the fit came back with 128,660 combinational nodes against the
+	// device's 83,820. Same rule as LESSONS_LEARNED's "a true dual-port RAM
+	// must be ONE always block with both ports in it".
+	wire [12:0] cw_addr = eof_wr ? eof_waddr  : c_addr;
+	wire [15:0] cw_data = eof_wr ? eng_code_q : c_wdata;
+	wire        cw_lo   = eof_wr ? 1'b1 : (c_we && c_lds);
+	wire        cw_hi   = eof_wr ? 1'b1 : (c_we && c_uds);
+
 	always_ff @(posedge clk) begin
-		// The copy owns the write port while it runs.
-		if (eof_wr) begin
-			codemem[eof_waddr] <= eng_code_q;
-		end else begin
-			if (c_we && c_lds) codemem[c_addr][7:0]  <= c_wdata[7:0];
-			if (c_we && c_uds) codemem[c_addr][15:8] <= c_wdata[15:8];
-		end
+		if (cw_lo) codemem[cw_addr][7:0]  <= cw_data[7:0];
+		if (cw_hi) codemem[cw_addr][15:8] <= cw_data[15:8];
 		code_rdata <= codemem[c_addr];
 	end
 

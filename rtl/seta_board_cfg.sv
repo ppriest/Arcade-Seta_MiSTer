@@ -40,27 +40,38 @@
 `default_nettype none
 
 package seta_game_pkg;
-	typedef enum logic [3:0] {
-		GAME_THUNDERL  = 4'd0,
-		GAME_THUNDERLA = 4'd1,
-		GAME_WITS      = 4'd2,
-		GAME_BLOCKCAR  = 4'd3,
-		GAME_UMANCLUB  = 4'd4,
-		GAME_NEOBATTL  = 4'd5,
-		GAME_ATEHATE   = 4'd6,
-		GAME_PAIRLOVE  = 4'd7,
+	typedef enum logic [4:0] {
+		GAME_THUNDERL  = 5'd0,
+		GAME_THUNDERLA = 5'd1,
+		GAME_WITS      = 5'd2,
+		GAME_BLOCKCAR  = 5'd3,
+		GAME_UMANCLUB  = 5'd4,
+		GAME_NEOBATTL  = 5'd5,
+		GAME_ATEHATE   = 5'd6,
+		GAME_PAIRLOVE  = 5'd7,
 		// ---- Group B, one 4bpp tilemap layer ----
-		GAME_DRGNUNIT  = 4'd8,
-		GAME_STG       = 4'd9,
-		GAME_QZKKLOGY  = 4'd10,
-		GAME_QZKKLGY2  = 4'd11
+		GAME_DRGNUNIT  = 5'd8,
+		GAME_STG       = 5'd9,
+		GAME_QZKKLOGY  = 5'd10,
+		GAME_QZKKLGY2  = 5'd11,
+		// ---- Group C, two 4bpp tilemap layers ----
+		GAME_DAIOH     = 5'd12,
+		GAME_REZON     = 5'd13,
+		GAME_WROFAERO  = 5'd14,
+		GAME_MSGUNDAM  = 5'd15,
+		GAME_EIGHTFRC  = 5'd16,
+		GAME_OISIPUZL  = 5'd17,
+		GAME_KAMENRID  = 5'd18,
+		GAME_MAGSPEED  = 5'd19
 	} game_t;
 endpackage
 
 import seta_game_pkg::*;
 
 module seta_board_cfg (
-	input  wire  [3:0] game,
+	// FIVE BITS. Group A is eight games, B four and C eight; the driver has
+	// 43 sets in scope, so four bits was never going to reach the end.
+	input  wire  [4:0] game,
 
 	// ---- which memory map maincpu.sv should use -----------------------------
 	output logic [3:0] map_board,
@@ -105,15 +116,38 @@ module seta_board_cfg (
 	// leaves the mixer taking the sprite buffer alone -- so adding this cannot
 	// change a Group A picture. layout_b picks the SDRAM map that has a gfx2
 	// region in it.
-	output logic        has_l0,
-	output logic        layout_b,
+	output logic        has_l0, has_l1,
+	// 0 = LAYOUT_A, 1 = LAYOUT_B, 2 = LAYOUT_C.
+	output logic  [1:0] layout,
 	output logic signed [8:0] l0_xoffs, l0_xoffs_flip,
 	output logic [10:0] l0_colorbase,
 	output logic [15:0] l0_code_mask,
+	output logic signed [8:0] l1_xoffs, l1_xoffs_flip,
+	output logic [10:0] l1_colorbase,
+	output logic [15:0] l1_code_mask,
 	// screen_vblank_seta_buffer_sprites -> x1_001_device::setac_eof. NO GROUP A
 	// GAME WIRES IT; every Group B set does, and qzkklogy and qzkklgy2 have
 	// spritectrl bit 5 clear, so the copy actually runs on them every frame.
 	output logic        buffer_sprites,
+	// set_addrmap(0, blandia_x1_map): the X1-010's top quarter is a bank
+	// window. blandia, eightfrc and zombraid only.
+	output logic        has_x1_bank,
+	// seta_vregs_w's BYTE offset inside the vregs region. It is not the same
+	// on every board -- 0x500003 on rezon and oisipuzl, 0x500005 on msgundam,
+	// 0x600003 on kamenrid -- and the neighbouring bytes are other registers,
+	// so accepting any write in the region would set the layer order from a
+	// coin-lockout write.
+	output logic  [2:0] vregs_ofs,
+	// set_tilemaps_flip(1): seta_layers_update computes the layers' flip as
+	// m_spritegen->is_flipped() ^ m_tilemaps_flip, so on oisipuzl the sprites
+	// flip and the layers do not.
+	output logic        tilemaps_flip,
+	// set_visarea: 320 wide on oisipuzl, 224 lines on it and eightfrc.
+	output logic        narrow_320, short_224,
+	// ROMREGION_INVERT on "gfx1". MAME inverts every byte of the region after
+	// loading; a .mra ships the ROM as dumped, so the core does it on the way
+	// into SDRAM. oisipuzl is the only set in scope with it.
+	output logic        gfx1_invert,
 	output logic  [2:0] ack_level,
 
 	// ---- extras ---------------------------------------------------------------
@@ -160,7 +194,7 @@ module seta_board_cfg (
 	// screen_update_seta_no_layers fills with pen 0x1f0 before drawing.
 	assign bank_size   = 13'h1000;
 	assign spritelimit = 9'h1ff;
-	assign transpen    = 4'd0;
+	assign transpen    = 5'd0;
 	assign screen_h    = 9'd256;
 	assign backdrop    = 11'h1f0;
 
@@ -199,12 +233,15 @@ module seta_board_cfg (
 	// measurement that exists, instead of to a default.
 	assign htotal     = 10'd512;
 	assign hact_start = 10'd0;
-	assign hact_end   = 10'd383;
+	// THE VISIBLE AREA IS PER GAME. Most sets are 384x240 -- set_visarea(0,
+	// 48*8-1, 1*8, 31*8-1) -- but eightfrc is 384x224 and oisipuzl 320x224.
+	// The rest of the timing is the same hypothesis for all of them.
+	assign hact_end   = narrow_320 ? 10'd319 : 10'd383;
 	assign hs_start   = 10'd400;
 	assign hs_end     = 10'd448;
 	assign vtotal     = 10'd272;
-	assign vact_start = 10'd8;
-	assign vact_end   = 10'd247;
+	assign vact_start = short_224 ? 10'd16  : 10'd8;
+	assign vact_end   = short_224 ? 10'd239 : 10'd247;
 	assign vs_start   = 10'd250;
 	assign vs_end     = 10'd253;
 
@@ -217,7 +254,7 @@ module seta_board_cfg (
 	always_comb begin
 		// Defaults are thunderl's, so a missing arm is a plausible board rather
 		// than an X -- and the assertion below names it in simulation.
-		map_board       = 4'd8;
+		map_board       = 5'd8;
 		cpu_div         = 5'd12;
 		gfx_half_words  = 23'h20000;
 		code_mask       = 16'h0fff;
@@ -230,13 +267,24 @@ module seta_board_cfg (
 		fg_xoffs        = 9'sd0;
 		fg_xoffs_flip   = 9'sd0;
 		buffer_sprites  = 1'b0;
+		has_x1_bank     = 1'b0;
+		vregs_ofs       = 3'd3;
+		tilemaps_flip   = 1'b0;
+		narrow_320      = 1'b0;
+		short_224       = 1'b0;
+		gfx1_invert     = 1'b0;
 		irq_sl112_level = 3'd0;
 		has_ack         = 1'b0;
 		ack_addr        = 23'h000000;
 		ack_d0_low      = 1'b0;
 		game_rot        = 2'd2;   // thunderl's ROT270, with the other defaults
 		has_l0          = 1'b0;
-		layout_b        = 1'b0;
+		has_l1          = 1'b0;
+		layout          = 2'd0;
+		l1_xoffs        = 9'sd0;
+		l1_xoffs_flip   = 9'sd0;
+		l1_colorbase    = 11'd0;
+		l1_code_mask    = 16'h1fff;
 		l0_xoffs        = 9'sd0;
 		l0_xoffs_flip   = 9'sd0;
 		l0_colorbase    = 11'd0;
@@ -253,7 +301,7 @@ module seta_board_cfg (
 		// stays asserted until ipl1_ack_w at 0x200000 -- which clears LEVEL 2,
 		// not level 1; seta.cpp names those functions by PIN.
 		GAME_THUNDERL, GAME_THUNDERLA: begin
-			map_board = 4'd8;  cpu_div = 5'd12;
+			map_board = 5'd8;  cpu_div = 5'd12;
 			gfx_half_words = 23'h20000;  code_mask = 16'h0fff;
 			irq_vbl_level = 3'd2; irq_vbl_hold = 1'b0;
 			has_ack = 1'b1; ack_addr = 23'h100000; ack_level = 3'd2;
@@ -269,7 +317,7 @@ module seta_board_cfg (
 
 		GAME_WITS: begin
 			game_rot = 2'd0;   // ROT0
-			map_board = 4'd9;  cpu_div = 5'd12;
+			map_board = 5'd9;  cpu_div = 5'd12;
 			gfx_half_words = 23'h20000;  code_mask = 16'h0fff;
 			irq_vbl_level = 3'd2; irq_vbl_hold = 1'b0;
 			has_ack = 1'b1; ack_addr = 23'h100000; ack_level = 3'd2;
@@ -299,7 +347,7 @@ module seta_board_cfg (
 		// -- the same value thunderl uses for its own, different, acknowledge.
 		GAME_BLOCKCAR: begin
 			game_rot = 2'd1;   // ROT90
-			map_board = 4'd11; cpu_div = 5'd12;
+			map_board = 5'd11; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			irq_vbl_level = 3'd3; irq_vbl_hold = 1'b0;
 			has_ack = 1'b1; ack_addr = 23'h100000; ack_level = 3'd3;
@@ -311,7 +359,7 @@ module seta_board_cfg (
 		// machine_config but NOT an orientation.
 		GAME_UMANCLUB, GAME_NEOBATTL: begin
 			game_rot = (game == GAME_NEOBATTL) ? 2'd2 : 2'd0;
-			map_board = 4'd10; cpu_div = 5'd6;
+			map_board = 5'd10; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			irq_vbl_level = 3'd3; irq_vbl_hold = 1'b1;
 		end
@@ -326,10 +374,10 @@ module seta_board_cfg (
 		// (flip, noflip). Every one of the four is 8 MHz except qzkklgy2.
 		// =================================================================
 		GAME_DRGNUNIT: begin                 // ROT0
-			map_board = 4'd7; cpu_div = 5'd12;
+			map_board = 5'd7; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; layout_b = 1'b1;
+			has_l0 = 1'b1; layout = 2'd1;
 			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
 			l0_code_mask = 16'h1fff;
 			fg_xoffs = 9'sd2;  fg_xoffs_flip = 9'sd2;
@@ -338,10 +386,10 @@ module seta_board_cfg (
 		end
 
 		GAME_STG: begin                      // ROT270, set_fg_xoffsets(0, 0)
-			map_board = 4'd7; cpu_div = 5'd12;
+			map_board = 5'd7; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd2;
-			has_l0 = 1'b1; layout_b = 1'b1;
+			has_l0 = 1'b1; layout = 2'd1;
 			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
 			l0_code_mask = 16'h1fff;
 			fg_xoffs = 9'sd0;  fg_xoffs_flip = 9'sd0;
@@ -350,10 +398,10 @@ module seta_board_cfg (
 		end
 
 		GAME_QZKKLOGY: begin                 // ROT0, (1,1) and (-1,-1)
-			map_board = 4'd7; cpu_div = 5'd12;
+			map_board = 5'd7; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; layout_b = 1'b1;
+			has_l0 = 1'b1; layout = 2'd1;
 			l0_xoffs = -9'sd1; l0_xoffs_flip = -9'sd1;
 			l0_code_mask = 16'h1fff;
 			fg_xoffs = 9'sd1;  fg_xoffs_flip = 9'sd1;
@@ -365,10 +413,10 @@ module seta_board_cfg (
 		// where its three siblings have 1 MB -- which is why LAYOUT_B's gfx2
 		// region is 2 MB and x1snd sits above it.
 		GAME_QZKKLGY2: begin                 // ROT0, (0,0) and (-3,-1)
-			map_board = 4'd7; cpu_div = 5'd6;
+			map_board = 5'd7; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; layout_b = 1'b1;
+			has_l0 = 1'b1; layout = 2'd1;
 			l0_xoffs = -9'sd3; l0_xoffs_flip = -9'sd1;
 			l0_code_mask = 16'h3fff;
 			fg_xoffs = 9'sd0;  fg_xoffs_flip = 9'sd0;
@@ -376,10 +424,152 @@ module seta_board_cfg (
 			buffer_sprites = 1'b1;
 		end
 
+		// =================================================================
+		// GROUP C -- two X1-012 layers, the X1-011 order register, a palette
+		// split three ways (sprites 0, layer 0 0x400, layer 1 0x200 of 512*3).
+		// =================================================================
+		// daioh: 16 MHz verified from PCB, 2 MB each of sprites and both tile
+		// regions. Both layers set_xoffsets(-2, -2).
+		GAME_DAIOH: begin
+			map_board = 5'd1; cpu_div = 5'd6;
+			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
+			game_rot = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
+			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
+			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
+			l0_code_mask = 16'h3fff; l1_code_mask = 16'h3fff;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// rezon: 1 MB of sprites, 0.5 MB per tile region.
+		GAME_REZON: begin
+			map_board = 5'd0; cpu_div = 5'd6;
+			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
+			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
+			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
+			l0_code_mask = 16'h0fff; l1_code_mask = 16'h0fff;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// wrofaero DOES NOT CALL set_xoffsets, so both layers keep the device
+		// default {0, 0}. Assuming daioh's cost 5.54% of the pixels in the
+		// model before it was checked.
+		// wrofaero: the PIT drives IPL 4 and ipl2_ack_w at 0xf00000 clears it.
+		// Byte 0xf00000 is word 0xf00000, so 23'h780000 on a [23:1] bus.
+		GAME_WROFAERO: begin
+			has_ack = 1'b1; ack_addr = 23'h780000; ack_level = 3'd4;
+			map_board = 5'd0; cpu_div = 5'd6;
+			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
+			game_rot = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			l0_xoffs = 9'sd0; l0_xoffs_flip = 9'sd0;
+			l1_xoffs = 9'sd0; l1_xoffs_flip = 9'sd0;
+			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
+			l0_code_mask = 16'h0fff; l1_code_mask = 16'h0fff;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// msgundam: 4 MB of sprites, the largest in the driver, and vregs at
+		// 0x500005 rather than 0x500003.
+		GAME_MSGUNDAM: begin
+			map_board = 4'd4; cpu_div = 5'd6;
+			gfx_half_words = 23'h100000;  code_mask = 16'h7fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
+			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
+			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
+			l0_code_mask = 16'h1fff; l1_code_mask = 16'h0fff;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			vregs_ofs = 3'd5;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// eightfrc: 2 MB of samples through the X1-010's bank window, and
+		// set_fg_xoffsets(4, 3) -- the only set whose flip and noflip SPRITE
+		// offsets differ. Neither layer calls set_xoffsets.
+		GAME_EIGHTFRC: begin
+			map_board = 4'd0; cpu_div = 5'd6;
+			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
+			game_rot = 2'd1;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			l0_xoffs = 9'sd0; l0_xoffs_flip = 9'sd0;
+			l1_xoffs = 9'sd0; l1_xoffs_flip = 9'sd0;
+			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
+			l0_code_mask = 16'h1fff; l1_code_mask = 16'h1fff;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd3; fg_xoffs_flip = 9'sd4;
+			short_224 = 1'b1;
+			has_x1_bank = 1'b1;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// oisipuzl: sprites are ROMREGION_INVERT, the tilemaps flip
+		// independently of them, and the visible area is 320x224.
+		GAME_OISIPUZL: begin
+			map_board = 4'd0; cpu_div = 5'd6;
+			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			l0_xoffs = -9'sd1; l0_xoffs_flip = -9'sd1;
+			l1_xoffs = -9'sd1; l1_xoffs_flip = -9'sd1;
+			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
+			l0_code_mask = 16'h1fff; l1_code_mask = 16'h0fff;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd1; fg_xoffs_flip = 9'sd1;
+			tilemaps_flip = 1'b1;
+			narrow_320 = 1'b1; short_224 = 1'b1;
+			gfx1_invert = 1'b1;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// kamenrid: both tile regions are carved out of one "user1" region by
+		// ROM_COPY, so they are 0x40000 each. vregs at 0x600003.
+		GAME_KAMENRID: begin
+			map_board = 4'd3; cpu_div = 5'd6;
+			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
+			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
+			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
+			l0_code_mask = 16'h07ff; l1_code_mask = 16'h07ff;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// magspeed: set_xoffsets(0, -2) -- the only set whose flip and noflip
+		// LAYER offsets differ -- and vregs at 0x500015.
+		GAME_MAGSPEED: begin
+			map_board = 4'd0; cpu_div = 5'd6;
+			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			l0_xoffs = -9'sd2; l0_xoffs_flip = 9'sd0;
+			l1_xoffs = -9'sd2; l1_xoffs_flip = 9'sd0;
+			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
+			l0_code_mask = 16'h0fff; l1_code_mask = 16'h0fff;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
 		// atehate: 16 MHz, 2 MB of sprites, seta_interrupt_1_and_2.
 		GAME_ATEHATE: begin
 			game_rot = 2'd0;   // ROT0
-			map_board = 4'd12; cpu_div = 5'd6;
+			map_board = 5'd12; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
 		end
@@ -389,7 +579,7 @@ module seta_board_cfg (
 		// seta.cpp calls protection.
 		GAME_PAIRLOVE: begin
 			game_rot = 2'd2;   // ROT270
-			map_board = 4'd13; cpu_div = 5'd12;
+			map_board = 5'd13; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			pal_entries = 12'd2048;
 			colorbase_fg = 11'h200; colorbase_bg = 11'h200;

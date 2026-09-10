@@ -168,6 +168,9 @@ module maincpu (
 	// value and then reverts that cell to the PREVIOUS value written to it, so
 	// it is a one-deep write history and not an algorithm. Two small RAMs.
 	localparam int IO_PROT     = 14;
+	// The uPD71054C. 0xc00000 on most of the boards that have one,
+	// 0xd00000 on wrofaero and magspeed.
+	localparam int IO_PIT      = 15;
 
 	// =====================================================================
 	// The CPU
@@ -234,6 +237,7 @@ module maincpu (
 	logic [23:0] spry_base, sprc_base, sprcode_base;
 	logic [23:0] l0v_base, l1v_base, l0c_base, l1c_base;
 	logic [23:0] x1_base;
+	logic [23:0] pit_base;
 	logic [23:0] vregs_base;
 	logic [23:0] in_base, dsw_base;
 	logic [23:0] prot_base;
@@ -257,13 +261,19 @@ module maincpu (
 		spry_base    = 24'hA00000;  sprc_base  = 24'hA00600;
 		sprcode_base = 24'hB00000;
 		x1_base      = 24'hC00000;
+		pit_base     = NONE;
 		vregs_base   = 24'h500000;
 		in_base      = 24'h400000;  dsw_base   = 24'h600000;
 		prot_base    = NONE;
 		has_l0 = 1'b1; has_l1 = 1'b1; has_wram2 = 1'b1;
 
 		case (board)
-			BOARD_TWO_LAYER: ;                       // the defaults above
+			BOARD_TWO_LAYER: begin                   // rezon_map / wrofaero_map
+				// wrofaero_map maps the uPD71054C at 0xd00000 and acks IPL 4
+				// at 0xf00000. rezon has neither, and a NONE base leaves
+				// is_pit low so nothing decodes there.
+				pit_base = 24'hD00000;
+			end
 
 			BOARD_DAIOH: begin                       // daioh_map
 				wram_base = 24'h100000; wram_end = 24'h10FFFF;
@@ -452,6 +462,8 @@ module maincpu (
 	wire is_l0c     = has_l0 && (addr24 >= l0c_base) && (addr24 < l0c_base + 24'h6);
 	wire is_l1c     = has_l1 && (addr24 >= l1c_base) && (addr24 < l1c_base + 24'h6);
 	wire is_x1      = (addr24 >= x1_base)    && (addr24 <  x1_base + 24'h4000);
+	wire is_pit     = (pit_base != NONE) && (addr24 >= pit_base)
+	               && (addr24 <  pit_base + 24'h8);
 	wire is_vregs   = (vregs_base != NONE) && (addr24 >= vregs_base) &&
 	                  (addr24 < vregs_base + 24'h8);
 	wire is_inputs  = (addr24 >= in_base)    && (addr24 <  in_base + 24'h6);
@@ -501,7 +513,7 @@ module maincpu (
 	// Declared here, ABOVE the FSM that reads them.
 	wire [23:0] wram_off = (addr24 - wram_base) & wram_mask;
 
-	wire [15:0] io_sel_comb = {1'b0,  // 15 unused
+	wire [15:0] io_sel_comb = {is_pit,  // 15 IO_PIT
 	                   is_prot,       // 14 IO_PROT
 	                   1'b0,          // 13 IO_MISC -- decoded in the core, not here
 	                   is_wram2,      // 12

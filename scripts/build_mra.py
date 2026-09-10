@@ -62,7 +62,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 import mra as mra_lib
 from extract_romstart import SRC, blocks, region_records
-from build_region import region_image, region_size, zip_for
+from build_region import region_image, region_inverted, region_size, zip_for
 import extract_dips
 
 SDRAM_SV = REPO / "rtl" / "memory" / "seta_sdram_top.sv"
@@ -78,20 +78,29 @@ OUT_DIR = REPO / "releases"
 # the symptom is a black screen with no other clue.
 LAYOUTS = {
     "A": (["maincpu", "gfx1", "x1snd"],
-          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1",
+          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1_AB",
            "x1snd": "BASE_X1SND_A"}),
     "B": (["maincpu", "gfx1", "gfx2", "x1snd"],
-          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1",
-           "gfx2": "BASE_GFX2", "x1snd": "BASE_X1SND_B"}),
+          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1_AB",
+           "gfx2": "BASE_GFX2_B", "x1snd": "BASE_X1SND_B"}),
+    "C": (["maincpu", "gfx1", "gfx2", "gfx3", "x1snd"],
+          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1_C",
+           "gfx2": "BASE_GFX2_C", "gfx3": "BASE_GFX3_C",
+           "x1snd": "BASE_X1SND_C"}),
 }
 
 # Which layout a set uses is decided by the RTL's own game numbering: the Group
 # B sets are the ones seta_board_cfg.sv gives a tile layer to. Listed by name
 # rather than by mod byte so adding a game cannot silently renumber this.
 LAYOUT_B_SETS = {"drgnunit", "stg", "qzkklogy", "qzkklgy2"}
+LAYOUT_C_SETS = {"daioh", "daioha", "rezon", "rezono", "wrofaero",
+                 "msgundam", "msgundam1", "eightfrc", "oisipuzl",
+                 "kamenrid", "magspeed"}
 
 
 def layout_of(setname):
+    if setname in LAYOUT_C_SETS:
+        return "C"
     return "B" if setname in LAYOUT_B_SETS else "A"
 
 
@@ -120,7 +129,8 @@ def read_game_enum():
     """setname -> mod byte, from seta_board_cfg.sv's game_t."""
     txt = CFG_SV.read_text(encoding="utf-8", errors="replace")
     out = {}
-    for m in re.finditer(r"GAME_(\w+)\s*=\s*4'd(\d+)", txt):
+    # Four or five bits: game_t widened when Group C filled the enum.
+    for m in re.finditer(r"GAME_(\w+)\s*=\s*[45]'d(\d+)", txt):
         out[m.group(1).lower()] = int(m.group(2))
     if not out:
         sys.exit(f"{CFG_SV.name} defines no GAME_* enum")
@@ -211,11 +221,20 @@ def groups_for(records, region, setname):
     order the records appear, because the driver writes them in whatever order
     reads best.
     """
+    # ROM_COPY has no file behind it -- it takes bytes from another region --
+    # so a .mra would have to express it as a PARTIAL load of the source
+    # region's file, which needs offset/length on a <part>. Not supported here
+    # yet, and refused rather than silently dropped: the region would come out
+    # empty and the game would show no tiles.
+    if any(r[0] == "copy" for r in records):
+        sys.exit(f"{setname}/{region}: ROM_COPY needs partial-file <part> "
+                 f"support in the .mra writer")
+
     recs = sorted(records, key=lambda r: (r[2] & ~1, r[2] & 1))
     out = []
     i = 0
     while i < len(recs):
-        kind, name, dest, ln, crc = recs[i]
+        kind, name, dest, ln, crc = recs[i][:5]
         if kind == "continue":
             sys.exit(f"{setname}/{region}: ROM_CONTINUE is not yet handled here "
                      f"(no Group A set uses one)")
@@ -228,14 +247,15 @@ def groups_for(records, region, setname):
                 sys.exit(f"{setname}/{region}: {name} at {dest:#x} has no matching "
                          f"odd half")
             out.append({"kind": "load16_byte", "parts": [name, n2],
-                        "crcs": [crc, c2], "size": ln * 2})
+                        "crcs": [crc, c2], "size": ln * 2, "dest": dest})
             i += 2
             continue
         if kind == "load":
-            out.append({"kind": "load", "parts": [name], "crcs": [crc], "size": ln})
+            out.append({"kind": "load", "parts": [name], "crcs": [crc],
+                        "size": ln, "dest": dest})
         elif kind == "load16_wswap":
             out.append({"kind": "swap16", "parts": [name], "crcs": [crc],
-                        "size": ln})
+                        "size": ln, "dest": dest})
         else:
             sys.exit(f"{setname}/{region}: unhandled record kind {kind}")
         i += 1
@@ -384,6 +404,20 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         gs = groups_for(recs, region, setname)
         blob = bytearray()
         for g in gs:
+            # A GAP BETWEEN GROUPS IS REAL PADDING, not an error. rezon's
+            # maincpu is two ROM_LOAD16_BYTE pairs at 0x000000 and 0x100000
+            # with nothing between, and without this the groups concatenate
+            # and every byte after the gap lands 0xc0000 early.
+            if len(blob) < g["dest"]:
+                # A HOLE IS 0xFF, the tail is 0x00. build_region.py pads holes
+                # the way an unprogrammed EPROM reads and the tail the way
+                # MAME zero-fills a region it allocates; both have to match or
+                # the cross-check fails on the padding rather than the data.
+                blob += bytes([0xFF]) * (g["dest"] - len(blob))
+            elif len(blob) > g["dest"]:
+                sys.exit(f"{setname}/{region}: {g['parts']} starts at "
+                         f"{g['dest']:#x} but {len(blob):#x} bytes are already "
+                         f"placed -- overlapping groups")
             # Resolve by CRC -- roms/ is merged, and a basename can appear in
             # more than one set's directory. romset.py refuses to guess.
             g["files"] = [rs.resolve(n, c) for n, c in zip(g["parts"], g["crcs"])]
@@ -406,6 +440,11 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
                      f"ROM_REGION declares {declared:#x}")
         # Cross-check against the independent assembler.
         ref, _, _ = region_image(setname, region, all_blocks)
+        # A .mra ships the ROM data as dumped. ROMREGION_INVERT is a property
+        # of the region, not of the file, so the CORE applies it at download
+        # and this cross-check compares against the UNinverted assembly.
+        if region_inverted(body, region):
+            ref = bytes(b ^ 0xFF for b in ref)
         if bytes(blob) != ref:
             sys.exit(f"{setname}/{region}: this file's grouping disagrees with "
                      f"build_region.py -- one of the two is wrong")
@@ -467,7 +506,11 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
             lines.append(f'        <part repeat="{base - pos}">00</part>')
             pos = base
         lines.append(f'        <!-- {region} -->')
+        rbase = bases[BASE_NAME[region]]
         for g in all_groups[region]:
+            if pos - rbase < g["dest"]:
+                lines.append(f'        <part repeat="{g["dest"] - (pos - rbase)}">FF</part>')
+                pos = rbase + g["dest"]
             maps = pick_map(rs, g, group_truth_from(rs, g))
             if maps is None:
                 lines.append(f'        <part name="{esc(g["names"][0])}"/>')
@@ -478,7 +521,8 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
                 lines.append('        </interleave>')
             pos += g["size"]
         declared = region_size(body, region)
-        got = sum(g["size"] for g in all_groups[region])
+        last = all_groups[region][-1]
+        got = last["dest"] + last["size"] if all_groups[region] else 0
         if got < declared:
             lines.append(f'        <part repeat="{declared - got}">00</part>')
             pos += declared - got

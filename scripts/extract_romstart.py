@@ -37,6 +37,11 @@ KINDS = {
     "ROM_LOAD16_BYTE": "load16_byte",
     "ROM_LOAD16_WORD_SWAP": "load16_wswap",
     "ROM_LOAD": "load",
+    # ROM_COPY("src", srcofs, dstofs, len) takes bytes from ANOTHER region
+    # rather than from a file, so it carries no CRC and cannot be resolved
+    # through romset.py. kamenrid and magspeed build both tile regions out of
+    # one "user1" region this way.
+    "ROM_COPY": "copy",
 }
 
 
@@ -67,6 +72,17 @@ def region_records(body, want="maincpu"):
             continue
         if region != want:
             continue
+        # ROM_COPY has four numeric-ish arguments and a region name in the
+        # first slot, so it matches the same shape with a different meaning:
+        # (src region, src offset, dest offset, length).
+        mc = re.match(r'ROM_COPY\(\s*"([^"]+)"\s*,\s*(0x[0-9a-fA-F]+)\s*,'
+                      r'\s*(0x[0-9a-fA-F]+)\s*,\s*(0x[0-9a-fA-F]+)', line)
+        if mc:
+            records.append(("copy", mc.group(1), int(mc.group(3), 16),
+                            int(mc.group(4), 16), None,
+                            int(mc.group(2), 16)))
+            continue
+
         m = re.match(r'(\w+)\(\s*"([^"]+)"\s*,\s*(0x[0-9a-fA-F]+)\s*,'
                      r'\s*(0x[0-9a-fA-F]+)(.*)', line)
         if m and m.group(1) in KINDS:

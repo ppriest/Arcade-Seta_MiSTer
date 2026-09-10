@@ -41,7 +41,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
-from x1_001_model import GAMES, Sprites, load_capture, SNAPSHOT_TRANSFORM, _read_orientation
+from x1_001_model import (GAMES, Sprites, load_capture, SNAPSHOT_TRANSFORM,
+                          _read_orientation, _be16)
+from x1_012_model import LAYER_GAMES, TWO_LAYER_GAMES
 from build_region import region_image
 
 OUT = REPO / "sim" / "seta_video_tb"
@@ -56,6 +58,10 @@ CFG = [
     "htotal", "hs_start", "hs_end", "hact_start", "hact_end",
     "vtotal", "vs_start", "vs_end", "vact_start", "vact_end",
     "pal_entries",
+    # ---- Phase 2 / 3: the tile layers ----
+    "has_l0", "l0_xoffs", "l0_xoffs_flip", "l0_colorbase", "l0_code_mask",
+    "has_l1", "l1_xoffs", "l1_xoffs_flip", "l1_colorbase", "l1_code_mask",
+    "vregs",
 ]
 
 
@@ -90,11 +96,20 @@ def main():
     ap.add_argument("capdir")
     ap.add_argument("--budget", type=int, default=0,
                     help="line_budget in clk_sys cycles; 0 disables the cutoff")
+    ap.add_argument("--vregs", type=lambda v: int(v, 0), default=0,
+                    help="m_vregs for a two-layer game; write only, so it comes from the capture write log")
     a = ap.parse_args()
 
-    if a.game not in GAMES:
-        sys.exit(f"{a.game}: not configured in x1_001_model.GAMES")
-    cfg = GAMES[a.game]
+    two = a.game in TWO_LAYER_GAMES
+    two_or_one = two or a.game in LAYER_GAMES
+    if two:
+        cfg = TWO_LAYER_GAMES[a.game]
+    elif a.game in LAYER_GAMES:
+        cfg = LAYER_GAMES[a.game]
+    elif a.game in GAMES:
+        cfg = GAMES[a.game]
+    else:
+        sys.exit(f"{a.game}: not configured in any model GAMES table")
     capdir = Path(a.capdir)
 
     gfx, gfx_size, zippath = region_image(a.game, "gfx1")
@@ -107,6 +122,37 @@ def main():
     (OUT / "code.hex").write_text("".join(f"{w & 0xffff:04x}\n" for w in code[:0x2000]))
     (OUT / "ylow.hex").write_text("".join(f"{b & 0xff:02x}\n" for b in ylow[:0x300]))
     (OUT / "ctrl.hex").write_text("".join(f"{b & 0xff:02x}\n" for b in ctrl[:4]))
+    # The tile layers, where the game has them. A Group A fixture writes these
+    # as empty files and has_l0/has_l1 clear, so one bench serves all phases.
+    l0v = _be16((capdir / f"{tag}_l0vram.bin").read_bytes()) if two_or_one else []
+    l0c = _be16((capdir / f"{tag}_l0ctrl.bin").read_bytes()) if two_or_one else []
+    l1v = _be16((capdir / f"{tag}_l1vram.bin").read_bytes()) if two else []
+    l1c = _be16((capdir / f"{tag}_l1ctrl.bin").read_bytes()) if two else []
+
+    (OUT / "l0vram.hex").write_text(
+        "".join(f"{w & 0xffff:04x}\n" for w in (list(l0v) + [0] * 0x2000)[:0x2000]))
+    (OUT / "l0ctrl.hex").write_text(
+        "".join(f"{(l0c[i] if i < len(l0c) else 0) & 0xffff:04x}\n"
+                for i in range(3)))
+    (OUT / "l1vram.hex").write_text(
+        "".join(f"{w & 0xffff:04x}\n" for w in (list(l1v) + [0] * 0x2000)[:0x2000]))
+    (OUT / "l1ctrl.hex").write_text(
+        "".join(f"{(l1c[i] if i < len(l1c) else 0) & 0xffff:04x}\n"
+                for i in range(3)))
+
+    for name, region in (("gfx2.hex", "gfx2"), ("gfx3.hex", "gfx3")):
+        want = (two_or_one and region == "gfx2") or (two and region == "gfx3")
+        if want:
+            img = region_image(a.game, region)[0]
+            w = bytearray(img)
+            if len(w) & 1:
+                w.append(0)
+            (OUT / name).write_text(
+                "".join(f"{w[2 * k + 1] << 8 | w[2 * k]:04x}\n"
+                        for k in range(len(w) // 2)))
+        else:
+            (OUT / name).write_text("0000\n")
+
     (OUT / "pal.hex").write_text(
         "".join(f"{pal[i] & 0xffff:04x}\n" if i < len(pal) else "0000\n"
                 for i in range(cfg["palette_entries"])))
@@ -140,6 +186,9 @@ def main():
         "".join(f"{px[x, y][0] << 16 | px[x, y][1] << 8 | px[x, y][2]:06x}\n"
                 for y in range(H) for x in range(W)))
 
+    l0_mask = (len(region_image(a.game, "gfx2")[0]) // 128 - 1) if two_or_one else 0
+    l1_mask = (len(region_image(a.game, "gfx3")[0]) // 128 - 1) if two else 0
+
     geo = geometry(cfg)
     vals = {
         "fg_xoffs":      s9(cfg["fg_xoffs"][1]),
@@ -163,6 +212,17 @@ def main():
         "code_mask":     (gfx_size // 2 // 64) - 1,
         "line_budget":   a.budget,
         "pal_entries":   cfg["palette_entries"],
+        "has_l0":        1 if two_or_one else 0,
+        "l0_xoffs":      s9(cfg.get("l0_xoffsets", (0, 0))[1]),
+        "l0_xoffs_flip": s9(cfg.get("l0_xoffsets", (0, 0))[0]),
+        "l0_colorbase":  cfg.get("l0_colorbase", 0),
+        "l0_code_mask":  l0_mask,
+        "has_l1":        1 if two else 0,
+        "l1_xoffs":      s9(cfg.get("l1_xoffsets", (0, 0))[1]),
+        "l1_xoffs_flip": s9(cfg.get("l1_xoffsets", (0, 0))[0]),
+        "l1_colorbase":  cfg.get("l1_colorbase", 0),
+        "l1_code_mask":  l1_mask,
+        "vregs":         a.vregs,
     }
     vals.update(geo)
     (OUT / "cfg.hex").write_text("".join(f"{vals[k]:08x}\n" for k in CFG))

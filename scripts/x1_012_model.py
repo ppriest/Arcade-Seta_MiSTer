@@ -87,6 +87,8 @@ def _sprite_cfg(**over):
         rot=0,
     )
     cfg.update(_ONE_LAYER)
+    cfg.setdefault("l0_colorbase", 0)
+    cfg.setdefault("l1_colorbase", 0)
     cfg.update(over)
     return cfg
 
@@ -94,6 +96,61 @@ def _sprite_cfg(**over):
 # Each of these runs the drgnunit machine_config and then overrides. The
 # overrides are the whole difference between the four, and assuming they were
 # absent cost 0.3% to 26% of the pixels on six of nine frames.
+# ---------------------------------------------------------------------------
+# Phase 3 -- two 4bpp layers, the X1-011 order register, and a palette split
+# three ways. GFXDECODE bases: sprites 0, layer 0 0x400, layer 1 0x200, of
+# 512*3 entries.
+# ---------------------------------------------------------------------------
+def _two_layer_cfg(**over):
+    cfg = _sprite_cfg()
+    cfg.update(
+        layers=2,
+        palette_entries=512 * 3,
+        l0_colorbase=0x400, l1_colorbase=0x200,
+        l0_xoffsets=(-2, -2), l1_xoffsets=(-2, -2),
+    )
+    cfg.update(over)
+    return cfg
+
+
+TWO_LAYER_GAMES = {
+    # All four use set_fg_xoffsets(0, 0) and both layers at set_xoffsets(-2,-2).
+    # daioh is 16 MHz verified from PCB.
+    "daioh":    _two_layer_cfg(rot=270, fg_xoffs=(0, 0)),
+    "rezon":    _two_layer_cfg(rot=0,   fg_xoffs=(0, 0)),
+    # wrofaero does NOT call set_xoffsets, so both layers keep the device
+    # default {0, 0} rather than daioh's and rezon's (-2, -2).
+    "wrofaero": _two_layer_cfg(rot=270, fg_xoffs=(0, 0),
+                               l0_xoffsets=(0, 0), l1_xoffsets=(0, 0)),
+    "msgundam": _two_layer_cfg(rot=0, fg_xoffs=(0, 0)),
+    # kamenrid and magspeed carve both tile regions out of one "user1" region
+    # with ROM_COPY, so their tiles are 0x40000 and 0x80000 rather than 1-2 MB.
+    "kamenrid": _two_layer_cfg(rot=0, fg_xoffs=(0, 0)),
+    # magspeed: set_xoffsets(0, -2) on BOTH layers -- the only Group C set
+    # whose flip and noflip layer offsets differ. Its vregs is at 0x500015,
+    # past the 8 bytes _TWO_LAYER_TAPS covers, so mame_capture.py taps wider
+    # for it; the captured frame writes 1, which swaps the layers.
+    "magspeed": _two_layer_cfg(rot=0, fg_xoffs=(0, 0),
+                               l0_xoffsets=(0, -2), l1_xoffsets=(0, -2)),
+    # oisipuzl: set_visarea(0, 40*8-1, 2*8, 30*8-1) -- 320x224, narrower and
+    # shorter than the 384x240 the rest of the group uses.
+    #
+    # oisipuzl's SPRITE region is ROMREGION_INVERT, and its tilemaps flip
+    # independently of the sprites -- see tilemaps_flip below. Nothing else in
+    # Group C has either.
+    "oisipuzl": _two_layer_cfg(rot=0, fg_xoffs=(1, 1),
+                               l0_xoffsets=(-1, -1), l1_xoffsets=(-1, -1),
+                               visarea=(0, 319, 16, 239),
+                               tilemaps_flip=1),
+    # eightfrc: set_fg_xoffsets(4, 3) -- the only set whose flip and noflip
+    # sprite offsets differ -- and no set_xoffsets on either layer.
+    # eightfrc: set_visarea(0, 48*8-1, 2*8, 30*8-1) -- 384x224.
+    "eightfrc": _two_layer_cfg(rot=90, fg_xoffs=(4, 3),
+                               l0_xoffsets=(0, 0), l1_xoffsets=(0, 0),
+                               visarea=(0, 383, 16, 239)),
+}
+
+
 LAYER_GAMES = {
     # set_fg_xoffsets(2, 2), set_xoffsets(-2, -2)
     "drgnunit": _sprite_cfg(rot=0),
@@ -237,6 +294,79 @@ class Layer:
         return x, y
 
 
+def _draw(cfg, layer, bmp, vis_dimy, flip, opaque, base=None):
+    """One layer into bmp. OPAQUE draws every pixel; otherwise pen 0 is
+    transparent -- set_transparent_pen(0)."""
+    pm, colors = layer.pixmap()
+    sx, sy = layer.scroll(vis_dimy, flip)
+    w, h = cfg["screen_w"], cfg["screen_h"]
+    # PER LAYER, not one for the whole game. daioh's GFXDECODE_ENTRYs put
+    # sprites at 0, layer 0 at 0x400 and layer 1 at 0x200 of 512*3 entries.
+    if base is None:
+        base = cfg["gfx_colorbase"]
+    for y in range(h):
+        row = bmp[y]
+        for x in range(w):
+            if flip:
+                px, py = (1023 - (x + sx)) & 1023, (511 - (y + sy)) & 511
+            else:
+                px, py = (x + sx) & 1023, (y + sy) & 511
+            o = py * 1024 + px
+            pen = pm[o]
+            if opaque or pen:
+                row[x] = base + colors[o] * 16 + pen
+
+
+def render2(cfg, l0, l1, spr, vis_dimy, flip, vregs):
+    """seta_layers_update for a TWO-layer game, transcribed.
+
+        order = m_layers[1].found() ? m_vregs : 0
+        bit 0  Layer 0 Above Layer 1   (swap)
+        bit 1  Sprites Above Frontmost Layer
+        bit 2  the palette effect, blandia only -- Phase 5, popmessage here
+
+    The BOTTOM layer of the pair is drawn TILEMAP_DRAW_OPAQUE and the top one
+    transparently, whichever way round the swap puts them.
+    """
+    w, h = cfg["screen_w"], cfg["screen_h"]
+    bmp = [[cfg["backdrop"]] * w for _ in range(h)]
+    order = vregs
+
+    # seta_layers_update: flip = m_spritegen->is_flipped() ^ m_tilemaps_flip.
+    # THE LAYERS AND THE SPRITES DO NOT ALWAYS AGREE. oisipuzl is the only set
+    # in scope whose machine_config calls set_tilemaps_flip(1) -- "flip is
+    # inverted for the tilemaps" -- and its captured frame has the sprite
+    # chip's flip bit SET, so the sprites are flipped and the layers are not.
+    # Passing one flag to both put 94.9% of its pixels wrong.
+    lflip = flip ^ bool(cfg.get("tilemaps_flip", 0))
+
+    def sprites():
+        if spr is not None:
+            spr.draw_background(bmp)
+            spr.draw_foreground(bmp)
+
+    if order & 1:                       # layer 1 underneath
+        _draw(cfg, l1, bmp, vis_dimy, lflip, True, cfg['l1_colorbase'])
+        if order & 2:
+            sprites()
+            _draw(cfg, l0, bmp, vis_dimy, lflip, False, cfg['l0_colorbase'])
+        else:
+            _draw(cfg, l0, bmp, vis_dimy, flip, False, cfg['l0_colorbase'])
+            sprites()
+    else:                               # layer 0 underneath
+        _draw(cfg, l0, bmp, vis_dimy, lflip, True, cfg['l0_colorbase'])
+        if order & 2:
+            sprites()
+            _draw(cfg, l1, bmp, vis_dimy, lflip, False, cfg['l1_colorbase'])
+        else:
+            _draw(cfg, l1, bmp, vis_dimy, flip, False, cfg['l1_colorbase'])
+            sprites()
+    if order & 4:
+        raise NotImplementedError(
+            "vregs bit 2 is the blandia palette effect -- Phase 5")
+    return bmp
+
+
 def render(cfg, vram, vctrl, tiles, spr, vis_dimy, flip):
     """seta_layers_update for a ONE-layer game.
 
@@ -307,15 +437,20 @@ def main():
     ap.add_argument("--tag")
     ap.add_argument("--png")
     ap.add_argument("--compare", action="store_true")
+    ap.add_argument("--vregs", type=lambda v: int(v, 0), default=0,
+                    help="m_vregs for a two-layer game: bit 0 layer order, "
+                         "bit 1 sprites above the front layer. Write only, so "
+                         "it comes from the capture's write log.")
     ap.add_argument("--no-sprites", action="store_true",
                     help="render the layer alone. Cannot be compared against "
                          "MAME, which always draws the sprites too")
     a = ap.parse_args()
 
-    if a.game not in LAYER_GAMES:
+    two = a.game in TWO_LAYER_GAMES
+    if not two and a.game not in LAYER_GAMES:
         sys.exit(f"no layer config for '{a.game}'. Known: "
-                 f"{', '.join(sorted(LAYER_GAMES))}")
-    cfg = LAYER_GAMES[a.game]
+                 f"{', '.join(sorted(set(LAYER_GAMES) | set(TWO_LAYER_GAMES)))}")
+    cfg = TWO_LAYER_GAMES[a.game] if two else LAYER_GAMES[a.game]
     cap = Path(a.capdir)
     tag = a.tag or a.game
 
@@ -329,6 +464,13 @@ def main():
     tiles = decode_tiles(gfx2)
     print(f"  {len(tiles)} tiles in gfx2 ({len(gfx2)} bytes)")
 
+    if two:
+        vram1 = _be16((cap / f"{tag}_l1vram.bin").read_bytes())
+        vctrl1 = _be16((cap / f"{tag}_l1ctrl.bin").read_bytes())
+        gfx3 = region_image(a.game, "gfx3")[0]
+        tiles1 = decode_tiles(gfx3)
+        print(f"  {len(tiles1)} tiles in gfx3 ({len(gfx3)} bytes)")
+
     code, ylow, ctrl, pal, _ = load_capture(cfg, cap, tag)
     gfx1 = region_image(a.game, "gfx1")[0]
     spr = None if a.no_sprites else Sprites(cfg, code, ylow, ctrl, gfx1)
@@ -336,7 +478,16 @@ def main():
     vis = cfg["visarea"]
     vis_dimy = vis[3] - vis[2] + 1
     flip = bool(ctrl[0] & 0x40)
-    bmp = render(cfg, vram, vctrl, tiles, spr, vis_dimy, flip)
+    if two:
+        # m_vregs, the X1-011 order register. It is WRITE ONLY, so it cannot be
+        # dumped as a region -- take it from --vregs, or from the write log:
+        #   awk '$3 ~ /50000[23]/ {print $4}' <capture>/<tag>_writes.log | tail -1
+        l0 = Layer(dict(cfg, l0_xoffsets=cfg["l0_xoffsets"]), vram, vctrl, tiles)
+        l1 = Layer(dict(cfg, l0_xoffsets=cfg["l1_xoffsets"]), vram1, vctrl1,
+                   tiles1)
+        bmp = render2(cfg, l0, l1, spr, vis_dimy, flip, a.vregs)
+    else:
+        bmp = render(cfg, vram, vctrl, tiles, spr, vis_dimy, flip)
 
     if a.png:
         write_png(a.png, to_rgb(bmp, pal, cfg))

@@ -43,6 +43,23 @@ def region_size(body, want):
     return None
 
 
+def region_inverted(body, want):
+    """Whether ROM_REGION carries ROMREGION_INVERT for this region.
+
+    MAME inverts every byte of such a region after loading it. Two regions in
+    seta.cpp have it -- oisipuzl's sprites and one other set's -- and ignoring
+    it decodes every pen as its complement, which reads as a palette fault
+    rather than a data one.
+    """
+    for raw in body.split("\n"):
+        line = raw.split("//")[0].strip()
+        m = re.match(r'ROM_REGION\w*\(\s*0x[0-9a-fA-F]+\s*,\s*"([^"]+)"\s*,\s*([^)]*)\)',
+                     line)
+        if m and m.group(1) == want:
+            return "ROMREGION_INVERT" in m.group(2)
+    return False
+
+
 def region_names(body):
     out = []
     for raw in body.split("\n"):
@@ -95,11 +112,28 @@ def region_image(setname, region, all_blocks=None):
     if not recs:
         sys.exit(f"{setname}/{region}: ROM_REGION is declared but nothing loads into it")
     zippath, key = zip_for(setname, all_blocks)
-    img = bytearray(build(zippath, recs, key))
+
+    # ROM_COPY takes its bytes from ANOTHER region of the same set, so that
+    # region has to be built first. kamenrid and magspeed carve both tile
+    # regions out of one "user1"; there is no file to resolve and no CRC to
+    # resolve it by.
+    copies = [r for r in recs if r[0] == "copy"]
+    recs = [r for r in recs if r[0] != "copy"]
+    img = bytearray(build(zippath, recs, key)) if recs else bytearray()
+    for kind, src_region, dest, length, _crc, src_ofs in copies:
+        src = region_image(setname, src_region, all_blocks)[0]
+        if len(src) < src_ofs + length:
+            sys.exit(f"{setname}/{region}: ROM_COPY wants {length:#x} bytes at "
+                     f"{src_ofs:#x} of {src_region}, which is {len(src):#x} long")
+        if len(img) < dest:
+            img.extend(b"\xff" * (dest - len(img)))
+        img[dest:dest + length] = src[src_ofs:src_ofs + length]
     # ROM_REGION allocates `size`; the loads may leave a tail unwritten. MAME
     # zero-fills a region it allocates, so a short image is padded with zeros
     # -- NOT with the 0xff build() pads holes with, which is a program-ROM
     # convention (an unprogrammed EPROM reads 0xff).
+    if region_inverted(body, region):
+        img = bytearray(b ^ 0xFF for b in img)
     if len(img) < size:
         img.extend(b"\x00" * (size - len(img)))
     elif len(img) > size:

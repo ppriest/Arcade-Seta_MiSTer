@@ -51,6 +51,9 @@ module tb_seta_video;
 	localparam int C_BACKDROP = 16, C_GFXHALF = 17, C_CODEMASK = 18, C_BUDGET = 19;
 	localparam int C_HTOTAL = 20, C_HSS = 21, C_HSE = 22, C_HAS = 23, C_HAE = 24;
 	localparam int C_VTOTAL = 25, C_VSS = 26, C_VSE = 27, C_VAS = 28, C_VAE = 29;
+	localparam int C_HAS_L0 = 31, C_L0X = 32, C_L0XF = 33, C_L0CB = 34,
+	               C_L0MASK = 35, C_HAS_L1 = 36, C_L1X = 37, C_L1XF = 38,
+	               C_L1CB = 39, C_L1MASK = 40, C_VREGS = 41;
 	localparam int C_PALENT = 30;
 
 	// ---- DUT ----------------------------------------------------------------
@@ -77,6 +80,65 @@ module tb_seta_video;
 	wire       irq_vblank_line, irq_mid_line, vblank_rise;
 	wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun;
 	wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped;
+
+	// Shared by all three ROM models; +ROMLAT overrides.
+	int   rom_latency = 12;
+
+	// ---- the tile ROMs -----------------------------------------------------
+	// Same granule convention as the sprite ROM above: four 16-bit words, word
+	// i in bits [16*i +: 16], and gfx2/gfx3.hex are already in SDRAM byte
+	// order. Two independent models because the two layers fetch at once.
+	localparam int TILE_WORDS = 1 << 20;
+	logic [15:0] gfx2rom [0:TILE_WORDS-1];
+	logic [15:0] gfx3rom [0:TILE_WORDS-1];
+
+	logic        tile_req, tile1_req;
+	logic [23:3] tile_addr, tile1_addr;
+	logic        tile_valid = 0, tile1_valid = 0;
+	logic [63:0] tile_data = 0, tile1_data = 0;
+
+	int   t0_cnt = 0, t1_cnt = 0;
+	logic t0_busy = 0, t1_busy = 0;
+	logic [23:3] t0_hold, t1_hold;
+
+	always @(posedge clk) begin
+		tile_valid <= 1'b0;
+		if (reset) t0_busy <= 1'b0;
+		else if (tile_req && !t0_busy) begin
+			t0_busy <= 1'b1; t0_hold <= tile_addr; t0_cnt <= rom_latency;
+		end else if (t0_busy) begin
+			if (t0_cnt <= 1) begin
+				tile_data <= { gfx2rom[{t0_hold[20:3], 2'd3}],
+				               gfx2rom[{t0_hold[20:3], 2'd2}],
+				               gfx2rom[{t0_hold[20:3], 2'd1}],
+				               gfx2rom[{t0_hold[20:3], 2'd0}] };
+				tile_valid <= 1'b1; t0_busy <= 1'b0;
+			end else t0_cnt <= t0_cnt - 1;
+		end
+	end
+
+	always @(posedge clk) begin
+		tile1_valid <= 1'b0;
+		if (reset) t1_busy <= 1'b0;
+		else if (tile1_req && !t1_busy) begin
+			t1_busy <= 1'b1; t1_hold <= tile1_addr; t1_cnt <= rom_latency;
+		end else if (t1_busy) begin
+			if (t1_cnt <= 1) begin
+				tile1_data <= { gfx3rom[{t1_hold[20:3], 2'd3}],
+				                gfx3rom[{t1_hold[20:3], 2'd2}],
+				                gfx3rom[{t1_hold[20:3], 2'd1}],
+				                gfx3rom[{t1_hold[20:3], 2'd0}] };
+				tile1_valid <= 1'b1; t1_busy <= 1'b0;
+			end else t1_cnt <= t1_cnt - 1;
+		end
+	end
+
+	// ---- the layers' CPU side ----------------------------------------------
+	logic        l0v_we = 0, l0c_we = 0, l1v_we = 0, l1c_we = 0;
+	logic [12:0] l0v_addr = 0, l1v_addr = 0;
+	logic [15:0] l0v_wdata = 0, l1v_wdata = 0;
+	logic  [1:0] l0c_addr = 0, l1c_addr = 0;
+	logic [15:0] l0c_wdata = 0, l1c_wdata = 0;
 
 	seta_video #(.LB_W(LB_W), .PAL_ENTRIES(PAL_MAX)) dut (
 		.clk(clk), .reset(reset), .ce_pix(ce_pix),
@@ -110,6 +172,34 @@ module tb_seta_video;
 		.pal_uds(pal_uds), .pal_lds(pal_lds), .pal_rdata(),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
+
+		.buffer_sprites(1'b0),
+		.has_l0(cfgv[C_HAS_L0][0]),
+		.l0_vram_we(l0v_we), .l0_vram_addr(l0v_addr),
+		.l0_vram_wdata(l0v_wdata), .l0_vram_uds(1'b1), .l0_vram_lds(1'b1),
+		.l0_vram_rdata(),
+		.l0_ctrl_we(l0c_we), .l0_ctrl_addr(l0c_addr),
+		.l0_ctrl_wdata(l0c_wdata), .l0_ctrl_uds(1'b1), .l0_ctrl_lds(1'b1),
+		.l0_ctrl_rdata(),
+		.l0_xoffs(cfgv[C_L0X][8:0]), .l0_xoffs_flip(cfgv[C_L0XF][8:0]),
+		.l0_colorbase(cfgv[C_L0CB][LB_W-1:0]),
+		.l0_code_mask(cfgv[C_L0MASK][15:0]),
+		.tile_req(tile_req), .tile_addr(tile_addr),
+		.tile_valid(tile_valid), .tile_data(tile_data),
+
+		.has_l1(cfgv[C_HAS_L1][0]),
+		.l1_vram_we(l1v_we), .l1_vram_addr(l1v_addr),
+		.l1_vram_wdata(l1v_wdata), .l1_vram_uds(1'b1), .l1_vram_lds(1'b1),
+		.l1_vram_rdata(),
+		.l1_ctrl_we(l1c_we), .l1_ctrl_addr(l1c_addr),
+		.l1_ctrl_wdata(l1c_wdata), .l1_ctrl_uds(1'b1), .l1_ctrl_lds(1'b1),
+		.l1_ctrl_rdata(),
+		.l1_xoffs(cfgv[C_L1X][8:0]), .l1_xoffs_flip(cfgv[C_L1XF][8:0]),
+		.l1_colorbase(cfgv[C_L1CB][LB_W-1:0]),
+		.l1_code_mask(cfgv[C_L1MASK][15:0]),
+		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
+		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
+		.vregs(cfgv[C_VREGS][7:0]),
 		.vga_r(vga_r), .vga_g(vga_g), .vga_b(vga_b),
 		.vga_hs(vga_hs), .vga_vs(vga_vs), .vga_hb(vga_hb), .vga_vb(vga_vb),
 		.vga_de(vga_de), .vga_ce(vga_ce),
@@ -123,8 +213,11 @@ module tb_seta_video;
 
 	// ---- graphics ROM: 64-bit granules, settable latency --------------------
 	logic [15:0] gfxrom [0:GFX_WORDS-1];
+	logic [15:0] l0v_init [0:8191];
+	logic [15:0] l1v_init [0:8191];
+	logic [15:0] l0c_init [0:2];
+	logic [15:0] l1c_init [0:2];
 	logic [15:0] gfxnat [0:GFX_WORDS-1];
-	int   rom_latency = 12;
 	int   rom_cnt = 0;
 	logic rom_busy = 0;
 	logic [23:3] rom_hold_a;
@@ -167,6 +260,31 @@ module tb_seta_video;
 	int bad = 0, checked = 0, frame = 0;
 	int first_bad_x = -1, first_bad_y = -1;
 	logic [23:0] first_bad_got, first_bad_want;
+
+	task l0_vram_write(input [12:0] a, input [15:0] d);
+		@(posedge clk);
+		l0v_addr <= a; l0v_wdata <= d; l0v_we <= 1'b1;
+		@(posedge clk);
+		l0v_we <= 1'b0;
+	endtask
+	task l1_vram_write(input [12:0] a, input [15:0] d);
+		@(posedge clk);
+		l1v_addr <= a; l1v_wdata <= d; l1v_we <= 1'b1;
+		@(posedge clk);
+		l1v_we <= 1'b0;
+	endtask
+	task l0_ctrl_write(input [1:0] a, input [15:0] d);
+		@(posedge clk);
+		l0c_addr <= a; l0c_wdata <= d; l0c_we <= 1'b1;
+		@(posedge clk);
+		l0c_we <= 1'b0;
+	endtask
+	task l1_ctrl_write(input [1:0] a, input [15:0] d);
+		@(posedge clk);
+		l1c_addr <= a; l1c_wdata <= d; l1c_we <= 1'b1;
+		@(posedge clk);
+		l1c_we <= 1'b0;
+	endtask
 
 	task cpu_code_write(input [12:0] a, input [15:0] d);
 		@(posedge clk);
@@ -239,6 +357,12 @@ module tb_seta_video;
 		$readmemh("sim/seta_video_tb/ctrl.hex", ctrlimg);
 		$readmemh("sim/seta_video_tb/pal.hex",  palimg);
 		$readmemh("sim/seta_video_tb/gfx.hex",  gfxnat);
+		$readmemh("sim/seta_video_tb/gfx2.hex", gfx2rom);
+		$readmemh("sim/seta_video_tb/gfx3.hex", gfx3rom);
+		$readmemh("sim/seta_video_tb/l0vram.hex", l0v_init);
+		$readmemh("sim/seta_video_tb/l0ctrl.hex", l0c_init);
+		$readmemh("sim/seta_video_tb/l1vram.hex", l1v_init);
+		$readmemh("sim/seta_video_tb/l1ctrl.hex", l1c_init);
 		$readmemh("sim/seta_video_tb/rgb.hex",  expect_rgb);
 
 		if ($isunknown(codeimg[0]) || $isunknown(expect_rgb[0])) begin
@@ -271,6 +395,17 @@ module tb_seta_video;
 		repeat (4) @(posedge clk);
 
 		for (i = 0; i < 4; i++)          cpu_ctrl_write(i[1:0], ctrlimg[i]);
+
+		// The tile layers, where the fixture has them. has_l0 / has_l1 low
+		// leaves both idle and the mixer on the sprite buffer alone.
+		if (cfgv[C_HAS_L0][0]) begin
+			for (i = 0; i < 8192; i++) l0_vram_write(i[12:0], l0v_init[i]);
+			for (i = 0; i < 3; i++)    l0_ctrl_write(i[1:0], l0c_init[i]);
+		end
+		if (cfgv[C_HAS_L1][0]) begin
+			for (i = 0; i < 8192; i++) l1_vram_write(i[12:0], l1v_init[i]);
+			for (i = 0; i < 3; i++)    l1_ctrl_write(i[1:0], l1c_init[i]);
+		end
 		for (i = 0; i < 'h300; i++)      cpu_ylow_write(i[9:0], ylowimg[i]);
 		for (i = 0; i < 8192; i++)       cpu_code_write(i[12:0], codeimg[i]);
 		for (i = 0; i < pal_entries; i++) cpu_pal_write(i[10:0], palimg[i]);
