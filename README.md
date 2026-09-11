@@ -21,7 +21,7 @@ hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for
 
 ## Games
 
-The goal is to support the collection of hardware covered by MAME in `seta.cpp` — 43 games and 14 differnet hw permutations.
+The goal is to support the collection of hardware covered by MAME in `seta.cpp`. Minus bootlegs on differnet hardware, and betting hardware.
 
 Blandia and Zombie Raid are not yet supported.
 
@@ -53,12 +53,36 @@ Blandia and Zombie Raid are not yet supported.
 | Sokonuke Taisen Game | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp |  |
 | Gundhara | 1995 | Banpresto | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, a second work-RAM block |
 
+### Out of scope
 
+| MAME description | Why |
+|-|-|
+| Thunder & Lightning (bootleg with Tetris sound, set 1) | Z80 + YM2151 |
+| Thunder & Lightning (bootleg with Tetris sound, set 2) | Z80 + YM2151 |
+| Wiggie Waggie | Z80 + OKI M6295 |
+| Super Bar | Z80 + OKI M6295 |
+| Block Carnival / Thunder & Lightning 2 (bootleg) | Z80 + OKI M6295 + YM2151 |
+| Zing Zing Zip (bootleg) | OKI M6295; video registers rearranged |
+| Mad Shark (bootleg) | OKI M6295 |
+| Triple Fun | OKI M6295 |
+| Sum-eoitneun Deongdalireul Chat-ara! | OKI M6295 |
+| J. J. Squawkers (bootleg) | X1-010 kept, own memory map |
+| J. J. Squawkers (bootleg, Blandia Conversion) | X1-010 kept, own memory map |
+| Simpson Junior (bootleg of J. J. Squawkers) | X1-010 kept, own memory map |
+| Mobile Suit Gundam (bootleg) | X1-010 kept, own memory map |
+| Jockey Club (v1.18) | Betting hardware: ACIA6850 serial, hoppers |
+| International Toote (Germany, P523.V01) | Betting hardware |
+| International Toote II (v1.24, P387.V01) | Betting hardware |
+| Sport of Kings (France, P436.08) | Betting hardware |
+| Gran Derby (Spanish hack of Jockey Club) | Betting hardware |
+| Ultra Toukon Densetsu (Japan) | X1-010 **plus** a Z80 and YM3438 |
+| Crazy Fight | YM3812 + OKI M6295 |
+| Daioh (prototype, earliest) | `MACHINE_NOT_WORKING`: "needs correct program ROMs" |
 
 ## Hardware
 
 | Chip | Function | Status |
-|-|-|-|
+|-|-|
 | X1-001A + X1-002A | Sprites, and the "floating tilemap" made of sprite columns | Written, verified against MAME |
 | X1-006 | Palette, `xRRRRRGGGGGBBBBB` | Written |
 | X1-007 | Video blanking | Written |
@@ -172,8 +196,6 @@ Not PCB-validated. MAME is the accuracy reference, with its own acknowledged unc
   whole specification for the sound chip.
 - **Tobias Gubener** ([TobiFlex](https://github.com/TobiFlex)) for
   [TG68K.C](https://github.com/TobiFlex/TG68K.C).
-- **Arcade-Psikyo_MiSTer** and **Arcade-Fuuki_MiSTer**, which this project takes its CPU wrapper,
-  SDRAM stack, debug instrumentation and build tooling from.
 
 ## Layout
 

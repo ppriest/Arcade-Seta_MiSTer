@@ -475,17 +475,31 @@ module maincpu (
 
 			BOARD_BLANDIA: begin                     // blandia_map
 				has_xram = 1'b1;
+				has_tails = 1'b1;
 				// 0x200000-0x21FFFF in two blocks, plus 0x300000 -- the
 				// defaults above are already right. Do NOT truncate.
 				spry_base    = 24'h800000; sprc_base = 24'h800600;
 				sprcode_base = 24'h900000;
 				l0c_base     = 24'hA00000; l1c_base  = 24'hA80000;
 				l0v_base     = 24'hB00000; l1v_base  = 24'hB80000;
+				// THE SECOND PALETTE RAM, which is what the palette-offset
+				// effect reads. 0x703c00-0x7047ff: 1536 words, landing at
+				// entry 0x600 of one array. It straddles two 4 KB pages,
+				// which is why the index is formed here and not in
+				// seta_core.sv. Its first 0x400 bytes also fall inside the
+				// xram window -- harmless, the palette wins the read.
+				pal2_base = 24'h703C00;
 			end
 
 			BOARD_BLANDIAP: begin                    // blandiap_map
+				// The prototype is on the DEFAULT layer layout, not
+				// blandia_map's shifted one: VRAM at 0x800000/0x880000 and
+				// sprite code at 0xb00000, like zingzip. Only the two work
+				// RAM blocks, the tails and the second palette are shared.
 				has_xram = 1'b1;
+				has_tails = 1'b1;
 				wram_end = 24'h21FFFF;               // two blocks, contiguous
+				pal2_base = 24'h703C00;
 			end
 
 			BOARD_DRGNUNIT: begin                    // drgnunit_map

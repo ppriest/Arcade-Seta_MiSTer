@@ -69,7 +69,9 @@ package seta_game_pkg;
 		GAME_JJSQUAWK  = 5'd22,
 		GAME_EXTDWNHL  = 5'd23,
 		GAME_SOKONUKE  = 5'd24,
-		GAME_MADSHARK  = 5'd25
+		GAME_MADSHARK  = 5'd25,
+		GAME_BLANDIA   = 5'd26,
+		GAME_BLANDIAP  = 5'd27
 	} game_t;
 endpackage
 
@@ -635,6 +637,50 @@ module seta_board_cfg (
 			irq_vbl_level = 3'd2; irq_vbl_hold = 1'b0;
 			has_ack  = 1'b1; ack_addr  = 23'h300002; ack_level  = 3'd2;
 			has_ack2 = 1'b1; ack2_addr = 23'h300003; ack2_level = 3'd4;
+		end
+
+		// blandia_map / blandiap_map. Two 6bpp layers like jjsquawk, and then
+		// three things no other set has.
+		//
+		// A SECOND PALETTE RAM at 0x703c00-0x7047ff, 1536 words landing above
+		// the first window's in one 4096-entry array, and the palette-offset
+		// effect in seta_video.sv that reads it. has_pal2 turns both on.
+		//
+		// TWO COLOUR MODES. vctrl[2] bit 4 is a real choice here, not the
+		// no-op it is on the other four 6bpp games -- PAL_BLAND0 is what the
+		// config names and x1_012's cmode output promotes it to PAL_BLAND1.
+		// seta.cpp notes that nothing else selects mode 0, so it is untested
+		// in MAME too.
+		//
+		// BANKED SAMPLES: 2 MB of x1snd with the top quarter of the chip's
+		// window switched by vregs[5:3], which seta_core.sv already has for
+		// eightfrc.
+		//
+		// LAYOUT_C, not D: 4 MB of sprites is what that layout sizes gfx1 for,
+		// and the 6bpp tile regions are not swizzled either way.
+		GAME_BLANDIA, GAME_BLANDIAP: begin
+			input_layout = 3'd0;
+			map_board = (game == GAME_BLANDIA) ? 5'd5 : 5'd6;
+			cpu_div = 5'd6;                          // 16 MHz
+			gfx_half_words = 23'h100000; code_mask = 16'h7fff;   // 4 MB
+			game_rot = 2'd0;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd2;
+			l0_bpp6 = 1'b1; l1_bpp6 = 1'b1;
+			// set_xoffsets(6, -2) on both layers: (flip, noflip).
+			l0_xoffs = -9'sd2; l0_xoffs_flip = 9'sd6;
+			l1_xoffs = -9'sd2; l1_xoffs_flip = 9'sd6;
+			l0_colorbase = 11'd0; l1_colorbase = 11'd0;
+			l0_pal_mode = 3'd3; l1_pal_mode = 3'd3;   // PAL_BLAND0; bit 4 lifts
+			l0_pal_bank = 11'h400; l1_pal_bank = 11'h200;
+			// 0x180000 / 192 = 8192 tiles in each region.
+			l0_code_limit = 16'h2000; l1_code_limit = 16'h2000;
+			pal_entries = 12'd3072;      // 1536 of its own plus the effect's
+			has_pal2 = 1'b1;
+			has_x1_bank = 1'b1;
+			// set_fg_xoffsets(8, 0): "correct (test grid, startup bg)".
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd8;
+			// seta_interrupt_2_and_4, NOT the 1-and-2 the other 6bpp sets use.
+			irq_sl240_level = 3'd2; irq_sl112_level = 3'd4;
 		end
 
 		GAME_WROFAERO: begin
