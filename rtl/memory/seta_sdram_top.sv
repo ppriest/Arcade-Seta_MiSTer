@@ -281,12 +281,22 @@ module seta_sdram_top (
 	// one place a cycle of latency is free -- ioctl delivers a byte every few
 	// hundred clocks -- so the address, the data and the strobe are delayed
 	// together and the module downstream sees exactly what it saw before.
+	// THE INDEX AND THE DOWNLOAD FLAG ARE DELAYED WITH THE REST. They gate
+	// `accept` inside sdram_download, and passing them live while the write
+	// arrives a cycle later means the gate is evaluated against the WRONG
+	// transfer at every boundary: the last byte of the ROM is judged by the
+	// index of whatever follows it, and the first byte of the next transfer
+	// by the ROM's. An .mra's <switches> block is index 254 and lands right
+	// beside index 0, so the boundary is not hypothetical.
 	logic [26:0] ioctl_addr_swz;
-	logic        ioctl_wr_q;
+	logic        ioctl_wr_q, ioctl_dl_q;
+	logic [15:0] ioctl_index_q;
 	logic  [7:0] ioctl_dout_q;
 	always_ff @(posedge clk) begin
 		ioctl_addr_swz <= ioctl_addr_swz_c;
 		ioctl_wr_q     <= ioctl_wr;
+		ioctl_dl_q     <= ioctl_download;
+		ioctl_index_q  <= ioctl_index;
 		ioctl_dout_q   <= (gfx1_invert && in_gfx1) ? ~ioctl_dout : ioctl_dout;
 	end
 
@@ -303,7 +313,7 @@ module seta_sdram_top (
 
 	sdram_download u_dl (
 		.clk(clk), .reset(reset),
-		.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
+		.ioctl_download(ioctl_dl_q), .ioctl_index(ioctl_index_q),
 		.ioctl_wr(ioctl_wr_q), .ioctl_addr(ioctl_addr_swz),
 		// Inverted for gfx1 when the region says so, at the same point the
 		// swizzle is applied -- both are properties of how the region is laid

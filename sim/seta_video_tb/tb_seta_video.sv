@@ -30,7 +30,7 @@ module tb_seta_video;
 	localparam realtime CLK_PERIOD = 10.4167;   // 96 MHz clk_sys
 	localparam int CE_DIV    = 12;              // -> 8 MHz dot clock
 	localparam int LB_W      = 11;
-	localparam int PAL_MAX   = 4096;   // blandia needs 3072; the array must be a power of two
+	localparam int PAL_MAX   = 2048;   // blandia's reachable entries fit; see seta_core.sv
 	localparam int GFX_WORDS = 1 << 22;         // gundhara's 8 MB region,
 	                                            // the largest in the driver
 	localparam int MAX_PIX   = 384 * 256;

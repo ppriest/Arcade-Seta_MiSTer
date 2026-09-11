@@ -1509,6 +1509,63 @@ accesses. Model the chip, not the window (`has_xram`, `has_tails` in
 `maincpu.sv`), and treat MAME's `.ram()` lines around a device as the size of
 the physical SRAM.
 
+### [Seta] A bidirectional bus captured into four lane registers gets one I/O register and three lottery tickets
+
+Every build after a known-good one took an illegal or line-A instruction in
+the power-on RAM test, on RTL changes that were provably inert for those
+games. In order, ruled out with a test each: the `.mra` files, the DIP page,
+the palette size, the fitter seed (worse, not different), a cold Quartus
+`db/`, the PLL and `sys/` and every qsf/sdc (unchanged), the SDC clock groups
+and multicycles, the global clock network carrying `clk_sys` (GCLK9 in both
+fits). A bisect landed on a six-line palette-index refactor that is
+functionally identical to what it replaced.
+
+What made the bisect cheap was an oracle: `scripts/sdram_check.py` reads the
+last gfx2 granule the layer-0 engine fetched, with its data, over JTAG, and
+compares it against the ROM image. Bad builds: bit 8 of the FIRST beat of the
+burst set where the ROM has 0, in roughly half of samples, at every address,
+never another bit. Good build: 0 of 24. Sixty seconds per build, against a
+game launch and a frame.
+
+The mechanism was in the fit report all along, in a column nobody reads.
+`sdram.sv` captured each burst lane straight from `SDRAM_DQ` into its own
+register -- `dout[15:0]`, `[31:16]`, `[47:32]`, `[63:48]`. A pin's I/O cell has
+ONE input register, so `FAST_INPUT_REGISTER ON -to SDRAM_DQ[*]` (sys.tcl) can
+honour one lane per pin: `dout[0..7]` and `dout[24..31]` in every fit, the
+other 48 capture flops in the fabric on a pin-to-register path that no
+constraint timed, because the port had no input delay. Constrain the port and
+STA says it plainly: on the bad fit `SDRAM_DQ[8] -> dout[8]` runs through
+10.644 ns of interconnect, worst path in the design; `SDRAM_DQ[8] -> dout[24]`,
+the lane that won the I/O register, 0.000 ns. Which lane wins and where the
+others land is the fit's choice, so a change anywhere in the design can move
+them. That is the seed sensitivity recorded earlier, with its cause.
+
+The fix is structural, not a constraint: capture the bus ONCE, every cycle,
+unconditionally -- `dq_in <= SDRAM_DQ` -- which is the only shape the I/O
+register accepts, and take the lanes from `dq_in` a cycle later. The pin path
+is then fixed by the I/O cell for all sixteen bits and `dq_in -> dout` is an
+ordinary path STA times completely. Verified against the command-decoding
+chip model by `sim/sdram_tb` (write a granule a word at a time, read it back
+as a burst, every lane as written, including back to back), with a negative
+control: one cycle early, the bench fails exactly as it must -- lane 0 reads
+`zzzz` and every other lane holds its neighbour's word.
+
+Confirmed on hardware: the rebuilt core reads 0 of 24 granules wrong on the
+same oracle that gave 14, 11 and 6 of 24 on the three bad builds, and
+thunderl, zingzip and stg -- the sets that died in their RAM tests -- boot
+and render.
+
+Three things to keep:
+
+* When a functionally inert change breaks hardware and STA is clean, look for
+  a path STA is not timing. The fit report's "Packed Register" table and the
+  STA "Unconstrained Input Ports" section are where that shows.
+* A per-bit oracle beats a per-game one. "bit 8, first beat, half the time"
+  named the register; "games black-screen" named nothing.
+* `sim/sdram_top_tb` fails 4898 of 5497 read-backs on the unmodified
+  controller; its fixture predates the pipelined download and the D/E
+  layouts. It cannot judge a controller change. `sim/sdram_tb` can.
+
 ### [Seta] An inferred RAM must have a power-of-two depth, or Quartus builds it out of registers
 
 blandia needs 3072 palette entries. Declared as `logic [15:0] pal [0:3071]`

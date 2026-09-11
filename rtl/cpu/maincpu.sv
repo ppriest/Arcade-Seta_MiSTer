@@ -659,6 +659,8 @@ module maincpu (
 	wire is_wram2   = has_wram2 && (q_a >= wram2_base) && (q_a <= wram2_end);
 	wire is_pal2    = (pal2_base != NONE) && (q_a >= pal2_base)
 	               && (q_a <  pal2_base + 24'hC00);
+	wire [10:0] pal_off_main = q_a[11:1] - pal_base[11:1];
+	wire [11:0] pal_off_2    = 12'h600 + (q_a[15:1] - pal2_base[15:1]);
 	wire is_pal     = ((q_a >= pal_base) && (q_a <= pal_end)) || is_pal2;
 	wire is_prot    = (q_a >= prot_base)  && (q_a <  prot_base + 24'h400);
 	wire is_spry    = (q_a >= spry_base)  && (q_a <  spry_base + 24'h600);
@@ -879,9 +881,20 @@ module maincpu (
 					q_wram      <= is_wram;
 					q_wdog      <= is_wdog;
 					q_tprot     <= is_tprot_r;
-					pal_index_w <= is_pal2
-					             ? (12'h600 + (q_a[12:1] - pal2_base[12:1]))
-					             : (q_a[11:1] - pal_base[11:1]);
+					// BOTH ARMS ARE SIZED EXPLICITLY. Written as one ternary
+					// the 12-bit pal2 arm widens the main one, and the main
+					// one MUST wrap in eleven bits: the xram window below the
+					// palette produces a negative offset, which in eleven bits
+					// lands at 0x600-0x7ff and is what the read path serves
+					// back. Widened, it became 0xe00-0xfff, the write was
+					// dropped as out of range and the read still came from
+					// 0x600-0x7ff -- so a game's power-on RAM test read back
+					// what it had never written and failed.
+					//
+					// pal2 needs FIFTEEN address bits, not thirteen:
+					// 0x703c00-0x7047ff crosses 0x704000, so anything
+					// narrower wraps in the middle of the window.
+					pal_index_w <= is_pal2 ? pal_off_2 : {1'b0, pal_off_main};
 					if (is_tprot_w && acc_write) tprot_reg <= tprot_next;
 					q_wram_addr <= wram_off[19:1];
 					q_wram_wel  <= is_wram && acc_write && !n_lds;

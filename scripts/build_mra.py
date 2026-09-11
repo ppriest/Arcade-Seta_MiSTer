@@ -105,7 +105,10 @@ LAYOUTS = {
 LAYOUT_B_SETS = {"drgnunit", "stg", "qzkklogy", "qzkklgy2"}
 LAYOUT_C_SETS = {"daioh", "daioha", "rezon", "rezono", "wrofaero",
                  "msgundam", "msgundam1", "eightfrc", "oisipuzl",
-                 "kamenrid", "magspeed"}
+                 "kamenrid", "magspeed",
+                 # blandia: 4 MB of sprites is what C sizes gfx1 for, and its
+                 # 6bpp tile regions are 1.5 MB each -- D would not fit gfx1.
+                 "blandia", "blandiap"}
 LAYOUT_D_SETS = {"zingzip", "extdwnhl", "sokonuke", "jjsquawk", "jjsquawko",
                  "madshark"}
 LAYOUT_E_SETS = {"gundhara", "gundharac"}
@@ -438,10 +441,19 @@ def groups_for(records, region, setname, body):
             for r in recs:
                 if r[0] == "load24_wswap":
                     words.append(r)
-            if sum(w[3] for w in words) != bl * 2:
+            wtot = sum(w[3] for w in words)
+            # blandia's gfx2: a 0x80000 byte ROM against a 0x80000 word ROM,
+            # so the word lanes of the top half of the region were never
+            # loaded and hold MAME's zero fill, while the byte ROM's second
+            # half is uniform (0xFF). That tail is a plain repeated 3-byte
+            # literal -- mra-tools-c does not apply `repeat` inside an
+            # <interleave>, so it cannot be a filler lane. The value is taken
+            # from the ground truth, not assumed, and checked to be uniform.
+            short_tail = (wtot == bl and len(words) == 1)
+            if wtot != bl * 2 and not short_tail:
                 sys.exit(f"{setname}/{region}: the 24-bit word halves total "
-                         f"{sum(w[3] for w in words):#x} against a byte half "
-                         f"of {bl:#x}; they must be twice it")
+                         f"{wtot:#x} against a byte half of {bl:#x}; they "
+                         f"must be twice it (or equal it, blandia's form)")
             for wk, wn, wdest, wl, wc, _woff in words:
                 # Every three destination bytes take one from the byte ROM.
                 boff = (wdest - 1 - bdest) // 3
@@ -449,6 +461,12 @@ def groups_for(records, region, setname, body):
                             "crcs": [bc, wc], "size": (wl // 2) * 3,
                             "dest": wdest - 1,
                             "offs": [boff, 0], "sizes": [wl // 2, wl]})
+                if short_tail:
+                    covered = (wl // 2) * 3
+                    out.append({"kind": "fill24", "parts": [bn], "crcs": [bc],
+                                "size": (bl - wl // 2) * 3,
+                                "dest": wdest - 1 + covered,
+                                "offs": [wl // 2], "sizes": [bl - wl // 2]})
             # Both kinds of record for this region are consumed together.
             i = len(recs)
             continue
@@ -812,6 +830,16 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
             if pos - rbase < g["dest"]:
                 lines.append(f'        <part repeat="{g["dest"] - (pos - rbase)}">FF</part>')
                 pos = rbase + g["dest"]
+            if g["kind"] == "fill24":
+                tr = group_truth_from(rs, g)
+                pat = bytes(tr[:3])
+                if any(tr[i:i + 3] != pat for i in range(0, len(tr), 3)):
+                    sys.exit(f"{setname}/{region}: the uncovered 24-bit tail "
+                             f"is not a repeating 3-byte pattern")
+                lines.append(f'        <part repeat="{g["size"] // 3}">'
+                             f'{pat[0]:02X} {pat[1]:02X} {pat[2]:02X}</part>')
+                pos += g["size"]
+                continue
             maps = pick_map(rs, g, group_truth_from(rs, g))
             # A slice carries offset/length; mra.py applies them to the file
             # before the map, which is what mra-tools-c does.
@@ -959,6 +987,13 @@ def group_truth_from(rs, g):
         d = sliced(rs, g)
         d[0::2], d[1::2] = d[1::2], d[0::2]
         return d
+    if g["kind"] == "fill24":
+        # ONE part: the byte ROM's uncovered tail goes in lane 0, and the word
+        # lanes were never loaded, so they hold the region's zero fill.
+        a = group_part(rs, g, 0)
+        out = bytearray(len(a) * 3)
+        out[0::3] = a
+        return out
     # A sliced pair takes the same window out of each file; `size` is the
     # INTERLEAVED length, so each side contributes half of it.
     a = group_part(rs, g, 0)

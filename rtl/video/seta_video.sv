@@ -140,7 +140,10 @@ module seta_video #(
 
 	// ---- CPU: palette ------------------------------------------------------
 	input  wire        pal_we,
-	input  wire [$clog2(PAL_ENTRIES)-1:0] pal_addr,
+	// TWELVE BITS, wider than the array on purpose: blandia's second window
+	// reaches index 0xbff and only 0x000-0x7ff is backed. See the note on
+	// PAL_ENTRIES in seta_core.sv.
+	input  wire [11:0] pal_addr,
 	input  wire [15:0] pal_wdata,
 	input  wire        pal_uds, pal_lds,
 	output wire [15:0] pal_rdata,
@@ -238,7 +241,11 @@ module seta_video #(
 
 	seta_palette #(.ENTRIES(PAL_ENTRIES)) u_pal (
 		.clk(clk),
-		.cpu_we(pal_we), .cpu_addr(pal_addr), .cpu_wdata(pal_wdata),
+		// A write above the backed range is DROPPED, not wrapped -- wrapping
+		// would put blandia's second-window writes on top of the main
+		// palette at 0x000-0x3ff.
+		.cpu_we(pal_we && !pal_addr[11]), .cpu_addr(pal_addr[PAW-1:0]),
+		.cpu_wdata(pal_wdata),
 		.cpu_uds(pal_uds), .cpu_lds(pal_lds), .cpu_rdata(pal_rdata),
 		.index(pal_index), .r(pr), .g(pg), .b(pb)
 	);
@@ -444,9 +451,7 @@ module seta_video #(
 	// worth of bank plus a 9-bit offset, and the palette effect tops out at
 	// 0x600 + 0x1ff. The extra entries exist so the CPU's writes land
 	// somewhere real, not because the index needs the width.
-	logic [PAW-1:0] mixed_w;
-	always_comb mixed_w = mixed;          // zero-extends; PAW >= LB_W
-	always_ff @(posedge clk) pal_index <= mixed_w;
+	always_ff @(posedge clk) pal_index <= mixed[PAW-1:0];
 
 endmodule
 

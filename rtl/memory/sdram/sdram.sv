@@ -95,10 +95,12 @@ localparam MODE = { 3'b000, NO_WRITE_BURST, OP_MODE, CAS_LATENCY, ACCESS_TYPE, B
 localparam STATE_IDLE   = 4'd0;                // state to check the requests
 localparam STATE_START  = STATE_IDLE+4'd1;     // state in which a new command is started
 localparam STATE_CONT   = STATE_START+RASCAS_DELAY;
-localparam STATE_READ0  = STATE_CONT+CAS_LATENCY+4'd1;   // +1: matches upstream's own
-                                                          // STATE_READY=STATE_CONT+CAS_LATENCY+1
-                                                          // margin, unchanged from upstream --
-                                                          // see PROVENANCE.md
+// +2, NOT +1. The +1 is upstream's own STATE_READY=STATE_CONT+CAS_LATENCY+1
+// registration-delay margin (PROVENANCE.md). The second cycle is dq_in: the
+// data bus is now captured ONCE, unconditionally, into a register the I/O
+// cell can hold, and the four lanes are taken from that register a cycle
+// later. See the comment above the lane captures for why.
+localparam STATE_READ0  = STATE_CONT+CAS_LATENCY+4'd2;
 localparam STATE_READ1  = STATE_READ0+4'd1;
 localparam STATE_READ2  = STATE_READ0+4'd2;
 localparam STATE_READ3  = STATE_READ0+4'd3;
@@ -139,6 +141,7 @@ reg        rfs = 1'b0, rfs2 = 1'b0;
 reg         init_old = 1'b0;
 
 reg [63:0] dout;
+reg [15:0] dq_in;    // the bus, captured once per cycle -- see the lane captures
 
 assign dout0 = dout;
 assign dout1 = dout;
@@ -217,16 +220,40 @@ always @(posedge clk) begin
 		end
 	end
 
+	// THE DATA BUS IS CAPTURED ONCE, in dq_in, every cycle, with no enable
+	// and no mux in front of it. That is the only shape the FAST_INPUT_REGISTER
+	// assignment (sys.tcl, -to SDRAM_DQ[*]) can honour: each pin's I/O cell
+	// has ONE input register, and it must be fed straight from the pin.
+	//
+	// The previous form captured each of the four lanes straight from
+	// SDRAM_DQ, conditionally, into dout[15:0], [31:16], [47:32], [63:48] --
+	// four registers per pin all asking for the one I/O register. The Fitter
+	// gave it to one lane per pin (dout[0..7] and dout[24..31] in every fit
+	// examined) and placed the other 48 capture flops in the fabric, where a
+	// pin-to-register path is routed however the placement of the day falls
+	// and is checked by nothing, because the port carried no input delay.
+	// Measured on the build that motivated this: SDRAM_DQ[8] reached dout[8]
+	// through 10.644 ns of interconnect, and bit 8 of the first beat of every
+	// read burst came back wrong in about half of samples -- an inert RTL
+	// change elsewhere had moved that flop. Two builds of the same commit
+	// differed in nothing STA reported (scripts/sdram_check.py, and
+	// docs/LESSONS_LEARNED.md).
+	//
+	// With dq_in the pin path is fixed by the I/O cell, and dq_in -> dout is
+	// an ordinary register-to-register path that STA times completely. The
+	// burst is one cycle longer; STATE_READ0 carries the +2.
+	dq_in <= SDRAM_DQ;
+
 	// Burst-of-4 read capture: one 16-bit lane per cycle across the four
 	// STATE_READ0..STATE_READ3 cycles, ascending address order (lane 0 =
 	// lowest address = dout[15:0]) matching ACCESS_TYPE=sequential above.
 	// Write completion (ack, no data capture) shares STATE_READ3 for a
 	// single uniform completion point -- see PROVENANCE.md for why.
-	if (state == STATE_READ0 && ram_req && !we) dout[15:0]  <= SDRAM_DQ;
-	if (state == STATE_READ1 && ram_req && !we) dout[31:16] <= SDRAM_DQ;
-	if (state == STATE_READ2 && ram_req && !we) dout[47:32] <= SDRAM_DQ;
+	if (state == STATE_READ0 && ram_req && !we) dout[15:0]  <= dq_in;
+	if (state == STATE_READ1 && ram_req && !we) dout[31:16] <= dq_in;
+	if (state == STATE_READ2 && ram_req && !we) dout[47:32] <= dq_in;
 	if (state == STATE_READ3 && ram_req) begin
-		if (!we) dout[63:48] <= SDRAM_DQ;
+		if (!we) dout[63:48] <= dq_in;
 		active <= 0;
 		ram_req <= 0;
 		if (ram_req[0]) ack0 <= req0;

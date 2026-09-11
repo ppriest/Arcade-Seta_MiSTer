@@ -537,14 +537,19 @@ module seta_core (
 	// timing changing. Bisecting a fault that way needs no rebuild.
 	wire spr_valid_g = spr_valid & en_spr;
 
-	// 4096, AND IT HAS TO BE A POWER OF TWO. blandia needs 3072 -- 1536
-	// through its own palette window and 1536 more through the second one at
-	// 0x703c00 -- but at a depth of 3072 Quartus does not infer an M10K for
-	// the array at all. It built it out of registers: 6497 LABs against the
-	// device's 4191, a fitter error rather than a slow build. 4096 infers
-	// cleanly and costs eight M10K blocks. Every other game uses 512, 1536 or
-	// pairlove's 2048 and leaves the rest idle.
-	seta_video #(.LB_W(11), .PAL_ENTRIES(4096)) u_video (
+	// 2048, UNCHANGED, and blandia fits inside it. Its second palette window
+	// writes 1536 words at index 0x600-0xbff, but only 0x600-0x7ff is ever
+	// READ: the palette-offset effect indexes it with nine bits. MAME asks the
+	// same question in blandia_palette -- "what are used for palette from
+	// 0x800 to 0xBFF?" -- and nothing answers it.
+	//
+	// So the array stays 2048 and seta_video drops the writes above 0x7ff
+	// rather than letting them wrap onto the main palette. Growing it to 4096
+	// cost eight M10K blocks, took the design to 491 of 553, and the resulting
+	// build failed on hardware with the CPU taking an illegal instruction
+	// after its power-on RAM test -- every game, on a change that is inert for
+	// all of them. Nothing here needs the width.
+	seta_video #(.LB_W(11), .PAL_ENTRIES(2048)) u_video (
 		.clk(clk), .reset(reset), .ce_pix(ce_pix),
 		.htotal(htotal), .hs_start(hs_start), .hs_end(hs_end),
 		.hact_start(hact_start), .hact_end(hact_end),

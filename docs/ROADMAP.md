@@ -256,6 +256,9 @@ hardware.
   a 1.5 MB game.
 
   `sim/sdram_top_tb` streams a real set in through the ioctl port and reads every region back
+  -- STALE: 4898 of 5497 read-backs fail on the unmodified controller (fixture predates the
+  pipelined download and layouts D/E). `sim/sdram_tb` is the controller's own judge until it is
+  re-prepped
   through the port the core will use it from. **thunderl: 1,523 reads, zero mismatches. atehate
   (a 2 MB sprite region and a 1 MB program): 5,497 reads, zero mismatches.** The sprite check is
   the interesting one — 816 and 2,832 sprite rows respectively, each required to be one 64-bit
