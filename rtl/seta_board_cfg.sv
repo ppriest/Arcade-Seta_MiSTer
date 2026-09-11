@@ -148,7 +148,9 @@ module seta_board_cfg (
 	// 0 direct (every 4bpp game), 1 masked (gundhara, zingzip), 2 plain
 	// (jjsquawk, madshark). The bank is the 512-entry block the layer lands
 	// in, which is NOT the GFXDECODE base the engine would have added.
-	output logic  [1:0] l0_pal_mode, l1_pal_mode,
+	output logic  [2:0] l0_pal_mode, l1_pal_mode,
+	// blandia's second palette RAM and the effect that reads it.
+	output logic        has_pal2,
 	output logic [10:0] l0_pal_bank, l1_pal_bank,
 	// screen_vblank_seta_buffer_sprites -> x1_001_device::setac_eof. NO GROUP A
 	// GAME WIRES IT; every Group B set does, and qzkklogy and qzkklgy2 have
@@ -324,7 +326,8 @@ module seta_board_cfg (
 		has_l1          = 1'b0;
 		layout          = 3'd0;
 		l0_bpp6         = 1'b0;   l1_bpp6 = 1'b0;
-		l0_pal_mode     = 2'd0;   l1_pal_mode = 2'd0;
+		l0_pal_mode     = 3'd0;   l1_pal_mode = 3'd0;
+		has_pal2        = 1'b0;
 		l0_pal_bank     = 11'd0;  l1_pal_bank = 11'd0;
 		l1_xoffs        = 9'sd0;
 		l1_xoffs_flip   = 9'sd0;
@@ -534,7 +537,7 @@ module seta_board_cfg (
 			// No base: a 6bpp layer's pixel leaves the engine as {color, pen}
 			// and x1_011_index forms the palette address.
 			l0_colorbase = 11'd0; l1_colorbase = 11'd0;
-			l0_pal_mode = 2'd1; l1_pal_mode = 2'd1;     // masked
+			l0_pal_mode = 3'd1; l1_pal_mode = 3'd1;     // masked
 			l0_pal_bank = 11'h400; l1_pal_bank = 11'h200;
 			// 192 bytes a tile: gfx2 is 0x2000 of them, gfx3 0x4000.
 			l0_code_limit  = 16'h2000; l1_code_limit  = 16'h4000;
@@ -556,8 +559,8 @@ module seta_board_cfg (
 			// set_xoffsets(-2, -1) on both: (flip, noflip).
 			l0_xoffs = -9'sd1; l0_xoffs_flip = -9'sd2;
 			l1_xoffs = -9'sd1; l1_xoffs_flip = -9'sd2;
-			l0_colorbase = 11'd0;      l0_pal_mode = 2'd1; l0_pal_bank = 11'h400;
-			l1_colorbase = 11'h200;    l1_pal_mode = 2'd0;
+			l0_colorbase = 11'd0;      l0_pal_mode = 3'd1; l0_pal_bank = 11'h400;
+			l1_colorbase = 11'h200;    l1_pal_mode = 3'd0;
 			// 0x200000 / 192 = 10922 elements, NOT a power of two -- the one
 			// layer in the driver where the wrap has to be a real modulo.
 			l0_code_limit = 16'd10922; l1_code_limit = 16'h4000;
@@ -578,7 +581,7 @@ module seta_board_cfg (
 			l0_xoffs = -9'sd1; l0_xoffs_flip = -9'sd1;
 			l1_xoffs = -9'sd1; l1_xoffs_flip = -9'sd1;
 			l0_colorbase = 11'd0; l1_colorbase = 11'd0;
-			l0_pal_mode = 2'd2; l1_pal_mode = 2'd2;      // plain
+			l0_pal_mode = 3'd2; l1_pal_mode = 3'd2;      // plain
 			l0_pal_bank = 11'h400; l1_pal_bank = 11'h200;
 			l0_code_limit = 16'h2000; l1_code_limit = 16'h2000;
 			pal_entries = 12'd1536;
@@ -596,8 +599,8 @@ module seta_board_cfg (
 			l0_bpp6 = 1'b1;                 // layer 2 is 4bpp on both
 			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
 			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
-			l0_colorbase = 11'd0;   l0_pal_mode = 2'd1; l0_pal_bank = 11'h400;
-			l1_colorbase = 11'h200; l1_pal_mode = 2'd0;
+			l0_colorbase = 11'd0;   l0_pal_mode = 3'd1; l0_pal_bank = 11'h400;
+			l1_colorbase = 11'h200; l1_pal_mode = 3'd0;
 			// extdwnhl's gfx2 is 4 MB -- 21845 elements, more than a 14-bit
 			// code can reach. sokonuke's is 1.5 MB, and its gfx3 is a 256-byte
 			// stub that MAME still hangs a layer on.
@@ -623,7 +626,7 @@ module seta_board_cfg (
 			l0_xoffs = 9'sd0; l0_xoffs_flip = 9'sd0;
 			l1_xoffs = 9'sd0; l1_xoffs_flip = 9'sd0;
 			l0_colorbase = 11'd0; l1_colorbase = 11'd0;
-			l0_pal_mode = 2'd2; l1_pal_mode = 2'd2;      // plain
+			l0_pal_mode = 3'd2; l1_pal_mode = 3'd2;      // plain
 			l0_pal_bank = 11'h400; l1_pal_bank = 11'h200;
 			l0_code_limit = 16'h2000; l1_code_limit = 16'h2000;
 			pal_entries = 12'd1536;

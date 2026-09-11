@@ -892,7 +892,9 @@ arranges the loads differently -- a shared byte ROM, a distant ROM_CONTINUE, a R
 **Phase 5 — the two remaining specials.** `blandia` (second palette bank, palette-offset effect,
 colour mode 0) and `zombraid` (ADC0834 light gun, battery-backed RAM).
 
-**Phase 6 — polish.** `hiscore.v`, CRT offset, pause, savestates. Savestates should be scoped
+**Phase 6 — polish.** `hiscore.v`, CRT offset, pause, savestates. CRT offset is a per-game
+H/V shift exposed in the OSD and applied at the video output, not in the core's timing --
+the point is to centre the picture on a real monitor without changing what the game sees. Savestates should be scoped
 against `docs/savestates.md` in the Psikyo repo, which already establishes what the MiSTer API does
 and does not do — short version, it reserves and persists a DDR3 slot and serializes nothing.
 Note that this core is in a much better savestate position than Psikyo: no jt10 (whose FM state

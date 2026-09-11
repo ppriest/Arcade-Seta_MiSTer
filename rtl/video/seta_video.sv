@@ -26,6 +26,8 @@
 
 `default_nettype none
 
+import seta_pal_pkg::*;   // PAL_BLAND0 / PAL_BLAND1
+
 module seta_video #(
 	parameter int LB_W        = 11,     // palette index width
 	parameter int PAL_ENTRIES = 2048
@@ -57,8 +59,11 @@ module seta_video #(
 	// and a 4bpp layer 2, gundhara and jjsquawk have both 6bpp.
 	input  wire        l0_bpp6, l1_bpp6,
 	// The palette address formation each layer needs; see x1_011_index.sv.
-	input  wire  [1:0] l0_pal_mode, l1_pal_mode,
+	input  wire  [2:0] l0_pal_mode, l1_pal_mode,
 	input  wire [LB_W-1:0] l0_pal_bank, l1_pal_bank,
+	// blandia alone: a second palette RAM at entry 0x600 and the effect
+	// that reads it. Low everywhere else, and the whole path folds away.
+	input  wire        has_pal2,
 
 	// DEBUG SWITCHES, from the OSD's Debug page. Each blanks one layer AT THE
 	// MIXER, not at its engine: the engines keep running, keep their counters
@@ -271,6 +276,7 @@ module seta_video #(
 	// Driven from the SAME line_start and line as the sprite engine, so the two
 	// line buffers are always for the same scanline and the mixer needs no
 	// alignment of its own.
+	wire        l0_cmode, l1_cmode;   // vctrl[2] bit 4, per layer
 	wire [LB_W-1:0] l0_lb_data;
 
 	x1_012 #(.LB_W(LB_W)) u_l0 (
@@ -281,6 +287,7 @@ module seta_video #(
 		.vctrl_we(l0_ctrl_we), .vctrl_addr(l0_ctrl_addr),
 		.vctrl_wdata(l0_ctrl_wdata), .vctrl_uds(l0_ctrl_uds),
 		.vctrl_lds(l0_ctrl_lds), .vctrl_rdata(l0_ctrl_rdata),
+		.cmode(l0_cmode),
 		.xoffs(l0_xoffs), .xoffs_flip(l0_xoffs_flip),
 		.flipscr(flipscr_l0),
 		.vis_dimy(vis_dimy), .colorbase(l0_colorbase), .code_limit(l0_code_limit),
@@ -306,6 +313,7 @@ module seta_video #(
 		.vctrl_we(l1_ctrl_we), .vctrl_addr(l1_ctrl_addr),
 		.vctrl_wdata(l1_ctrl_wdata), .vctrl_uds(l1_ctrl_uds),
 		.vctrl_lds(l1_ctrl_lds), .vctrl_rdata(l1_ctrl_rdata),
+		.cmode(l1_cmode),
 		.xoffs(l1_xoffs), .xoffs_flip(l1_xoffs_flip),
 		.flipscr(flipscr_l0),
 		.vis_dimy(vis_dimy), .colorbase(l1_colorbase), .code_limit(l1_code_limit),
@@ -342,11 +350,20 @@ module seta_video #(
 	// PALETTE ADDRESS FORMATION, per layer. Pass-through for every 4bpp game;
 	// for the 6bpp ones it is the adder rtl/video/x1_011_index.sv describes,
 	// and the engine hands it {color, pen} with no base.
+	// COLOUR MODE, which is a runtime bit and not a board property. The board
+	// config names PAL_BLAND0; vctrl[2] bit 4 promotes it to PAL_BLAND1 per
+	// layer, per frame. Every other mode ignores the bit -- see the header of
+	// x1_011_index.sv for why only blandia's two entries differ.
+	wire [2:0] l0_mode = (l0_pal_mode == PAL_BLAND0 && l0_cmode)
+	                   ? PAL_BLAND1 : l0_pal_mode;
+	wire [2:0] l1_mode = (l1_pal_mode == PAL_BLAND0 && l1_cmode)
+	                   ? PAL_BLAND1 : l1_pal_mode;
+
 	wire [LB_W-1:0] l0_px_d, l1_px_d;
 	x1_011_index #(.LB_W(LB_W)) u_l0_pal (
-		.mode(l0_pal_mode), .bank(l0_pal_bank), .idx(l0_raw), .entry(l0_px_d));
+		.mode(l0_mode), .bank(l0_pal_bank), .idx(l0_raw), .entry(l0_px_d));
 	x1_011_index #(.LB_W(LB_W)) u_l1_pal (
-		.mode(l1_pal_mode), .bank(l1_pal_bank), .idx(l1_raw), .entry(l1_px_d));
+		.mode(l1_mode), .bank(l1_pal_bank), .idx(l1_raw), .entry(l1_px_d));
 
 	// TRANSPARENCY IS THE TILE'S PEN, and a 6bpp pen is six bits wide. Tested
 	// on the index before the remap, which is where the pen still is: after
@@ -372,8 +389,40 @@ module seta_video #(
 	logic [7:0] vregs_lat = '0;
 	always_ff @(posedge clk) if (vblank_rise) vregs_lat <= vregs;
 	wire            swap    = vregs_lat[0];
+
+	// THE PALETTE-OFFSET EFFECT (draw_tilemap_palette_effect), blandia only.
+	//
+	// vregs bit 2 turns it on, and it applies to LAYER 1 -- the device, not
+	// whichever layer is on top. An opaque layer-1 pixel whose colour code is
+	// 31 is not drawn; instead the pixel ALREADY UNDERNEATH is re-looked-up in
+	// the second palette RAM, at 0x600 + its low nine bits.
+	//
+	// Colour 31 is what MAME's mask test comes to. It reads
+	//     (p & (colorbase + (colors-1) * granularity)) == that
+	// which for layer 1's two gfx entries is (p & 0x9c0) == 0x9c0 and
+	// (p & 0x19c0) == 0x19c0. p is colorbase + color*64 + pen and pen never
+	// carries into bit 6, so in units of 64 the test is on 8 + color and on
+	// 72 + color -- satisfied by 39 and 0x67 respectively, both color == 31.
+	//
+	// The index it re-looks-up is MAME's colortable index, which is the pen
+	// BEFORE x1_011_index, not the palette entry after: a layer pixel's
+	// colortable base (0xa00, 0x1a00) is a multiple of 0x200 and vanishes
+	// under the mask, and a sprite's is zero. So this takes l0_raw and
+	// lb_data, not l0_px_d and a remapped sprite.
+	//
+	// ONLY UNSWAPPED. MAME's order-bit-0 branch does not implement the effect
+	// at all -- it popmessages "Missing palette effect" and draws layer 0
+	// normally -- so a swapped frame has no effect to reproduce.
+	wire eff_on  = has_pal2 && vregs_lat[2] && !swap;
+	wire l1_eff  = eff_on && (l1_raw[10:6] == 5'd31);
+	// What is under layer 1 at that moment: layer 0, which is drawn opaque,
+	// plus the sprites when they go on before the top layer.
+	wire [LB_W-1:0] under_raw = (vregs_lat[1] && lb_hit) ? lb_data : l0_raw;
+	wire [LB_W-1:0] l1_px_e   = l1_eff
+	        ? (11'h600 + {2'd0, under_raw[8:0]}) : l1_px_d;
+
 	wire [LB_W-1:0] bot_px  = swap ? l1_px_d : l0_px_d;
-	wire [LB_W-1:0] top_px  = swap ? l0_px_d : l1_px_d;
+	wire [LB_W-1:0] top_px  = swap ? l0_px_d : l1_px_e;
 	wire            top_op  = swap ? l0_op   : l1_op;
 
 	// Sprites above the frontmost layer, or between the two.
@@ -389,7 +438,15 @@ module seta_video #(
 	// lb_data lands two cycles after lb_addr is registered; the palette needs
 	// its index registered too, and both are settled long before the next
 	// ce_pix twelve cycles later.
-	always_ff @(posedge clk) pal_index <= mixed[PAW-1:0];
+	// PAW CAN EXCEED LB_W. blandia's palette RAM is 3072 entries -- 1536 of
+	// its own plus 1536 the second window writes -- but nothing the video
+	// side can produce reaches past 0x7ff: a normal entry is at most 0xbff's
+	// worth of bank plus a 9-bit offset, and the palette effect tops out at
+	// 0x600 + 0x1ff. The extra entries exist so the CPU's writes land
+	// somewhere real, not because the index needs the width.
+	logic [PAW-1:0] mixed_w;
+	always_comb mixed_w = mixed;          // zero-extends; PAW >= LB_W
+	always_ff @(posedge clk) pal_index <= mixed_w;
 
 endmodule
 

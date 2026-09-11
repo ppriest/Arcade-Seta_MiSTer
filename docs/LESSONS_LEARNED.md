@@ -1509,6 +1509,47 @@ accesses. Model the chip, not the window (`has_xram`, `has_tails` in
 `maincpu.sv`), and treat MAME's `.ram()` lines around a device as the size of
 the physical SRAM.
 
+### [Seta] An inferred RAM must have a power-of-two depth, or Quartus builds it out of registers
+
+blandia needs 3072 palette entries. Declared as `logic [15:0] pal [0:3071]`
+the array was not inferred as an M10K at all -- no altsyncram in the log, no
+warning saying so -- and Quartus implemented 3072 sixteen-bit words in logic.
+The build died in the fitter:
+
+    Error (170012): Fitter requires 6497 LABs to implement the design,
+    but the device contains only 4191 LABs
+
+which reads as "the design grew too big" and is really "one array stopped
+being memory". The give-away is the size of the miss: 55% over on a design
+that had been at 59%, from a change that added 1024 words.
+
+Rounding the depth up to 4096 infers cleanly and costs eight M10K blocks.
+Timing analysis had nothing to say either way, because the design never
+reached it.
+
+Check the fit report's RAM-block count after any change to a memory's shape,
+not just its total; a count that DROPS while a memory grows is the symptom.
+
+### [Seta] A correct `.mra` DIP block still needs one line in CONF_STR
+
+The switches were right in all 31 `.mra` files and checked against MAME's
+`-listxml`, the core decoded them, and every game ran with the correct default
+configuration -- and the OSD had no DIP page at all, for the whole project,
+because CONF_STR was missing
+
+    "DIP;",
+
+The framework renders that page from the loaded `.mra`'s `<switches>` block;
+the line is what asks for it. The switches are DELIVERED either way, as ioctl
+index 254, so the defaults take effect and nothing misbehaves. There is no
+error, no warning, and no wrong behaviour to notice -- only an absence, and an
+absence is exactly what a checker that validates the `.mra` cannot see.
+
+Two checks were both passing and neither covered it: `check_dips.py` compares
+the `.mra` against MAME, and the hardware sweep looks at rendered frames.
+Nothing looked at the menu. When a feature spans a data file and the core,
+verify the end the user touches, not just the end that is easy to diff.
+
 ### [Seta] A mirrored work-RAM block reads as a CPU that executes an illegal instruction
 
 `zingzip_map` declares two work-RAM blocks:

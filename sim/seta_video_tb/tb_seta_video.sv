@@ -30,7 +30,7 @@ module tb_seta_video;
 	localparam realtime CLK_PERIOD = 10.4167;   // 96 MHz clk_sys
 	localparam int CE_DIV    = 12;              // -> 8 MHz dot clock
 	localparam int LB_W      = 11;
-	localparam int PAL_MAX   = 2048;
+	localparam int PAL_MAX   = 4096;   // blandia needs 3072; the array must be a power of two
 	localparam int GFX_WORDS = 1 << 22;         // gundhara's 8 MB region,
 	                                            // the largest in the driver
 	localparam int MAX_PIX   = 384 * 256;
@@ -72,7 +72,7 @@ module tb_seta_video;
 	logic  [1:0] ctrl_addr = 0;
 	logic  [7:0] ctrl_wdata = 0;
 	logic        pal_we = 0, pal_uds = 0, pal_lds = 0;
-	logic [10:0] pal_addr = 0;
+	logic [11:0] pal_addr = 0;         // 3072 entries needs twelve bits
 	logic [15:0] pal_wdata = 0;
 
 	wire         rom_req;
@@ -169,7 +169,8 @@ module tb_seta_video;
 		.line_budget(cfgv[C_BUDGET][15:0]),
 		.en_l0(1'b1), .en_l1(1'b1),
 		.l0_bpp6(cfgv[C_L0BPP6][0]), .l1_bpp6(cfgv[C_L1BPP6][0]),
-		.l0_pal_mode(cfgv[C_L0PMODE][1:0]), .l1_pal_mode(cfgv[C_L1PMODE][1:0]),
+		.l0_pal_mode(cfgv[C_L0PMODE][2:0]), .l1_pal_mode(cfgv[C_L1PMODE][2:0]),
+		.has_pal2(cfgv[C_PALENT] > 16'd1536),
 		.l0_pal_bank(cfgv[C_L0PBANK][LB_W-1:0]),
 		.l1_pal_bank(cfgv[C_L1PBANK][LB_W-1:0]),
 		.code_we(code_we), .code_addr(code_addr), .code_wdata(code_wdata),
@@ -315,7 +316,7 @@ module tb_seta_video;
 		@(posedge clk);
 		ctrl_we <= 1'b0;
 	endtask
-	task cpu_pal_write(input [10:0] a, input [15:0] d);
+	task cpu_pal_write(input [11:0] a, input [15:0] d);
 		@(posedge clk);
 		pal_addr <= a; pal_wdata <= d;
 		pal_uds <= 1'b1; pal_lds <= 1'b1; pal_we <= 1'b1;
@@ -418,7 +419,7 @@ module tb_seta_video;
 		end
 		for (i = 0; i < 'h300; i++)      cpu_ylow_write(i[9:0], ylowimg[i]);
 		for (i = 0; i < 8192; i++)       cpu_code_write(i[12:0], codeimg[i]);
-		for (i = 0; i < pal_entries; i++) cpu_pal_write(i[10:0], palimg[i]);
+		for (i = 0; i < pal_entries; i++) cpu_pal_write(i[11:0], palimg[i]);
 		$display("  registers loaded at frame %0d", frame);
 
 		// Let the frame in progress finish, then capture the NEXT whole one.

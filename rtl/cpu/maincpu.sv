@@ -131,7 +131,12 @@ module maincpu (
 	// 0x?00400 on every Group C board, 0x?00000 on every other -- so its
 	// consumer must subtract rather than mask. Exported from here because
 	// this is where pal_base is decided.
-	output logic [10:0] pal_base_w,
+	// THE FINISHED PALETTE INDEX, not a base for seta_core to subtract from.
+	// It used to be `io_addr[11:1] - pal_base_w`, which works only while the
+	// whole palette lives inside one 4 KB page. blandia's second window at
+	// 0x703c00-0x7047ff straddles two, so the subtraction has to happen here
+	// where the full address still exists.
+	output logic [11:0] pal_index_w,
 	// COINS is at in_base+8 on this board, not +4 -- seta_core's input mux
 	// needs it to answer index 4 with COINS instead of P3.
 	output wire         coins_at8,
@@ -265,6 +270,9 @@ module maincpu (
 	logic [23:0] wdog_base;
 	// Thunder & Lightning's protection PAL. NONE on every other board.
 	logic        has_tprot;
+	// blandia's second palette RAM, the one the palette-offset effect reads.
+	// Its 1536 words sit ABOVE the first window's in one array, at 0x600.
+	logic [23:0] pal2_base;
 	// HOW BIG THE INPUT WINDOW IS, and whether COINS sits at +8 rather
 	// than +4. Both are per map: wits reads P3 at +8 and P4 at +0xa, and
 	// kamenrid_map puts COINS at +8 above its own four-byte DSW. A flat
@@ -319,6 +327,7 @@ module maincpu (
 		in_base      = 24'h400000;  dsw_base   = 24'h600000;
 		wdog_base    = NONE;
 		has_tprot    = 1'b0;
+		pal2_base    = NONE;
 		in_span      = 5'd6;        coins_hi   = 1'b0;
 		has_extra    = 1'b0;        extra_base = NONE;
 		prot_base    = NONE;
@@ -634,7 +643,9 @@ module maincpu (
 	logic [23:0] q_a;
 	wire is_wram    = (q_a >= wram_base)  && (q_a <= wram_end);
 	wire is_wram2   = has_wram2 && (q_a >= wram2_base) && (q_a <= wram2_end);
-	wire is_pal     = (q_a >= pal_base)   && (q_a <= pal_end);
+	wire is_pal2    = (pal2_base != NONE) && (q_a >= pal2_base)
+	               && (q_a <  pal2_base + 24'hC00);
+	wire is_pal     = ((q_a >= pal_base) && (q_a <= pal_end)) || is_pal2;
 	wire is_prot    = (q_a >= prot_base)  && (q_a <  prot_base + 24'h400);
 	wire is_spry    = (q_a >= spry_base)  && (q_a <  spry_base + 24'h600);
 	wire is_sprc    = (q_a >= sprc_base)  && (q_a <  sprc_base + 24'h8);
@@ -854,6 +865,9 @@ module maincpu (
 					q_wram      <= is_wram;
 					q_wdog      <= is_wdog;
 					q_tprot     <= is_tprot_r;
+					pal_index_w <= is_pal2
+					             ? (12'h600 + (q_a[12:1] - pal2_base[12:1]))
+					             : (q_a[11:1] - pal_base[11:1]);
 					if (is_tprot_w && acc_write) tprot_reg <= tprot_next;
 					q_wram_addr <= wram_off[19:1];
 					q_wram_wel  <= is_wram && acc_write && !n_lds;
@@ -898,7 +912,7 @@ module maincpu (
 	assign cpu_clkena = cpu_ce && (!acc_active || acc_ready);
 	assign cpu_din    = rd_data;
 
-	assign pal_base_w = pal_base[11:1];
+
 	assign coins_at8  = coins_hi;
 
 	assign rom_addr   = q_rom_addr;

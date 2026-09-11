@@ -58,10 +58,15 @@
 //
 // WHAT IS NOT HERE
 //
-//   draw_tilemap_palette_effect -- blandia's second-palette trick. Phase 5.
-//   The colour-mode bit, vctrl[2] bit 4, selects a second gfx decode that does
-//   not exist for any game in this phase; MAME popmessages and falls back to
-//   0, and so does this.
+//   draw_tilemap_palette_effect -- blandia's second-palette trick. That lives
+//   in the mixer, because what it substitutes is the pixel ALREADY composited
+//   underneath, which this engine cannot see.
+//
+//   The colour-mode bit, vctrl[2] bit 4, is exported rather than acted on. It
+//   selects a second gfx decode, and on every game but blandia that decode
+//   differs only in a palette base the colortable maps to the same place --
+//   so there is nothing to do here. On blandia it changes the palette
+//   arithmetic, which happens in x1_011_index.sv.
 module x1_012 #(
 	parameter int LB_W = 11
 ) (
@@ -83,6 +88,9 @@ module x1_012 #(
 	input  wire  [15:0] vctrl_wdata,
 	input  wire         vctrl_uds, vctrl_lds,
 	output logic [15:0] vctrl_rdata,
+
+	// vctrl[2] bit 4, latched at vblank with the bank bit. See the header.
+	output logic        cmode = 1'b0,
 
 	// ---- configuration -----------------------------------------------------
 	input  wire signed [8:0] xoffs,         // set_xoffsets(flip, noflip)
@@ -181,6 +189,7 @@ module x1_012 #(
 	logic [15:0] vctrl0_lat = '0, vctrl1_lat = '0;
 	always_ff @(posedge clk) if (vblank_rise) begin
 		bank_sel   <= vctrl[2][3];
+		cmode      <= vctrl[2][4];
 		vctrl0_lat <= vctrl[0];
 		vctrl1_lat <= vctrl[1];
 	end

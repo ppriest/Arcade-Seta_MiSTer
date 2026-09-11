@@ -176,7 +176,8 @@ module seta_core (
 	wire        has_l0, has_l1;
 	wire  [2:0] layout;
 	wire        l0_bpp6, l1_bpp6;
-	wire  [1:0] l0_pal_mode, l1_pal_mode;
+	wire  [2:0] l0_pal_mode, l1_pal_mode;
+	wire        has_pal2;
 	wire [10:0] l0_pal_bank, l1_pal_bank;
 	wire signed [8:0] l0_xoffs, l0_xoffs_flip, l1_xoffs, l1_xoffs_flip;
 	wire [10:0] l0_colorbase, l1_colorbase;
@@ -197,6 +198,7 @@ module seta_core (
 		.has_l0(has_l0), .has_l1(has_l1), .layout(layout),
 		.l0_bpp6(l0_bpp6), .l1_bpp6(l1_bpp6),
 		.l0_pal_mode(l0_pal_mode), .l1_pal_mode(l1_pal_mode),
+		.has_pal2(has_pal2),
 		.l0_pal_bank(l0_pal_bank), .l1_pal_bank(l1_pal_bank),
 		.has_x1_bank(has_x1_bank),
 		.vregs_ofs(vregs_ofs),
@@ -257,7 +259,7 @@ module seta_core (
 
 	wire        io_req, io_we, io_uds, io_lds;
 	wire [23:1] io_addr;
-	wire [10:0] pal_base_w;
+	wire [11:0] pal_index_w;
 	wire        coins_at8;
 	wire        io_extra;
 	wire [15:0] io_wdata;
@@ -274,7 +276,7 @@ module seta_core (
 		.wram_addr(wram_addr), .wram_wel(wram_wel), .wram_weh(wram_weh),
 		.wram_wdata(wram_wdata), .wram_rdata(wram_rdata),
 		.io_req(io_req), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata),
-		.pal_base_w(pal_base_w), .coins_at8(coins_at8),
+		.pal_index_w(pal_index_w), .coins_at8(coins_at8),
 		.io_extra(io_extra),
 		.io_uds(io_uds), .io_lds(io_lds), .io_sel(io_sel), .io_rdata(io_rdata),
 		.ipl_level(ipl_level), .iack(iack), .iack_level(iack_level),
@@ -535,7 +537,14 @@ module seta_core (
 	// timing changing. Bisecting a fault that way needs no rebuild.
 	wire spr_valid_g = spr_valid & en_spr;
 
-	seta_video #(.LB_W(11), .PAL_ENTRIES(2048)) u_video (
+	// 4096, AND IT HAS TO BE A POWER OF TWO. blandia needs 3072 -- 1536
+	// through its own palette window and 1536 more through the second one at
+	// 0x703c00 -- but at a depth of 3072 Quartus does not infer an M10K for
+	// the array at all. It built it out of registers: 6497 LABs against the
+	// device's 4191, a fitter error rather than a slow build. 4096 infers
+	// cleanly and costs eight M10K blocks. Every other game uses 512, 1536 or
+	// pairlove's 2048 and leaves the rest idle.
+	seta_video #(.LB_W(11), .PAL_ENTRIES(4096)) u_video (
 		.clk(clk), .reset(reset), .ce_pix(ce_pix),
 		.htotal(htotal), .hs_start(hs_start), .hs_end(hs_end),
 		.hact_start(hact_start), .hact_end(hact_end),
@@ -554,6 +563,7 @@ module seta_core (
 		.en_l0(en_l0), .en_l1(en_l1),
 		.l0_bpp6(l0_bpp6), .l1_bpp6(l1_bpp6),
 		.l0_pal_mode(l0_pal_mode), .l1_pal_mode(l1_pal_mode),
+		.has_pal2(has_pal2),
 		.l0_pal_bank(l0_pal_bank), .l1_pal_bank(l1_pal_bank),
 
 		// ---- the X1-012 tile layer, Phase 2 --------------------------------
@@ -602,10 +612,11 @@ module seta_core (
 		.ctrl_addr(io_addr[2:1]), .ctrl_wdata(io_wdata[7:0]),
 		.ctrl_rdata(ctrl_rdata),
 		.pal_we(io_req && io_we && io_sel[IO_PALETTE]),
-		// OFFSET from the window's base, not the raw address. See
-		// pal_base_w in maincpu.sv: the palette is the one region whose base
-		// is not aligned to its own size.
-		.pal_addr(io_addr[11:1] - pal_base_w), .pal_wdata(io_wdata),
+		// The index arrives finished from maincpu.sv -- see pal_index_w
+		// there. The palette is the one region whose base is not aligned to
+		// its own size, and on blandia there are two windows landing in one
+		// array.
+		.pal_addr(pal_index_w), .pal_wdata(io_wdata),
 		.pal_uds(io_uds), .pal_lds(io_lds), .pal_rdata(pal_rdata),
 		.rom_req(spr_req), .rom_addr(spr_addr),
 		.rom_valid(spr_valid_g), .rom_data(spr_data),

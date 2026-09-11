@@ -3,10 +3,6 @@
 MiSTer FPGA core for [Seta](https://en.wikipedia.org/wiki/Seta_Corporation)'s X1-010 arcade
 hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for the DE10-nano.
 
-**Runs on MiSTer.** All twenty-five built sets run on a DE10-nano and render with correct
-colours. Strike Gunner flickers; the rest are clean to the eye. Per-set results are in the table
-below.
-
 ## Contents
 
 - [Games](#games)
@@ -25,44 +21,39 @@ below.
 
 ## Games
 
-The full scope is the X1-010 mainline of `seta.cpp` — 43 sets across 14 memory-map families.
-Twenty-five are built, in 31 `.mra` files with the clones. Every one is 68000 + X1-001A/X1-002A
-sprites + X1-006 palette + X1-010 sound; what separates the board groups is how many X1-012
-tilemap layers sit behind the sprites, and at what depth.
+The goal is to support the collection of hardware covered by MAME in `seta.cpp` — 43 games and 14 differnet hw permutations.
 
-| Name | Year | Manufacturer | Main CPU | Tilemaps | Notes | Status |
-|-|-|-|-|-|-|-|
-| Wit's | 1989 | Athena (Visco license) | M68000 @ 8 MHz | 0 | Four players | Good |
-| Thunder & Lightning | 1990 | Seta | M68000 @ 8 MHz | 0 | Two sets. Has a protection register | Good |
-| Pairs Love | 1991 | Athena / Nihon System | M68000 @ 8 MHz | 0 | 2048 palette entries, and a write-history block | Good |
-| Block Carnival / Thunder & Lightning 2 | 1992 | Visco | M68000 @ 8 MHz | 0 | Inputs and DSW both move | Good |
-| Ultraman Club | 1992 | Banpresto | M68000 @ 16 MHz | 0 | | Good |
-| SD Gundam Neo Battling | 1992 | Banpresto | M68000 @ 16 MHz | 0 | | Good |
-| Athena no Hatena? | 1993 | Athena | M68000 @ 16 MHz | 0 | 2 MB of sprites, 64 KB of work RAM mirrored | Good |
-| Dragon Unit / Castle of Dragon | 1989 | Athena / Seta | M68000 @ 8 MHz | 1× 4bpp | | Good |
+Blandia and Zombie Raid are not yet supported.
+
+| Name | Year | Manufacturer | Main CPU | Tilemaps | Notes |
+|-|-|-|-|-|-|
+| Wit's | 1989 | Athena (Visco license) | M68000 @ 8 MHz | 0 | Four players |
+| Thunder & Lightning | 1990 | Seta | M68000 @ 8 MHz | 0 | Has protection |
+| Pairs Love | 1991 | Athena / Nihon System | M68000 @ 8 MHz | 0 | 2048 palette entries |
+| Block Carnival / Thunder & Lightning 2 | 1992 | Visco | M68000 @ 8 MHz | 0 | |
+| Ultraman Club | 1992 | Banpresto | M68000 @ 16 MHz | 0 | |
+| SD Gundam Neo Battling | 1992 | Banpresto | M68000 @ 16 MHz | 0 | |
+| Athena no Hatena? | 1993 | Athena | M68000 @ 16 MHz | 0 | 2 MB of sprites, 64 KB of work RAM mirrored |
+| Dragon Unit / Castle of Dragon | 1989 | Athena / Seta | M68000 @ 8 MHz | 1× 4bpp | |
 | Strike Gunner S.T.G | 1991 | Athena / Tecmo | M68000 @ 8 MHz | 1× 4bpp | | Flickers badly |
-| Quiz Kokology | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | | Good |
-| Quiz Kokology 2 | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | | Good |
-| Rezon | 1991 | Allumer | M68000 @ 16 MHz | 2× 4bpp | | Good |
-| Daioh | 1993 | Athena | M68000 @ 16 MHz | 2× 4bpp | The one refresh rate verified on a PCB | Good |
-| Mobile Suit Gundam | 1993 | Banpresto | M68000 @ 16 MHz | 2× 4bpp | 4 MB of sprites, the largest in the driver | Good |
-| War of Aero | 1993 | Yang Cheng | M68000 @ 16 MHz | 2× 4bpp | uPD71054C timer | Good |
-| Oishii Puzzle Ha Irimasenka | 1993 | Sunsoft / Atlus | M68000 @ 16 MHz | 2× 4bpp | `ROMREGION_INVERT` sprites | Good |
-| Kamen Rider Club Battle Race | 1993 | Banpresto | M68000 @ 16 MHz | 2× 4bpp | Timer; both tile layers carved out of one ROM | Good |
-| Eight Forces | 1994 | Tecmo | M68000 @ 16 MHz | 2× 4bpp | 12 MB of ROM | Good |
-| Magical Speed | 1994 | Allumer | M68000 @ 16 MHz | 2× 4bpp | Timer; as Kamen Rider | Good |
-| Zing Zing Zip | 1992 | Allumer / Tecmo | M68000 @ 16 MHz | 6bpp + 4bpp | Its vblank IRQ is level 3; 10922 tiles, the one layer whose count is not a power of two | Good |
-| J. J. Squawkers | 1993 | Athena / Able | M68000 @ 16 MHz | 2× 6bpp | One byte ROM shared between two word ROMs | Good |
-| Mad Shark | 1993 | Allumer | M68000 @ 16 MHz | 2× 6bpp | Both tile regions `ROM_COPY`d out of one 3 MB block | Good |
-| Extreme Downhill | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp | 320 wide; a 4 MB tile region | Good |
-| Sokonuke Taisen Game | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp | Extreme Downhill's machine config; its second tile region is a 256-byte stub | Good |
-| Gundhara | 1995 | Banpresto | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, the largest in the driver; the only set with a second work-RAM block | Good |
+| Quiz Kokology | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
+| Quiz Kokology 2 | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
+| Rezon | 1991 | Allumer | M68000 @ 16 MHz | 2× 4bpp | |
+| Daioh | 1993 | Athena | M68000 @ 16 MHz | 2× 4bpp |  |
+| Mobile Suit Gundam | 1993 | Banpresto | M68000 @ 16 MHz | 2× 4bpp | 4 MB of sprites |
+| War of Aero | 1993 | Yang Cheng | M68000 @ 16 MHz | 2× 4bpp | uPD71054C timer |
+| Oishii Puzzle Ha Irimasenka | 1993 | Sunsoft / Atlus | M68000 @ 16 MHz | 2× 4bpp |  |
+| Kamen Rider Club Battle Race | 1993 | Banpresto | M68000 @ 16 MHz | 2× 4bpp | Timer |
+| Eight Forces | 1994 | Tecmo | M68000 @ 16 MHz | 2× 4bpp | 12 MB of ROM |
+| Magical Speed | 1994 | Allumer | M68000 @ 16 MHz | 2× 4bpp | Timer; as Kamen Rider |
+| Zing Zing Zip | 1992 | Allumer / Tecmo | M68000 @ 16 MHz | 6bpp + 4bpp | vblank IRQ is level 3 |
+| J. J. Squawkers | 1993 | Athena / Able | M68000 @ 16 MHz | 2× 6bpp |  |
+| Mad Shark | 1993 | Allumer | M68000 @ 16 MHz | 2× 6bpp |  |
+| Extreme Downhill | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp | 320 wide; a 4 MB tile region |
+| Sokonuke Taisen Game | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp |  |
+| Gundhara | 1995 | Banpresto | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, a second work-RAM block |
 
-The two-layer boards also need the X1-011's full order resolution and, for five of them, a
-uPD71054C timer. The 6bpp layers add a third: their tiles are 24 bits per four pixels, and the
-palette address is formed by an adder rather than a concatenation — see
-[`rtl/video/x1_011_index.sv`](rtl/video/x1_011_index.sv). What remains is `blandia` and
-`zombraid`.
+
 
 ## Hardware
 
@@ -70,13 +61,13 @@ palette address is formed by an adder rather than a concatenation — see
 |-|-|-|
 | X1-001A + X1-002A | Sprites, and the "floating tilemap" made of sprite columns | Written, verified against MAME |
 | X1-006 | Palette, `xRRRRRGGGGGBBBBB` | Written |
-| X1-007 | Video blanking | Written (timing is a hypothesis) |
-| X1-010 | 16-voice PCM / wavetable sound | Written, verified sample for sample |
+| X1-007 | Video blanking | Written |
+| X1-010 | 16-voice PCM / wavetable sound | Written, verified against MAME |
 | X1-004 | Input handling | Folded into the address decode |
-| X1-005 / X1-009 | NVRAM | No protection is emulated in `seta.cpp`; not needed in Group A |
-| X1-011 | Graphics mixing | Written — full layer/sprite order resolution |
-| X1-012 | Tilemaps | Written, verified against MAME across 24 runs |
-| uPD71054C | Programmable interval timer (8254) | Channel 0, modes 0/2/3 — all any board wires |
+| X1-005 / X1-009 | NVRAM |  |
+| X1-011 | Graphics mixing | Written |
+| X1-012 | Tilemaps | Written, verified against MAME |
+| uPD71054C | Programmable interval timer (8254) |  |
 
 Some links discussing the hardware:
 * https://www.arcade-museum.com/manuf/Seta.html
@@ -84,12 +75,9 @@ Some links discussing the hardware:
 ## History
 
 * **`Arcade-Seta_20260911.rbf`**
-  * All twenty sets run: War of Aero's work RAM widened to the 64 KB its map declares, and
-    Mobile Suit Gundam's sprites restored by fixing the `setac_eof` buffer copy
-  * The renderer samples sprite RAM, scroll, tilemap bank and the mixer's order register at
-    vblank, which is what fixed the mid-frame tear on Daioh and Eight Forces
-  * DIP defaults and the six P1/P2 input layouts checked against MAME's `-listxml`; Kamen
-    Rider's Country jumper and Daioh's buttons 4-6 reach the game for the first time
+  * All twenty sets run
+  * Tilemap tearing fixed
+  * Inputs/DIPs all reviewed and corrected (6 button Daioh)
 * **`Arcade-Seta_20260910.rbf`**
   * **Alpha release**
   * Support for a bunch of games in varying states of running
@@ -100,89 +88,19 @@ Some links discussing the hardware:
 * Take the `*.mra` files from `releases/` and subdirs and put them in `_Arcade`
 * Put the MAME merged or split ROMs in `games/mame`
 
-## Building
-
-Two Quartus revisions from one source. `Seta_stp` defines `DEBUG_ISSP`: it builds the six ISSP
-probes and shows the OSD's Debug page, where Sprites, Tilemap 0 and Tilemap 1 can each be blanked
-at the mixer -- the engines keep running, so turning a layer off changes nothing else in the
-picture. `Seta` compiles both out.
-
-```
-python scripts/build_staged.py               # Seta_stp, the default
-python scripts/build_staged.py --rev Seta    # the release build
-python scripts/deploy.py --rbf-only --log build/q_staged.log \
-    --rbf build/output_files/Seta_stp.rbf --sta build/output_files/Seta_stp.sta.summary
-```
-
-Builds run in a git worktree at `build/` from HEAD, not in the tree. See `docs/WORKFLOW.md`.
-
-**The fitter seed is part of the build.** Build 10000019 and build 10000020 are the same commit at
-seeds 2 and 7: seed 2 reported every clock domain positive (+0.950 on clk_sys) and killed four
-games in boot, seed 7 has a worse worst slack (+0.446) and runs all twenty. Neither `Seta.sdc` nor
-`sys/sys_top.sdc` constrains an SDRAM pin, so those paths are analysed on trust. Both `.qsf` files
-pin `SEED 7`, and `build/BUILT_COMMIT` records the seed each build used. If a build regresses games
-the diff cannot reach, rebuild the same commit at another seed before bisecting the source.
-
 ## Status
 
-Hardware results, every set launched on a DE10-nano in turn, with the CPU probe read and a
-screenshot taken:
-
-| group | tilemaps | outcome |
-|-|-|-|
-| A | 0 | 7 of 7 play |
-| B | 1× 4bpp | 4 of 4 play; Strike Gunner flickers |
-| C | 2× 4bpp | 8 of 8 play |
-| D | 6bpp | 6 of 6 play |
-
-What is built and verified in simulation:
-
-* **M68000** — TG68KdotC_Kernel driven directly, with address decode for all **14** of the memory
-  maps in scope. Boot-diffed against MAME's own bus trace for 38 of 38 sets.
-* **X1-001 sprites** (`rtl/video/x1_001.sv`) — 512 foreground entries plus the 16-column floating
-  tilemap, rendered per scanline into a double-buffered 512-pixel line buffer. Front-to-back with
-  a written bit, so running out of time drops the bottom-most sprites rather than the ones on top.
-  One 64-bit SDRAM granule per 16-pixel row, via a download-time layout permutation. Includes
-  `setac_eof` sprite buffering.
-* **X1-012 tilemaps** (`rtl/video/x1_012.sv`) — one or two 4bpp layers, per scanline into a
-  double-buffered line buffer, four granule reads per tile row. Pixel-identical to the model on
-  24 of 24 fixture runs, on frames that contain flipped tiles.
-* **X1-011 mixing** (`rtl/video/seta_video.sv`) — the layer swap and the sprites-above-front bit
-  out of `vregs`, resolving sprite and both layers per pixel.
-* **X1-010 sound** (`rtl/sound/x1_010.sv`) — 16 voices, PCM and wavetable, written from MAME
-  because no FPGA implementation of this chip exists anywhere. Sample banking for the boards that
-  window their samples through `vregs`.
-* **uPD71054C** (`rtl/cpu/seta_pit.sv`) — channel 0, binary, modes 0/2/3. Everything else asserts
-  in simulation rather than quietly running at the wrong rate.
-* **Video path** — palette, timing generator, the two scanline interrupts, and HDMI rotation
-  (Auto from the driver's `ROT`, or forced CW/CCW) at a 4:3 physical aspect.
-* **Interrupts** — both of `seta.cpp`'s clearing rules: HOLD_LINE, cleared when the CPU
-  acknowledges, and ASSERT_LINE, cleared only by the board's own write.
-* **SDRAM backend** — every runtime ROM on one chip in five layouts (4 MB through 17 MB), ports
-  assigned by deadline, with the sprite layout permutation applied on the way in.
-* **`.mra` generation** — all 31 files, each proved byte for byte against its `ROM_START`.
-
 Known issues:
+* Eight Forces - Check intro against MAME. Sprites too big?
+* Extreme Downhill - boot screen background off? No sound.
+* Mad Shark - Sprite glitching - reading whilst attributes being written
+* Mobile Suit Gundam - resets in game (protection?)
+* Oishii Puzzle - some broken tiles
+* Sokonuke - No sound
+* Zing Zing Zip - Occasionally sprite glitching
+* JJ Squawkers - Reporting error at boot
 
-* **Strike Gunner flickers.** Cause unknown.
-* **Sprites clip wrongly at the bottom edge** — one entering from the lowest scanline appears all
-  at once. Affects every game. The sprite engine matches MAME across 90 simulation runs *inside the
-  visible area*, so this is at the boundary of the rendered region. Parked.
-* **Screen flip in the tilemap is unresolved.** Per-tile and per-sprite flipping are verified;
-  whole-screen flip is not, because MAME's own `seta.cpp` TODO says its tilemap flip is kludged and
-  wrong for three of the sets in scope. There is no reference to check against short of a PCB
-  video. Parked; see `docs/MAME_DIVERGENCE.md`.
-* **The screen timing is derived, not measured.** MAME publishes no raw timings for this hardware
-  and declares a bare 60 Hz for 28 sets. This core runs 512 × 272 at 8 MHz — 57.4449 Hz — for
-  every set, 0.043% from `daioh`'s 57.42, the one rate marked "verified on PCB". All 33 machine
-  configs in the driver declare the same total, so the narrower and shorter games draw a smaller
-  window inside the same raster rather than running at a different rate.
-* **Some behaviour follows MAME rather than hardware.** `blockcar`'s IRQ 3 is asserted at vblank
-  with no acknowledge mapped anywhere, so it stays pending forever and the game must mask it; the
-  X1-010 carries MAME's own `if (freq == 0) freq = 4` hack, which its source says is broken for
-  another game. Both are reproduced deliberately and flagged in the RTL.
-  `docs/MAME_DIVERGENCE.md` keeps the list, in two halves: what MAME admits is a hack, and where
-  this core deliberately differs.
+See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
 
 ### Todo
 
@@ -203,9 +121,11 @@ Known issues:
 - [x] Phase 4: the 6bpp families, and the 24-bit `.mra` interleave they need. Six of six run;
       both palette-remap families are pixel-identical to MAME on a whole frame in simulation
 - [ ] Phase 5: `blandia`'s palette-offset effect, `zombraid`'s light gun and battery RAM
-- [ ] `hiscore.v` support, CRT offset, savestates
-- [x] `_alternatives` for the clones that share a parent's board config (`daioha`, `rezono`,
-      `msgundam1`)
+- [ ] CRT offset -- a per-game H/V shift in the OSD, so the picture can be centred on a
+      real monitor without touching the core's own timing
+- [ ] `hiscore.v` support, savestates
+- [x] `_alternatives` for the six clones that share a parent's board config (`daioha`,
+      `rezono`, `msgundam1`, `thunderla`, `gundharac`, `jjsquawko`)
 - [ ] `daiohc` — the `wrofaero` machine config with `daioh`-sized graphics, needs its own arm
 - [ ] The three 14.318181 MHz games (`orbs`, `keroppi`, `krzybowl`) need a Bresenham clock enable
 
