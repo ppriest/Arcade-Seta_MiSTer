@@ -128,10 +128,28 @@ See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, a
 
 ### Todo
 
+- [x] Close timing on every clock
+- [x] Run on a DE10-nano
+- [x] Phase 2: the X1-012 tilemap engine, one layer (`drgnunit`, `stg`, `qzkklogy`, `qzkklgy2`)
+- [x] Phase 3: two layers, the X1-011 mixer, the PIT, X1-010 sample banking
+- [x] Run Groups B and C on a DE10-nano
+- [x] Group C on hardware: 8 of 8
+- [x] War of Aero's illegal instruction -- its work RAM was a quarter of the declared size
+- [x] Mobile Suit Gundam's sprites -- the `setac_eof` copy read the wrong control byte and moved
+      the wrong distance
+- [x] The mid-frame tear on Daioh and Eight Forces
+- [ ] Strike Gunner's flicker
+- [x] DIP switches checked against MAME's own `-listxml`, defaults included
+- [x] Inputs: six P1/P2 layouts, daioh's EXTRA buttons, counts checked against MAME
+- [ ] Screen flip in the tilemap, and the bottom-edge sprite clip
+- [x] Phase 4: the 6bpp families, and the 24-bit `.mra` interleave they need. Six of six run;
+      both palette-remap families are pixel-identical to MAME on a whole frame in simulation
 - [ ] Phase 5: `blandia`'s palette-offset effect, `zombraid`'s light gun and battery RAM
 - [ ] CRT offset -- a per-game H/V shift in the OSD, so the picture can be centred on a
       real monitor without touching the core's own timing
 - [ ] `hiscore.v` support, savestates
+- [x] `_alternatives` for the six clones that share a parent's board config (`daioha`,
+      `rezono`, `msgundam1`, `thunderla`, `gundharac`, `jjsquawko`)
 - [ ] `daiohc` — the `wrofaero` machine config with `daioh`-sized graphics, needs its own arm
 - [ ] The three 14.318181 MHz games (`orbs`, `keroppi`, `krzybowl`) need a Bresenham clock enable
 
