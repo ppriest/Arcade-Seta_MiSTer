@@ -1509,6 +1509,17 @@ accesses. Model the chip, not the window (`has_xram`, `has_tails` in
 `maincpu.sv`), and treat MAME's `.ram()` lines around a device as the size of
 the physical SRAM.
 
+THE CHIP'S SIZE VARIES BY BOARD, and the second instance of this lesson was
+J. J. Squawkers' boot screen: PALETTE RAM..NG! ERROR ADDRESS 704000.
+kamenrid_map and magspeed_map declare 16 KB behind the palette; rezon_map,
+zingzip_map and daioh_map declare `0x701000-0x70ffff`, a 64 KB chip, and
+jjsquawk's test walks all of it. A MAME write tap on all six sets sharing the
+map (jjsquawk, zingzip, rezon, wrofaero, gundhara, madshark, 1500 frames
+each) found only jjsquawk's power-on test writing above 0x704000 and no game
+writing there afterwards -- so the extra 48 KB of M10K exists to let one
+self-test pass. It is still what the board has, and `xram_span` is now per
+board.
+
 ### [Seta] A bidirectional bus captured into four lane registers gets one I/O register and three lottery tickets
 
 Every build after a known-good one took an illegal or line-A instruction in
@@ -1553,7 +1564,18 @@ control: one cycle early, the bench fails exactly as it must -- lane 0 reads
 Confirmed on hardware: the rebuilt core reads 0 of 24 granules wrong on the
 same oracle that gave 14, 11 and 6 of 24 on the three bad builds, and
 thunderl, zingzip and stg -- the sets that died in their RAM tests -- boot
-and render.
+and render. The fit report shows all sixteen `dq_in[n]` packed into I/O
+cells and no `dout[n]` packed at all.
+
+STA then measured the margin the lottery had been played against. With
+`SDRAM_DQ` constrained and `dq_in` in the I/O cell, `SDRAM_DQ[8] -> dq_in[8]`
+has 0.000 ns of interconnect and the data arrives 9.2 ns AFTER the clk_sys
+edge a single-cycle check assumes -- beat 0 is captured on the edge after
+that, which is what the controller's `+2` says. Against the right edge the
+worst of the sixteen is +1.078 ns setup, +11.8 ns hold; the SDRAM outputs are
++1.322 ns single-cycle. `set_multicycle_path -setup 2 -hold 1` from the
+SDRAM_CLK port clock to `dq_in[*]` records it (Seta.sdc). A one-nanosecond
+margin is not much, but it is now a property of the board, not of the fit.
 
 Three things to keep:
 

@@ -17,7 +17,7 @@
             <part name="us001001.u3" crc="ab923052" map="01"/>
             <part name="rezon_1_p.u4" crc="9ed32f8c" map="10"/>
         </interleave>
-        <part repeat="786432">FF</part>
+        <part repeat="786432">00</part>
         <interleave output="16">
             <part name="us001004.103" crc="54871c7c" map="01"/>
             <part name="us001003.102" crc="1ac3d272" map="10"/>

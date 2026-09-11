@@ -16,7 +16,7 @@
         <interleave output="16">
             <part name="ss1u200.v10" crc="f5e53baf" map="12"/>
         </interleave>
-        <part repeat="524288">FF</part>
+        <part repeat="524288">00</part>
         <interleave output="16">
             <part name="ss1u201.v10" crc="7a7ff5ae" map="12"/>
         </interleave>

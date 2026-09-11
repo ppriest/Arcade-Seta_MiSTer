@@ -23,7 +23,8 @@ hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for
 
 The goal is to support the collection of hardware covered by MAME in `seta.cpp`. Minus bootlegs on differnet hardware, and betting hardware.
 
-Blandia and Zombie Raid are not yet supported.
+Blandia runs; its palette-offset effect is not yet verified against MAME (no attract frame uses
+it, so it needs a gameplay capture). Zombie Raid is not yet supported.
 
 | Name | Year | Manufacturer | Main CPU | Tilemaps | Notes |
 |-|-|-|-|-|-|
@@ -66,18 +67,18 @@ Blandia and Zombie Raid are not yet supported.
 | Mad Shark (bootleg) | OKI M6295 |
 | Triple Fun | OKI M6295 |
 | Sum-eoitneun Deongdalireul Chat-ara! | OKI M6295 |
-| J. J. Squawkers (bootleg) | X1-010 kept, own memory map |
-| J. J. Squawkers (bootleg, Blandia Conversion) | X1-010 kept, own memory map |
-| Simpson Junior (bootleg of J. J. Squawkers) | X1-010 kept, own memory map |
-| Mobile Suit Gundam (bootleg) | X1-010 kept, own memory map |
+| J. J. Squawkers (bootleg) | X1-010, own memory map |
+| J. J. Squawkers (bootleg, Blandia Conversion) | X1-010, own memory map |
+| Simpson Junior (bootleg of J. J. Squawkers) | X1-010, own memory map |
+| Mobile Suit Gundam (bootleg) | X1-010, own memory map |
 | Jockey Club (v1.18) | Betting hardware: ACIA6850 serial, hoppers |
 | International Toote (Germany, P523.V01) | Betting hardware |
 | International Toote II (v1.24, P387.V01) | Betting hardware |
 | Sport of Kings (France, P436.08) | Betting hardware |
 | Gran Derby (Spanish hack of Jockey Club) | Betting hardware |
-| Ultra Toukon Densetsu (Japan) | X1-010 **plus** a Z80 and YM3438 |
+| Ultra Toukon Densetsu (Japan) | X1-010 + Z80 and YM3438 |
 | Crazy Fight | YM3812 + OKI M6295 |
-| Daioh (prototype, earliest) | `MACHINE_NOT_WORKING`: "needs correct program ROMs" |
+| Daioh (prototype, earliest) | missing program ROMs |
 
 ## Hardware
 
@@ -115,41 +116,21 @@ Some links discussing the hardware:
 ## Status
 
 Known issues:
-* **Eight Forces** - Check intro against MAME. Sprites too big?
-* **Extreme Downhill** - boot screen background off? No sound.
+* **Extreme Downhill** - boot screen background off?
 * **Mad Shark** - Sprite glitching - reading whilst attributes being written
 * **Mobile Suit Gundam** - resets in game (protection?)
 * **Oishii Puzzle** - some broken tiles
-* **Sokonuke Taisen** - No sound
 * **Zing Zing Zip** - Occasionally sprite glitching
-* **JJ Squawkers** - Reporting error at boot
 
 See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
 
 ### Todo
 
-- [x] Close timing on every clock
-- [x] Run on a DE10-nano
-- [x] Phase 2: the X1-012 tilemap engine, one layer (`drgnunit`, `stg`, `qzkklogy`, `qzkklgy2`)
-- [x] Phase 3: two layers, the X1-011 mixer, the PIT, X1-010 sample banking
-- [x] Run Groups B and C on a DE10-nano
-- [x] Group C on hardware: 8 of 8
-- [x] War of Aero's illegal instruction -- its work RAM was a quarter of the declared size
-- [x] Mobile Suit Gundam's sprites -- the `setac_eof` copy read the wrong control byte and moved
-      the wrong distance
-- [x] The mid-frame tear on Daioh and Eight Forces
-- [ ] Strike Gunner's flicker
-- [x] DIP switches checked against MAME's own `-listxml`, defaults included
-- [x] Inputs: six P1/P2 layouts, daioh's EXTRA buttons, counts checked against MAME
-- [ ] Screen flip in the tilemap, and the bottom-edge sprite clip
-- [x] Phase 4: the 6bpp families, and the 24-bit `.mra` interleave they need. Six of six run;
-      both palette-remap families are pixel-identical to MAME on a whole frame in simulation
-- [ ] Phase 5: `blandia`'s palette-offset effect, `zombraid`'s light gun and battery RAM
+- [ ] Phase 5: `blandia`'s palette-offset effect verified against a gameplay capture
+- [ ] Phase 5: `zombraid`'s light gun and battery RAM
 - [ ] CRT offset -- a per-game H/V shift in the OSD, so the picture can be centred on a
       real monitor without touching the core's own timing
 - [ ] `hiscore.v` support, savestates
-- [x] `_alternatives` for the six clones that share a parent's board config (`daioha`,
-      `rezono`, `msgundam1`, `thunderla`, `gundharac`, `jjsquawko`)
 - [ ] `daiohc` — the `wrofaero` machine config with `daioh`-sized graphics, needs its own arm
 - [ ] The three 14.318181 MHz games (`orbs`, `keroppi`, `krzybowl`) need a Bresenham clock enable
 

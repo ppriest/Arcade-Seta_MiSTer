@@ -16,7 +16,7 @@
         <interleave output="16">
             <part name="fa002002.u25" crc="dee3b083" map="12"/>
         </interleave>
-        <part repeat="524288">FF</part>
+        <part repeat="524288">00</part>
         <interleave output="16">
             <part name="fa001001.u20" crc="fca139d0" map="12"/>
         </interleave>

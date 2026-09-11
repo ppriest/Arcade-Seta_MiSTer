@@ -158,6 +158,17 @@ SIXBPP_GAMES = {
         rot=270, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=6,
         l0_pal_mode="masked", l1_pal_mode="masked",
         l0_pal_bank=0x400, l1_pal_bank=0x200),
+    # blandia: both layers 6bpp; the colour mode is vctrl[2] bit 4 at run
+    # time and the RTL promotes "bland0" to bland1 from it, so the config
+    # names mode 0. set_xoffsets(6, -2) on both layers, set_fg_xoffsets(8, 0).
+    # 3072 palette entries: 1536 of its own and the second palette RAM the
+    # offset effect reads, which the capture ships as blandia_palette2.bin.
+    "blandia": _6bpp_cfg(
+        rot=0, fg_xoffs=(8, 0), l0_bpp=6, l1_bpp=6,
+        l0_xoffsets=(6, -2), l1_xoffsets=(6, -2),
+        l0_pal_mode="bland0", l1_pal_mode="bland0",
+        l0_pal_bank=0x400, l1_pal_bank=0x200,
+        palette_entries=3072),
     "jjsquawk": _6bpp_cfg(
         rot=0, fg_xoffs=(1, 1), l0_bpp=6, l1_bpp=6,
         # set_xoffsets(-1, -1) on both layers.

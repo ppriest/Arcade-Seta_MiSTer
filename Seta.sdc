@@ -119,6 +119,21 @@ create_generated_clock -name sdram_clk_pin -source [get_pins -compatibility_mode
 set_input_delay -clock sdram_clk_pin -max [expr {$sdram_tAC + $sdram_board}]     [get_ports {SDRAM_DQ[*]}]
 set_input_delay -clock sdram_clk_pin -min [expr {$sdram_tOH + $sdram_board_min}] [get_ports {SDRAM_DQ[*]}]
 
+# THE FIRST BEAT IS CAPTURED TWO clk_sys EDGES AFTER THE MEMORY'S LAUNCH EDGE,
+# not one. sdram.sv registers the READ command on a clk_sys edge; the memory
+# sees it half a period later (SDRAM_CLK is the same 96 MHz at 180 degrees),
+# drives the first word CL=2 memory clocks after that, and dq_in captures it
+# on the clk_sys edge after the one STA would assume. Measured on the fit this
+# was calibrated against: data arrival 28.0 ns against a single-cycle
+# requirement of 18.8 (-9.2 ns), against the second edge +0.65 ns. That
+# sub-nanosecond margin on beat 0 is the whole reason a capture register
+# placed in the fabric, with 5-10 ns of routing in front of it, failed on
+# hardware while an I/O-cell register passes. Hold is checked against the
+# first edge, as it must be.
+set sdram_dq_regs [get_registers {*sdram:u_sdram|dq_in[*]}]
+set_multicycle_path -setup 2 -from [get_clocks {sdram_clk_pin}] -to $sdram_dq_regs
+set_multicycle_path -hold  1 -from [get_clocks {sdram_clk_pin}] -to $sdram_dq_regs
+
 # Writes and commands: the memory samples on its clock edge.
 set sdram_outs [get_ports {SDRAM_A[*] SDRAM_BA[*] SDRAM_DQ[*] SDRAM_DQML SDRAM_DQMH SDRAM_nRAS SDRAM_nCAS SDRAM_nWE SDRAM_nCS SDRAM_CKE}]
 set_output_delay -clock sdram_clk_pin -max [expr {$sdram_tDS + $sdram_board}]      $sdram_outs

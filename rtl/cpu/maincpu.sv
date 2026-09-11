@@ -270,6 +270,15 @@ module maincpu (
 	logic [23:0] wdog_base;
 	// Thunder & Lightning's protection PAL. NONE on every other board.
 	logic        has_tprot;
+	// THE PALETTE SRAM IS A CHIP, AND ITS SIZE VARIES. kamenrid_map and
+	// magspeed_map declare 16 KB behind the palette (0x?01000-0x?03fff);
+	// rezon_map, zingzip_map and daioh_map declare 64 KB (0x701000-0x70ffff).
+	// The power-on test walks the whole chip. jjsquawk's reports PALETTE RAM
+	// NG at 0x704000 -- the first address past a 16 KB window -- and no game
+	// on either map writes above 0x704000 after its test (measured with a
+	// MAME write tap on all six sets), so the extra 48 KB exists to let the
+	// test pass, which is still the honest thing to give it.
+	logic [23:0] xram_span;
 	// blandia's second palette RAM, the one the palette-offset effect reads.
 	// Its 1536 words sit ABOVE the first window's in one array, at 0x600.
 	logic [23:0] pal2_base;
@@ -327,6 +336,7 @@ module maincpu (
 		in_base      = 24'h400000;  dsw_base   = 24'h600000;
 		wdog_base    = NONE;
 		has_tprot    = 1'b0;
+		xram_span    = 24'h4000;
 		pal2_base    = NONE;
 		in_span      = 5'd6;        coins_hi   = 1'b0;
 		has_extra    = 1'b0;        extra_base = NONE;
@@ -338,6 +348,7 @@ module maincpu (
 		case (board)
 			BOARD_TWO_LAYER: begin                   // rezon_map / wrofaero_map
 				has_xram = 1'b1;
+				xram_span = 24'h10000;               // the 64 KB chip
 				has_tails = 1'b1;
 				// wrofaero_map maps the uPD71054C at 0xd00000 and acks IPL 4
 				// at 0xf00000. rezon has neither, and a NONE base leaves
@@ -347,6 +358,7 @@ module maincpu (
 
 			BOARD_DAIOH: begin                       // daioh_map
 				has_xram = 1'b1;
+				xram_span = 24'h10000;               // the 64 KB chip
 				has_tails = 1'b1;
 				// ROM IS 1 MB HERE, NOT 2. daioh_map is
 				//   map(0x000000, 0x0fffff).rom()
@@ -369,6 +381,13 @@ module maincpu (
 				has_tails = 1'b1;
 				pal_base = 24'h600400; pal_end = 24'h600FFF;
 				dsw_base = 24'h400008;
+				// THE SOUND CHIP IS AT 0xE00000 ON THIS MAP, not the 0xC00000
+				// the defaults carry:
+				//   map(0xe00000, 0xe03fff).rw(m_x1snd, word_r, word_w)
+				// Left at the default, every X1-010 write from Extreme
+				// Downhill and Sokonuke Taisen decoded to nothing -- both
+				// games ran, rendered, and were silent, with w_x1snd at 0.
+				x1_base  = 24'hE00000;
 				// THE WATCHDOG READ IS LOAD-BEARING. extdwnhl_map is
 				//   map(0x40000c, 0x40000d).r(extdwnhl_watchdog_r)
 				//                          .w(watchdog reset16_w)
@@ -720,7 +739,7 @@ module maincpu (
 	                         tp[2]};                         // 0
 	logic [7:0] tprot_reg;
 	wire [23:0] xram_base = pal_base - 24'h400;
-	wire is_xram    = has_xram && (q_a >= xram_base) && (q_a < xram_base + 24'h4000);
+	wire is_xram    = has_xram && (q_a >= xram_base) && (q_a < xram_base + xram_span);
 
 	// =====================================================================
 	// Bus sequencing

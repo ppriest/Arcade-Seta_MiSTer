@@ -895,6 +895,14 @@ arranges the loads differently -- a shared byte ROM, a distant ROM_CONTINUE, a R
 **Phase 5 — the two remaining specials.** `blandia` (second palette bank, palette-offset effect,
 colour mode 0) and `zombraid` (ADC0834 light gun, battery-backed RAM).
 
+blandia status: the board arm, both colour modes, the second palette window and the offset effect
+are in the RTL; both `.mra` files prove byte-for-byte; the intro at frame 900 -- two 6bpp layers in
+colour mode 0 -- is pixel-identical to MAME in `seta_video_tb`; and on a DE10-nano the intro scene
+renders and samples play. What is NOT yet verified against MAME is the offset effect itself: a
+write tap over 6300 frames of attract found no layer-1 tile with colour 31, so no attract frame
+exercises it, and `blandia_palette2.bin` is all zeros there too. It needs a gameplay capture. Both
+sets stay in `HELD_BACK_SETS` until that and a play-through are done.
+
 **Phase 6 — polish.** `hiscore.v`, CRT offset, pause, savestates. CRT offset is a per-game
 H/V shift exposed in the OSD and applied at the video output, not in the core's timing --
 the point is to centre the picture on a real monitor without changing what the game sees. Savestates should be scoped

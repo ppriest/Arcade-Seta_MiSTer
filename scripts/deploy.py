@@ -49,7 +49,9 @@ SUCCESS = "Full Compilation was successful"
 # Sets that are built but cannot yet run are held back from the device, so a
 # deploy never invites launching a game that is known not to work. Fill this
 # in as phases land -- name the .mra stems, matching build_mra.py's output.
-HELD_BACK_SETS = ()
+# blandia and blandiap: the .mra files prove byte-for-byte and the board arm is
+# in the RTL, but the set has not yet run on a DE10-nano.
+HELD_BACK_SETS = ("Blandia", "Blandia (prototype)")
 
 
 def load_env(path):

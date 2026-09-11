@@ -43,6 +43,13 @@ def region_size(body, want):
     return None
 
 
+def region_erase_ff(body, region):
+    """True when the ROM_REGION carries ROMREGION_ERASEFF (or ERASEVAL(0xff))."""
+    m = re.search(r'ROM_REGION\(\s*[^,]+,\s*"' + re.escape(region) + r'",\s*([^)]*)\)', body)
+    flags = m.group(1) if m else ""
+    return "ERASEFF" in flags or "ERASEVAL(0xff)" in flags.lower().replace(" ", "")
+
+
 def region_inverted(body, want):
     """Whether ROM_REGION carries ROMREGION_INVERT for this region.
 
@@ -115,6 +122,14 @@ def region_image(setname, region, all_blocks=None):
         # beside it, and MAME still instantiates a second tile layer over it.
         # An erased region is zeros, which is what the padding below writes.
         return bytes(size), size, str(zip_for(setname, all_blocks)[0])
+    # HOLES ARE ZERO-FILLED (build() in build_maincpu_hex.py), which is what
+    # MAME gives a region declared without an erase flag. A region declared
+    # ROMREGION_ERASEFF (daiohp2's maincpu, not yet built) would hold 0xFF in
+    # every byte its loads skip, and nothing here reproduces that yet. Refuse,
+    # rather than assemble a plausible wrong image.
+    if region_erase_ff(body, region):
+        sys.exit(f"{setname}/{region}: ROMREGION_ERASEFF hole fill is not "
+                 f"implemented -- holes are zero here, MAME's would be 0xFF")
     zippath, key = zip_for(setname, all_blocks)
 
     # ROM_COPY takes its bytes from ANOTHER region of the same set, so that

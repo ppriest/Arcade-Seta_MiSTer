@@ -17,7 +17,7 @@
             <part name="fe2001001.u3" crc="921c9762" offset="0x0" length="0x40000" map="01"/>
             <part name="u4.4a" crc="0227a2be" offset="0x0" length="0x40000" map="10"/>
         </interleave>
-        <part repeat="524288">FF</part>
+        <part repeat="524288">00</part>
         <interleave output="16">
             <part name="fe2001001.u3" crc="921c9762" offset="0x40000" length="0x40000" map="01"/>
             <part name="u4.4a" crc="0227a2be" offset="0x40000" length="0x40000" map="10"/>

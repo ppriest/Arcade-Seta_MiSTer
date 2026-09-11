@@ -728,11 +728,12 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
             # with nothing between, and without this the groups concatenate
             # and every byte after the gap lands 0xc0000 early.
             if len(blob) < g["dest"]:
-                # A HOLE IS 0xFF, the tail is 0x00. build_region.py pads holes
-                # the way an unprogrammed EPROM reads and the tail the way
-                # MAME zero-fills a region it allocates; both have to match or
-                # the cross-check fails on the padding rather than the data.
-                blob += bytes([0xFF]) * (g["dest"] - len(blob))
+                # A HOLE IS ZERO, like the tail: the region as MAME allocates
+                # it, and the same byte ensure() in build_maincpu_hex.py and
+                # the <part> pad below write. (It was 0xFF here and in both of
+                # them until blandia's gfx2, where MAME's own memory showed
+                # the never-loaded word lanes holding 0.)
+                blob += bytes(g["dest"] - len(blob))
             elif len(blob) > g["dest"]:
                 sys.exit(f"{setname}/{region}: {g['parts']} starts at "
                          f"{g['dest']:#x} but {len(blob):#x} bytes are already "
@@ -828,7 +829,10 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         rbase = bases[BASE_NAME[region]]
         for g in all_groups[region]:
             if pos - rbase < g["dest"]:
-                lines.append(f'        <part repeat="{g["dest"] - (pos - rbase)}">FF</part>')
+                # 00: a gap MAME's loader never writes reads as the zero it
+                # allocated. ensure() in build_maincpu_hex.py and the truth
+                # pad above say the same; the three must agree.
+                lines.append(f'        <part repeat="{g["dest"] - (pos - rbase)}">00</part>')
                 pos = rbase + g["dest"]
             if g["kind"] == "fill24":
                 tr = group_truth_from(rs, g)

@@ -456,15 +456,15 @@ module seta_core (
 	// have one (has_xram). The palette proper is 0x400-0xFFF of it and is
 	// ALSO written into seta_palette (IO_PALETTE is set alongside IO_XRAM
 	// there); reads come from here, so the whole chip reads back.
-	logic [15:0] xram [0:8191];
+	logic [15:0] xram [0:32767];   // 64 KB: the largest chip any map declares
 	logic [15:0] xram_q;
 	wire         w3_we = io_req && io_we && io_sel[IO_XRAM];
 	logic        n3_we, n3_lds, n3_uds;
-	logic [12:0] n3_addr;
+	logic [14:0] n3_addr;         // 32K words -- see the xram declaration
 	logic [15:0] n3_wdata;
 	always_ff @(posedge clk) begin
 		n3_we <= w3_we; n3_lds <= io_lds; n3_uds <= io_uds;
-		n3_addr <= io_addr[13:1]; n3_wdata <= io_wdata;
+		n3_addr <= io_addr[15:1]; n3_wdata <= io_wdata;
 	end
 	always_ff @(posedge clk) begin
 		if (n3_we && n3_lds) xram[n3_addr][7:0]  <= n3_wdata[7:0];

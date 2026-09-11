@@ -257,8 +257,17 @@ def build(zippath, records, setname):
     out = bytearray()
 
     def ensure(n):
+        # ZERO, NOT 0xFF. This is the region as MAME allocates it: a byte no
+        # load ever writes reads 0, whether it is a gap between records or a
+        # lane a ROM_SKIP steps over. 0xFF is what an unprogrammed EPROM
+        # reads and belongs to a FILE, never to region bytes nothing loaded.
+        # Unnoticed for 31 sets because none reads a hole; blandia's gfx2
+        # word ROM covers half its lanes, MAME's region holds FF 00 00 per
+        # group in the rest (dumped with the debugger's `saver`), and this
+        # was padding 0xFF into 524286 of them. build_mra.py's truth pad and
+        # its <part> pad say the same thing; the three must agree.
         if len(out) < n:
-            out.extend(b"\xff" * (n - len(out)))
+            out.extend(b"\x00" * (n - len(out)))
 
     blob = None       # the file the last real load came from
     consumed = 0      # how much of it a previous record already took

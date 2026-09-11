@@ -68,7 +68,7 @@ CFG = [
 ]
 
 # rtl/video/x1_011_index.sv's mode encoding.
-PAL_MODE = {"direct": 0, "masked": 1, "plain": 2}
+PAL_MODE = {"direct": 0, "masked": 1, "plain": 2, "bland0": 3}
 
 
 def s9(v):
@@ -125,6 +125,13 @@ def main():
 
     gfx, gfx_size, zippath = region_image(a.game, "gfx1")
     code, ylow, ctrl, pal, tag = load_capture(cfg, capdir)
+    # blandia's second palette RAM lands above the first, at entry 0x600: the
+    # offset effect re-looks-up the pixel underneath there. Appended when the
+    # capture has it, so pal.hex holds all 3072 entries with real data in the
+    # top half rather than the zero padding a short list gets.
+    _p2 = capdir / f"{tag}_palette2.bin"
+    if _p2.exists():
+        pal = list(pal) + list(_be16(_p2.read_bytes()))
 
     x0, x1, y0, y1 = cfg["visarea"]
     W, H = x1 - x0 + 1, y1 - y0 + 1
