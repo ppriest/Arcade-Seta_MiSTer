@@ -115,6 +115,7 @@ Some links discussing the hardware:
 ## Status
 
 Known issues:
+* **Eight Forces** - Check intro against MAME. Sprites too big?
 * **Extreme Downhill** - boot screen background off? No sound.
 * **Mad Shark** - Sprite glitching - reading whilst attributes being written
 * **Mobile Suit Gundam** - resets in game (protection?)
