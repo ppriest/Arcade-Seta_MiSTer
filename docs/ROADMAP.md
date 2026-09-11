@@ -984,6 +984,28 @@ behind each; this is the summary.
 
 ## Open items
 
+- **DIP switches -- checked, two faults fixed, one open.** `scripts/check_dips.py` compares every
+  `.mra`'s `<switches>` block against MAME's own `-listxml` (a different source from
+  `extract_dips.py`'s parse of `INPUT_PORTS_START`), bit positions, setting order and defaults.
+  All 19 sets are structurally clean. Two faults it found: the default byte was built with OR from
+  zero, so every bit no DIP covered read as an ASSERTED switch -- `sw[2]` was 0x00 for thirteen
+  sets where the pulled-up hardware reads 0xF0; and kamenrid's COINS port is at `in_base+8`, above
+  its own DSW, outside the core's flat six-byte input window, which is why its Country jumper read
+  0 and the game came up Japanese whatever the `.mra` said. Still open: the installed MAME (0.286)
+  and the source tree the `.mra`s are generated from (0.289) disagree on some Coinage LABELS --
+  0.289 renamed them -- so the checker reports those separately; decide which version this core
+  tracks.
+- **Inputs -- checked, three faults fixed.** `scripts/check_inputs.py` compares every `.mra`'s
+  `<buttons count>` against MAME's `-listxml`; all 19 agree. The core assembled every P1/P2 word
+  as `JOY_TYPE1_2BUTTONS`, so: the five three-button games (drgnunit, stg, daioh, rezon, wrofaero)
+  could not press button 3, since bit 6 was tied low; atehate, qzkklogy and qzkklgy2 read their
+  four answer buttons off the joystick directions, and magspeed its four card buttons; and daioh's
+  EXTRA port at 0x500006, buttons 4-6 for both players, was undecoded -- it sits inside the vregs
+  window, which has no read branch, so the read returned seta_core's 0x0000 default and the game
+  saw all six held down. `input_layout` in seta_board_cfg.sv now picks one of six assemblies.
+  Untested on hardware beyond the boot sweep: nobody has played these with a pad.
+- **`hiscore.v` support** (the framework's high-score save), per set: the RAM range and the
+  signature MAME's `hiscore.dat` uses.
 - **Screen timing is a hypothesis.** htotal 512 with vtotal 272/260/276 reproduces MAME's 57.42 /
   60 / 56.66 to within 0.1%, on an inferred 8 MHz dot clock. Only `daioh`'s 57.42 has any stated
   provenance ("verified on PCB"); the 60 Hz figures are MAME defaults with no evidence behind them

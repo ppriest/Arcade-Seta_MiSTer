@@ -74,7 +74,7 @@ module seta_board_cfg (
 	input  wire  [4:0] game,
 
 	// ---- which memory map maincpu.sv should use -----------------------------
-	output logic [3:0] map_board,
+	output logic [4:0] map_board,
 
 	// ---- clock enables -------------------------------------------------------
 	// clk_sys / cpu_div = the 68000 clock. 96 / 6 = 16 MHz, 96 / 12 = 8 MHz.
@@ -100,6 +100,12 @@ module seta_board_cfg (
 	// and it passes HOLD_LINE for both.
 	output logic        has_ack,          // an explicit ack address exists
 	output logic [23:1] ack_addr,
+	// A SECOND acknowledge. kamenrid, magspeed and msgundam each map two --
+	// ipl1_ack_w and ipl2_ack_w, clearing levels 2 and 4 -- and with only
+	// one decoded the other level stays asserted for ever.
+	output logic        has_ack2,
+	output logic [23:1] ack2_addr,
+	output logic  [2:0] ack2_level,
 	// blockcar alone acknowledges on a DATA CONDITION rather than on the
 	// write itself: blockcar_interrupt_w clears level 3 only when bit 0 of
 	// the byte written is LOW. Off everywhere else, so no other board's
@@ -151,6 +157,19 @@ module seta_board_cfg (
 	output logic  [2:0] ack_level,
 
 	// ---- extras ---------------------------------------------------------------
+	// HOW THE P1/P2 WORD IS PUT TOGETHER. seta.cpp has three joystick macros
+	// and three one-off panels among the sets in scope, and Seta.sv assembles
+	// the word from this code:
+	//
+	//   0 JOY2    JOY_TYPE1_2BUTTONS -- LRUD at 0-3, B1 B2 at 4-5
+	//   1 JOY1    JOY_TYPE1_1BUTTON  -- B1 only; 5 and 6 read as unpressed
+	//   2 JOY3    JOY_TYPE1_3BUTTONS -- BUTTON3 at bit 6, which was tied low
+	//   3 PANEL4  four answer buttons at 0-3, in the order B3 B4 B1 B2
+	//   4 PANEL5  PANEL4 plus BUTTON5 at bit 4 (qzkklogy's pause cheat)
+	//   5 CARDS   magspeed: Card 1-4 at 0-3, B1 B2 at 4-5
+	//
+	// Bit 7 is START in every one of them.
+	output logic  [2:0] input_layout,
 	output logic        has_prot,         // pairlove's one-deep write history
 	// thunderl's protection register: a write ANYWHERE in a 128 KB window
 	// latches a value derived from the address, and one read address returns
@@ -267,6 +286,7 @@ module seta_board_cfg (
 		fg_xoffs        = 9'sd0;
 		fg_xoffs_flip   = 9'sd0;
 		buffer_sprites  = 1'b0;
+		input_layout    = 3'd0;   // JOY_TYPE1_2BUTTONS
 		has_x1_bank     = 1'b0;
 		vregs_ofs       = 3'd3;
 		tilemaps_flip   = 1'b0;
@@ -276,6 +296,9 @@ module seta_board_cfg (
 		irq_sl112_level = 3'd0;
 		has_ack         = 1'b0;
 		ack_addr        = 23'h000000;
+		has_ack2        = 1'b0;
+		ack2_addr       = 23'h000000;
+		ack2_level      = 3'd0;
 		ack_d0_low      = 1'b0;
 		game_rot        = 2'd2;   // thunderl's ROT270, with the other defaults
 		has_l0          = 1'b0;
@@ -358,6 +381,7 @@ module seta_board_cfg (
 		// umanclub is ROT0 and neobattl ROT270: the two share a board and a
 		// machine_config but NOT an orientation.
 		GAME_UMANCLUB, GAME_NEOBATTL: begin
+			if (game == GAME_NEOBATTL) input_layout = 3'd1;  // one button
 			game_rot = (game == GAME_NEOBATTL) ? 2'd2 : 2'd0;
 			map_board = 5'd10; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
@@ -374,6 +398,7 @@ module seta_board_cfg (
 		// (flip, noflip). Every one of the four is 8 MHz except qzkklgy2.
 		// =================================================================
 		GAME_DRGNUNIT: begin                 // ROT0
+			input_layout = 3'd2;   // JOY_TYPE1_3BUTTONS
 			map_board = 5'd7; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
@@ -386,6 +411,7 @@ module seta_board_cfg (
 		end
 
 		GAME_STG: begin                      // ROT270, set_fg_xoffsets(0, 0)
+			input_layout = 3'd2;
 			map_board = 5'd7; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd2;
@@ -398,6 +424,7 @@ module seta_board_cfg (
 		end
 
 		GAME_QZKKLOGY: begin                 // ROT0, (1,1) and (-1,-1)
+			input_layout = 3'd4;   // four answers plus the pause cheat
 			map_board = 5'd7; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
@@ -413,6 +440,7 @@ module seta_board_cfg (
 		// where its three siblings have 1 MB -- which is why LAYOUT_B's gfx2
 		// region is 2 MB and x1snd sits above it.
 		GAME_QZKKLGY2: begin                 // ROT0, (0,0) and (-3,-1)
+			input_layout = 3'd3;   // qzkklogy without BUTTON5
 			map_board = 5'd7; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
@@ -431,6 +459,7 @@ module seta_board_cfg (
 		// daioh: 16 MHz verified from PCB, 2 MB each of sprites and both tile
 		// regions. Both layers set_xoffsets(-2, -2).
 		GAME_DAIOH: begin
+			input_layout = 3'd2;
 			map_board = 5'd1; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			game_rot = 2'd2;
@@ -446,6 +475,7 @@ module seta_board_cfg (
 
 		// rezon: 1 MB of sprites, 0.5 MB per tile region.
 		GAME_REZON: begin
+			input_layout = 3'd2;
 			map_board = 5'd0; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
@@ -465,6 +495,7 @@ module seta_board_cfg (
 		// wrofaero: the PIT drives IPL 4 and ipl2_ack_w at 0xf00000 clears it.
 		// Byte 0xf00000 is word 0xf00000, so 23'h780000 on a [23:1] bus.
 		GAME_WROFAERO: begin
+			input_layout = 3'd2;
 			has_ack = 1'b1; ack_addr = 23'h780000; ack_level = 3'd4;
 			map_board = 5'd0; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
@@ -482,7 +513,9 @@ module seta_board_cfg (
 		// msgundam: 4 MB of sprites, the largest in the driver, and vregs at
 		// 0x500005 rather than 0x500003.
 		GAME_MSGUNDAM: begin
-			map_board = 4'd4; cpu_div = 5'd6;
+			map_board = 5'd4; cpu_div = 5'd6;
+			// msgundam's machine_config has screen_vblank_seta_buffer_sprites.
+			buffer_sprites = 1'b1;
 			gfx_half_words = 23'h100000;  code_mask = 16'h7fff;
 			game_rot = 2'd0;
 			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
@@ -500,7 +533,7 @@ module seta_board_cfg (
 		// set_fg_xoffsets(4, 3) -- the only set whose flip and noflip SPRITE
 		// offsets differ. Neither layer calls set_xoffsets.
 		GAME_EIGHTFRC: begin
-			map_board = 4'd0; cpu_div = 5'd6;
+			map_board = 5'd0; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd1;
 			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
@@ -518,7 +551,7 @@ module seta_board_cfg (
 		// oisipuzl: sprites are ROMREGION_INVERT, the tilemaps flip
 		// independently of them, and the visible area is 320x224.
 		GAME_OISIPUZL: begin
-			map_board = 4'd0; cpu_div = 5'd6;
+			map_board = 5'd14; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			game_rot = 2'd0;
 			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
@@ -537,7 +570,7 @@ module seta_board_cfg (
 		// kamenrid: both tile regions are carved out of one "user1" region by
 		// ROM_COPY, so they are 0x40000 each. vregs at 0x600003.
 		GAME_KAMENRID: begin
-			map_board = 4'd3; cpu_div = 5'd6;
+			map_board = 5'd3; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			game_rot = 2'd0;
 			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
@@ -548,12 +581,19 @@ module seta_board_cfg (
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+			has_ack = 1'b1;
+			ack_addr = 23'h300002;
+			ack_level = 3'd2;
+			has_ack2 = 1'b1;
+			ack2_addr = 23'h300003;
+			ack2_level = 3'd4;
 		end
 
 		// magspeed: set_xoffsets(0, -2) -- the only set whose flip and noflip
 		// LAYER offsets differ -- and vregs at 0x500015.
 		GAME_MAGSPEED: begin
-			map_board = 4'd0; cpu_div = 5'd6;
+			input_layout = 3'd5;   // four card buttons
+			map_board = 5'd15; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			game_rot = 2'd0;
 			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
@@ -564,10 +604,21 @@ module seta_board_cfg (
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+			vregs_ofs = 3'd5;
+			has_ack = 1'b1;
+			ack_addr = 23'h28000C;
+			ack_level = 3'd2;
+			has_ack2 = 1'b1;
+			ack2_addr = 23'h28000E;
+			ack2_level = 3'd4;
 		end
 
 		// atehate: 16 MHz, 2 MB of sprites, seta_interrupt_1_and_2.
 		GAME_ATEHATE: begin
+			// Its DEFAULT control panel is the four-button one; MAME's
+			// joystick layout is behind an INPUT_TYPE config marked
+			// "for Debug" and is not the shipped cabinet.
+			input_layout = 3'd3;
 			game_rot = 2'd0;   // ROT0
 			map_board = 5'd12; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;

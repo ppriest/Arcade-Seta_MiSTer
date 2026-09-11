@@ -300,6 +300,11 @@ def main():
                          "matches for the wrong reason.")
     ap.add_argument("--show", action="store_true",
                     help="render to a window instead of running headless")
+    ap.add_argument("--tap", action="append", default=[], metavar="LO:HI",
+                    help="an extra address range for --wlog, hex, e.g. "
+                         "--tap 800000:803fff to see VRAM writes. Repeatable. "
+                         "The family's own taps cover only the control "
+                         "registers.")
     a = ap.parse_args()
 
     if not MAME_EXE.exists():
@@ -320,7 +325,8 @@ def main():
         fam, tap_ranges = FAMILIES[GAMES[a.game]]
         regions = ",".join(f"{n}:{addr:x}:{ln:x}"
                            for n, (addr, ln) in sorted(fam.items()))
-        taps = ",".join(f"{lo:x}:{hi:x}" for lo, hi in tap_ranges)
+        extra = tuple(tuple(int(x, 16) for x in t.split(":")) for t in a.tap)
+        taps = ",".join(f"{lo:x}:{hi:x}" for lo, hi in tap_ranges + extra)
 
     repo = Path(__file__).resolve().parent.parent
     out = repo / "debug" / (a.name or f"{a.game}-f{a.frame}")

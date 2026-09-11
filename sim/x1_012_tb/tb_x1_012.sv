@@ -40,6 +40,7 @@ module tb_x1_012;
 	logic [15:0] vctrl_wdata = 0;
 
 	logic        line_start = 0;
+	logic        vblank_rise = 0;
 	logic  [8:0] line = 0;
 	logic        line_done, busy;
 
@@ -59,6 +60,7 @@ module tb_x1_012;
 		.vctrl_uds(1'b1), .vctrl_lds(1'b1), .vctrl_rdata(),
 		.xoffs(xoffs), .xoffs_flip(xoffs_flip), .flipscr(flipscr),
 		.vis_dimy(vis_dimy), .colorbase(colorbase), .code_mask(code_mask),
+		.vblank_rise(vblank_rise),
 		.line_start(line_start), .line(line), .line_budget(16'd0),
 		.line_done(line_done), .busy(busy),
 		.rom_req(rom_req), .rom_addr(rom_addr),
@@ -210,6 +212,10 @@ module tb_x1_012;
 			cpu_vctrl_write(i[1:0], vctrl_init[i]);
 		end
 		repeat (4) @(posedge clk);
+		// The bank bit is latched at frame start; give it one, after the
+		// registered control write has landed.
+		vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+		repeat (2) @(posedge clk);
 
 		for (i = vis_y0; i <= vis_y1; i = i + 1) do_line(i);
 

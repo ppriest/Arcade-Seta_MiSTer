@@ -14,18 +14,32 @@
     <rom index="0" zip="kamenrid.zip" md5="none">
         <!-- maincpu -->
         <interleave output="16">
-            <part name="fj001003.25" map="12"/>
+            <part name="fj001003.25" crc="9b65d1b9" map="12"/>
         </interleave>
-        <!-- pad to 0x100000 -->
-        <part repeat="524288">00</part>
+        <!-- pad to 0x200000 -->
+        <part repeat="1572864">00</part>
         <!-- gfx1 -->
-        <part name="fj001005.21"/>
-        <part name="fj001006.22"/>
+        <part name="fj001005.21" crc="5d031333"/>
+        <part name="fj001006.22" crc="cf28eb78"/>
+        <!-- pad to 0x600000 -->
+        <part repeat="2097152">00</part>
+        <!-- gfx2 -->
+        <interleave output="16">
+            <part name="fj001007.152" crc="d9ffe80b" offset="0x0" length="0x40000" map="12"/>
+        </interleave>
+        <!-- pad to 0x800000 -->
+        <part repeat="1835008">00</part>
+        <!-- gfx3 -->
+        <interleave output="16">
+            <part name="fj001007.152" crc="d9ffe80b" offset="0x40000" length="0x40000" map="12"/>
+        </interleave>
+        <!-- pad to 0xa00000 -->
+        <part repeat="1835008">00</part>
         <!-- x1snd -->
-        <part name="fj001008.26"/>
+        <part name="fj001008.26" crc="45e2b329"/>
     </rom>
 
-    <switches default="FF,FF,F0" base="0">
+    <switches default="FF,FF,FF" base="0">
         <dip name="Coinage" bits="0,1,2,3" ids="Free Play,1 Coin/3 Credits,2 Coins/3 Credits,4 Coins/1 Credit,5 Coins/3 Credits,6 Coins/1 Credit,1 Coin/5 Credits,2 Coins/1 Credit,8 Coins/3 Credits,1 Coin/2 Credits,1 Coin/6 Credits,3 Coins/1 Credit,3 Coins/2 Credits,5 Coins/1 Credit,1 Coin/4 Credits,1 Coin/1 Credit"/>
         <dip name="Difficulty" bits="4,5" ids="Hardest,Easy,Hard,Normal"/>
         <dip name="Unused" bits="6" ids="On,Off"/>

@@ -37,7 +37,7 @@ module tb_x1_001;
 	// Sized to the phase rather than to seta.cpp's largest (gundhara's 8 MB):
 	// ModelSim ASE allocates the whole array, and three quarters of it would
 	// be zeroes slowing every run down.
-	localparam int GFX_WORDS = 1 << 20;
+	localparam int GFX_WORDS = 1 << 21;         // msgundam's 4 MB region
 
 	logic clk = 0;
 	always #(CLK_PERIOD / 2.0) clk = ~clk;
@@ -70,6 +70,10 @@ module tb_x1_001;
 	wire   [7:0] ctrl_rdata;
 
 	logic        line_start = 0;
+	logic        vblank_rise = 0;
+	// +nocopy: skip the setac_eof copy test (render straight from the dump).
+	logic        copy_test = 1'b1;
+	int          copy_bad = 0;
 	logic  [8:0] line = 0;
 	wire         line_done, busy;
 
@@ -109,6 +113,7 @@ module tb_x1_001;
 		.screen_h(cfgv[C_SCRH][8:0]), .vis_max_y(cfgv[C_VISMAXY][8:0]),
 		.backdrop(cfgv[C_BACKDROP][LB_W-1:0]),
 		.code_mask(cfgv[C_CODEMASK][15:0]),
+		.vblank_rise(vblank_rise), .buffer_sprites(copy_test),
 		.line_start(line_start), .line(line),
 		.line_done(line_done), .busy(busy),
 		.rom_req(rom_req), .rom_addr(rom_addr),
@@ -145,17 +150,17 @@ module tb_x1_001;
 		end else if (rom_busy) begin
 			rom_wait_cycles <= rom_wait_cycles + 1;
 			if (rom_cnt <= 1) begin
-				// [20:3], not [19:3]. GFX_WORDS is 2^20 words, so a word index
-				// is 20 bits and a GRANULE index is 18. Slicing 17 dropped the
+				// [21:3]. GFX_WORDS is 2^21 words (msgundam's 4 MB), so a word
+				// index is 21 bits and a GRANULE index is 19. Slicing 17 dropped the
 				// top bit -- invisible on thunderl's 0.5 MB region, which needs
 				// 16, and wrong on atehate's 2 MB one, which needs all 18. It
 				// failed as wrong pen values on exactly one game. Same shape as
 				// the bridge width bug in LESSONS_LEARNED: harmless at 64 KB,
 				// not at 2 MB.
-				rom_data  <= { gfxrom[{rom_hold_a[20:3], 2'd3}],
-				               gfxrom[{rom_hold_a[20:3], 2'd2}],
-				               gfxrom[{rom_hold_a[20:3], 2'd1}],
-				               gfxrom[{rom_hold_a[20:3], 2'd0}] };
+				rom_data  <= { gfxrom[{rom_hold_a[21:3], 2'd3}],
+				               gfxrom[{rom_hold_a[21:3], 2'd2}],
+				               gfxrom[{rom_hold_a[21:3], 2'd1}],
+				               gfxrom[{rom_hold_a[21:3], 2'd0}] };
 				rom_valid <= 1'b1;
 				rom_busy  <= 1'b0;
 				rom_reads <= rom_reads + 1;
@@ -282,7 +287,7 @@ module tb_x1_001;
 		swz_half_words = cfgv[C_GFXHALF][23:1];
 		for (i = 0; i < 2 * int'(swz_half_words); i++) begin
 			swz_in = i[22:0];
-			#1 gfxrom[swz_out[19:0]] = gfxnat[i];
+			#1 gfxrom[swz_out[20:0]] = gfxnat[i];
 		end
 		$display("  gfx swizzled: %0d words, half %0d",
 		         2 * int'(swz_half_words), swz_half_words);
@@ -296,7 +301,7 @@ module tb_x1_001;
 		$display("=== X1-001 against scripts/x1_001_model.py ===");
 		$display("  visible      x %0d..%0d  y %0d..%0d", vis_x0, vis_x1, vis_y0, vis_y1);
 		$display("  spritectrl   %02x %02x %02x %02x",
-		         ctrlimg[0], ctrlimg[1], ctrlimg[2], ctrlimg[3]);
+		         ctrlimg[0], ctrlimg[1], ctrlimg[1], ctrlimg[3]);
 		$display("  bank         %0d   numcol %0d",
 		         ((ctrlimg[1] ^ (~ctrlimg[1] << 1)) & 8'h40) ? 1 : 0, ctrlimg[1] & 4'hf);
 		$display("  ROM latency  %0d cycles", rom_latency);
@@ -315,6 +320,30 @@ module tb_x1_001;
 		for (i = 0; i < 'h300; i++)  cpu_ylow_write(i[9:0], ylowimg[i]);
 		for (i = 0; i < 8192; i++)   cpu_code_write(i[12:0], codeimg[i]);
 		$display("  registers loaded");
+
+		// THE COPY IS EXERCISED, as a RAM check. The capture is mid-frame: bank 0
+		// already holds the list the game is writing for the NEXT frame, so a
+		// render after the copy cannot match MAME's frame. Blank the half the
+		// chip copies into, let one vblank copy, and compare the halves word for
+		// word; then put the dump back and render from it with the copy off.
+		if (copy_test && !ctrlimg[1][5]) begin
+			for (i = 0; i < 'h800; i++)
+				cpu_code_write((ctrlimg[1][6] ? 13'h0000 : 13'h1000) + i[12:0], 16'h0000);
+			vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+			repeat (12000) @(posedge clk);
+			copy_bad = 0;
+			for (i = 0; i < 'h800; i++)
+				if (dut.codemem[(ctrlimg[1][6] ? 13'h0000 : 13'h1000) + i[12:0]] !==
+				    dut.codemem[(ctrlimg[1][6] ? 13'h1000 : 13'h0000) + i[12:0]]) copy_bad++;
+			$display("  setac_eof copy (ctrl2 = %02x): %0d of 2048 words differ", ctrlimg[1], copy_bad);
+			for (i = 0; i < 8192; i++) cpu_code_write(i[12:0], codeimg[i]);
+			copy_test = 1'b0;
+		end
+
+		// The engine renders from the snapshot taken at vblank: take one, and
+		// wait out the 9216-cycle copy.
+		vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+		repeat (12000) @(posedge clk);
 
 		// Prime: render the first visible line into one buffer, then run the
 		// real cadence -- start line L, read back line L-1 while it renders.
@@ -354,6 +383,8 @@ module tb_x1_001;
 
 		if (checked == 0)
 			$display("FAIL: nothing was compared -- run scripts/prep_x1_001_tb.py");
+		else if (copy_bad != 0)
+			$display("FAIL: the setac_eof copy left %0d words wrong", copy_bad);
 		else if (bad != 0)
 			$display("FAIL: the RTL disagrees with the model");
 		else if (dbg_overrun != 0)

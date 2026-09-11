@@ -30,6 +30,7 @@ Semantics implemented:
                                number of non-zero digits.
 """
 import zipfile
+import zlib
 import xml.etree.ElementTree as ET
 
 
@@ -38,6 +39,33 @@ def _zip_read(z, name):
     if name not in names:
         raise KeyError(f"{name} not in zip")
     return z.read(names[name])
+
+
+def _part_data(z, el):
+    """A named part's bytes, with `offset` / `length` applied.
+
+    Both attributes are a plain slice of the FILE, which is how mra-tools-c
+    reads them and how the shipped .mra files that use them are written (see
+    MRA-Alternatives, e.g. the 720 Degrees and APB sets, which slice a 0x10000
+    dump into two 0x8000 halves -- one of them inside an <interleave>).
+    """
+    d = _zip_read(z, el.get("name"))
+    # crc is the WHOLE file's CRC32, checked before any slice -- so a sliced
+    # part still names the dump it was cut from.
+    if el.get("crc") is not None:
+        want = int(el.get("crc"), 16)
+        got = zlib.crc32(d) & 0xFFFFFFFF
+        if got != want:
+            raise ValueError(f"{el.get('name')}: crc {got:08x}, the .mra says "
+                             f"{want:08x}")
+    off = int(el.get("offset"), 0) if el.get("offset") is not None else 0
+    if el.get("length") is not None:
+        ln = int(el.get("length"), 0)
+        if off + ln > len(d):
+            raise ValueError(f"{el.get('name')}: offset {off:#x} + length "
+                             f"{ln:#x} is past the end ({len(d):#x})")
+        return d[off:off + ln]
+    return d[off:]
 
 
 def _literal_bytes(text):
@@ -122,14 +150,14 @@ def build_image(mra_path, zip_path, size=None):
         for el in rom0:
             if el.tag == "part":
                 if el.get("name"):
-                    out += _zip_read(z, el.get("name"))
+                    out += _part_data(z, el)
                 elif el.get("repeat"):
                     out += _literal_bytes(el.text) * int(el.get("repeat"), 0)
                 else:
                     out += _literal_bytes(el.text)
             elif el.tag == "interleave":
                 bits = int(el.get("output"))
-                parts = [(_zip_read(z, p.get("name")), p.get("map")) for p in el]
+                parts = [(_part_data(z, p), p.get("map")) for p in el]
                 out += interleave(parts, bits)
             else:
                 raise ValueError(f"unexpected element <{el.tag}> in <rom index=0>")
@@ -185,6 +213,30 @@ def _selftest():
     c = bytes([0x01, 0x02, 0x03, 0x04])
     got = interleave([(c, "0012")], 32)
     assert got[0:2] == bytes([0x02, 0x01]), f"map_index/pattern wrong: {got.hex()}"
+
+    # offset / length slice the FILE, before any map is applied.
+    import xml.etree.ElementTree as _ET
+
+    class _FakeZip:
+        def namelist(self):
+            return ["x/big.bin"]
+
+        def read(self, n):
+            return bytes(range(16))
+
+    z = _FakeZip()
+    got = _part_data(z, _ET.fromstring('<part name="big.bin" offset="0x4" length="0x4"/>'))
+    assert got == bytes([4, 5, 6, 7]), f"slice wrong: {got.hex()}"
+    got = _part_data(z, _ET.fromstring('<part name="big.bin" offset="0xc"/>'))
+    assert got == bytes([12, 13, 14, 15]), f"offset-to-end wrong: {got.hex()}"
+    got = _part_data(z, _ET.fromstring('<part name="big.bin"/>'))
+    assert len(got) == 16, "no attributes must give the whole file"
+    try:
+        _part_data(z, _ET.fromstring('<part name="big.bin" offset="0xc" length="0x8"/>'))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a slice past the end must be refused")
 
     print("mra.py selftest: map convention matches mra-tools-c")
 

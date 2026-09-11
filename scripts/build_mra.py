@@ -125,6 +125,42 @@ def read_sdram_map():
     return bases
 
 
+# Clones that run on a PARENT'S board config unchanged, so they need no enum
+# value and no RTL arm of their own -- only a .mra that selects the parent's
+# mod byte.
+#
+# The board config's set-specific content is the ROM geometry: rom_end,
+# code_mask and gfx_half_words all come from the declared region sizes. Each
+# clone below declares byte-for-byte the same ROM_REGION sizes as its parent
+# AND the same machine config in its GAME() line, so nothing the config carries
+# can differ. The check below asserts the region sizes rather than trusting
+# this comment.
+#
+# Deliberately NOT here:
+#   daiohc      machine=wrofaero but daioh-sized graphics -- gfx_half_words
+#               differs from both, so it needs its own arm.
+#   daiohp/p2   machine=daiohp, a config this core does not implement.
+#   thunderlbl, thunderlbl2, blockcarb, msgundamb, triplfun, triplfunk
+#               bootlegs with their own hardware (Z80 + Tetris sound, OKI).
+CLONE_OF = {
+    "daioha":    "daioh",
+    "rezono":    "rezon",
+    "msgundam1": "msgundam",
+}
+
+
+def clone_regions_match(child, parent, all_blocks):
+    """Every ROM_REGION the two sets declare, name and size, must be equal."""
+    def sizes(g):
+        body = all_blocks.get(g)
+        if body is None:
+            sys.exit(f"{g}: no ROM_START in the driver")
+        return {n: int(sz, 16) for sz, n in re.findall(
+            r'ROM_REGION\w*\(\s*(0x[0-9a-fA-F]+)\s*,\s*"([^"]+)"', body)}
+    a, b = sizes(child), sizes(parent)
+    return a == b, a, b
+
+
 def read_game_enum():
     """setname -> mod byte, from seta_board_cfg.sv's game_t."""
     txt = CFG_SV.read_text(encoding="utf-8", errors="replace")
@@ -134,6 +170,11 @@ def read_game_enum():
         out[m.group(1).lower()] = int(m.group(2))
     if not out:
         sys.exit(f"{CFG_SV.name} defines no GAME_* enum")
+    for child, parent in CLONE_OF.items():
+        if parent not in out:
+            sys.exit(f"{child} is declared a clone of {parent}, which has no "
+                     f"GAME_* entry")
+        out[child] = out[parent]
     return out
 
 
@@ -155,38 +196,6 @@ def read_game_lines():
 
 
 # ---------------------------------------------------------------------------
-# MAME ROM_START loaders, used as ground truth. One implementation.
-# ---------------------------------------------------------------------------
-def rom_load(z, name):
-    return bytearray(z.read(name))
-
-
-def rom_load16_word_swap(z, name):
-    d = bytearray(z.read(name))
-    d[0::2], d[1::2] = d[1::2], d[0::2]
-    return d
-
-
-def rom_load16_byte(z, even, odd):
-    a, b = z.read(even), z.read(odd)
-    if len(a) != len(b):
-        sys.exit(f"{even} and {odd} differ in length ({len(a)} vs {len(b)})")
-    out = bytearray(len(a) * 2)
-    out[0::2] = a
-    out[1::2] = b
-    return out
-
-
-def group_truth(rs, g):
-    if g["kind"] == "load":
-        return rom_load(rs, g["parts"][0])
-    if g["kind"] == "swap16":
-        return rom_load16_word_swap(rs, g["parts"][0])
-    if g["kind"] == "load16_byte":
-        return rom_load16_byte(rs, g["parts"][0], g["parts"][1])
-    raise ValueError(g["kind"])
-
-
 # Candidate `.mra` forms per group kind, tried in order until one reproduces
 # the ground truth. Deliberately includes the wrong ones: if the right answer
 # were obvious there would be no need to search, and the search is the point.
@@ -201,7 +210,7 @@ OUTPUT_BITS = {"swap16": 16, "load16_byte": 16}
 def pick_map(rs, g, truth):
     if g["kind"] == "load":
         return None
-    datas = [rs.zip.read(f) for f in g["files"]]
+    datas = [sliced(rs, g, i) for i in range(len(g["files"]))]
     bits = OUTPUT_BITS[g["kind"]]
     for maps in CANDIDATES[g["kind"]]:
         if mra_lib.interleave(list(zip(datas, maps)), bits) == bytes(truth):
@@ -213,7 +222,54 @@ def pick_map(rs, g, truth):
 # ---------------------------------------------------------------------------
 # ROM_START records -> .mra groups
 # ---------------------------------------------------------------------------
-def groups_for(records, region, setname):
+def copy_group(rec, region, setname, body):
+    """A ROM_COPY as a group: a SLICE of a group in the source region.
+
+    kamenrid and magspeed both carve their two tile regions out of one
+    "user1" that a single ROM_LOAD16_WORD_SWAP fills, so the .mra can express
+    each as offset/length on that file -- which is what the shipped sets that
+    use those attributes do (see mra.py's note). The source region is parsed
+    here rather than assumed: if the copy ever straddles two loads, or the
+    source is itself a copy, this refuses instead of writing a plausible file.
+    """
+    _kind, src_region, dest, length, _crc, src_ofs = rec
+    src_recs, unknown = region_records(body, src_region)
+    if unknown:
+        sys.exit(f"{setname}/{src_region}: unrecognised load line(s): {unknown[:2]}")
+    if any(r[0] == "copy" for r in src_recs):
+        sys.exit(f"{setname}/{region}: ROM_COPY from {src_region}, which is "
+                 f"itself built by ROM_COPY -- not resolved here")
+
+    src_groups = groups_for(src_recs, src_region, setname, body)
+    hit = [g for g in src_groups
+           if g["dest"] <= src_ofs and src_ofs + length <= g["dest"] + g["size"]]
+    if len(hit) != 1:
+        sys.exit(f"{setname}/{region}: ROM_COPY of {length:#x} bytes at "
+                 f"{src_ofs:#x} of {src_region} does not lie inside exactly one "
+                 f"load ({len(hit)} candidates)")
+    g = dict(hit[0])
+    off = src_ofs - g["dest"]
+
+    # A group's byte offset is a FILE offset only when one file feeds it. A
+    # load16_byte pair interleaves two, so a slice of the group is a slice of
+    # each at half the offset -- correct but untested, so refused until a set
+    # needs it.
+    if g["kind"] not in ("load", "swap16"):
+        sys.exit(f"{setname}/{region}: ROM_COPY from a {g['kind']} group is "
+                 f"not supported")
+    # ROM_LOAD16_WORD_SWAP swaps every pair, so slicing the file and swapping
+    # gives the same bytes as swapping and slicing ONLY on an even boundary.
+    if g["kind"] == "swap16" and ((off | length) & 1):
+        sys.exit(f"{setname}/{region}: ROM_COPY at an odd offset or length out "
+                 f"of a word-swapped region")
+
+    g["dest"] = dest
+    g["size"] = length
+    g["off"] = off
+    return g
+
+
+def groups_for(records, region, setname, body):
     """Pair the driver's records into the groups a `.mra` can express.
 
     Two ROM_LOAD16_BYTE records at dest d and d+1 of the same length are one
@@ -221,16 +277,9 @@ def groups_for(records, region, setname):
     order the records appear, because the driver writes them in whatever order
     reads best.
     """
-    # ROM_COPY has no file behind it -- it takes bytes from another region --
-    # so a .mra would have to express it as a PARTIAL load of the source
-    # region's file, which needs offset/length on a <part>. Not supported here
-    # yet, and refused rather than silently dropped: the region would come out
-    # empty and the game would show no tiles.
-    if any(r[0] == "copy" for r in records):
-        sys.exit(f"{setname}/{region}: ROM_COPY needs partial-file <part> "
-                 f"support in the .mra writer")
-
-    recs = sorted(records, key=lambda r: (r[2] & ~1, r[2] & 1))
+    copies = [r for r in records if r[0] == "copy"]
+    recs = sorted((r for r in records if r[0] != "copy"),
+                  key=lambda r: (r[2] & ~1, r[2] & 1))
     out = []
     i = 0
     while i < len(recs):
@@ -259,6 +308,10 @@ def groups_for(records, region, setname):
         else:
             sys.exit(f"{setname}/{region}: unhandled record kind {kind}")
         i += 1
+
+    for rec in copies:
+        out.append(copy_group(rec, region, setname, body))
+    out.sort(key=lambda g: g["dest"])
     return out
 
 
@@ -286,9 +339,15 @@ def dip_xml(ports):
     out = []
     default_bytes = []
     for byte_index, dips in enumerate(ports):
-        default = 0
+        # A BIT NO DIP COVERS READS AS 1, not 0. Every port in this driver is
+        # IP_ACTIVE_LOW and every switch line is pulled up, so an undeclared
+        # bit is "open" -- and the core feeds sw[2][7:4] straight into the
+        # COINS port, so starting the byte at zero handed a game four asserted
+        # switches it never had. Building the default up with OR left sw[2] at
+        # 0x00 for thirteen of the nineteen sets.
+        default = 0xFF
         for name, mask, dflt, settings in dips:
-            default |= dflt
+            default = (default & ~mask) | (dflt & mask)
             if settings is None:      # PORT_DIPUNUSED: default only
                 continue
             bit_positions = [i for i in range(8) if mask & (1 << i)]
@@ -338,7 +397,74 @@ def split_ports(ports, setname):
     return [hi, lo, cn]
 
 
-def buttons_xml(nbuttons):
+# The six P1/P2 layouts seta.cpp uses across the sets in scope, and the button
+# names that go with each. The code is Seta.sv's input_layout, which assembles
+# the port word; the names are positional -- entry i is joystick bit 4 + i --
+# so the two lists ARE the same mapping written twice and have to agree.
+#
+#   0 JOY2    LRUD at 0-3, B1 B2 at 4-5
+#   1 JOY1    one button
+#   2 JOY3    BUTTON3 at bit 6
+#   3 PANEL4  B3 B4 B1 B2 at 0-3: atehate's default panel, and qzkklgy2
+#   4 PANEL5  PANEL4 plus BUTTON5 at 4, qzkklogy's pause cheat
+#   5 CARDS   magspeed: Card 1-4 at 0-3, B1 B2 at 4-5
+BUTTON_LAYOUTS = {
+    0: ["Button 1", "Button 2"],
+    1: ["Button 1"],
+    2: ["Button 1", "Button 2", "Button 3"],
+    3: ["Button 1", "Button 2", "Button 3", "Button 4"],
+    4: ["Button 1", "Button 2", "Button 3", "Button 4", "Pause (Cheat)"],
+    5: ["Button 1", "Button 2", "Card 1", "Card 2", "Card 3", "Card 4"],
+    6: ["Button 1", "Button 2", "Button 3",
+        "Button 4", "Button 5", "Button 6"],
+}
+
+
+def input_layout(setname, block, all_blocks, depth=0):
+    """Which layout a set's P1 port is, read out of the driver.
+
+    Derived rather than tabulated: a hand table is one more thing to keep in
+    step with seta.cpp, and the macros say it outright.
+    """
+    if depth > 4:
+        sys.exit("PORT_INCLUDE nested too deep")
+    if "JOY_TYPE1_1BUTTON" in block:
+        return 1
+    if "JOY_TYPE1_3BUTTONS" in block:
+        # daioh reads buttons 4-6 from a port of its own at 0x500006, so it
+        # is a six-button game with a three-button P1 word.
+        return 6 if 'PORT_START("EXTRA")' in block and "IPT_BUTTON6" in block             else 2
+    if "JOY_TYPE1_2BUTTONS" in block:
+        return 0
+    if "JOY_TYPE2" in block:
+        sys.exit(f"{setname}: JOY_TYPE2 reverses the direction bits and no "
+                 f"in-scope set used it when Seta.sv was written")
+
+    p1 = block.split('PORT_START("P2")')[0]
+    if "PORT_INCLUDE" in block and "IPT_BUTTON" not in p1:
+        m = re.search(r"PORT_INCLUDE\(\s*(\w+)\s*\)", block)
+        if m and m.group(1) in all_blocks:
+            got = input_layout(setname, all_blocks[m.group(1)], all_blocks,
+                               depth + 1)
+            # PORT_MODIFY can take a button away again. qzkklgy2 includes
+            # qzkklogy and then makes bit 4 -- its BUTTON5 pause cheat --
+            # IPT_UNKNOWN, which is the difference between PANEL5 and PANEL4.
+            mod = re.search(r'PORT_MODIFY\(\s*"P1"\s*\)(.*?)(?:PORT_MODIFY|$)',
+                            block, re.S)
+            if got == 4 and mod and re.search(
+                    r"PORT_BIT\(\s*0x0010\s*,[^)]*IPT_UNKNOWN", mod.group(1)):
+                return 3
+            return got
+    if 'PORT_NAME("P1 Card 1")' in p1:
+        return 5
+    if "IPT_BUTTON5" in p1:
+        return 4
+    if "IPT_BUTTON4" in p1:
+        return 3
+    sys.exit(f"{setname}: cannot tell the input layout from its P1 port")
+
+
+def buttons_xml(layout):
     """The <buttons> element, with Start and Coin at FIXED joystick bits.
 
     THE NAME LIST IS POSITIONAL: entry i is joystick bit 4 + i. Writing the
@@ -356,12 +482,12 @@ def buttons_xml(nbuttons):
 
     Seta.sv reads exactly those bits. Keep the two in step.
     """
-    names = (["Button 1", "Button 2"][:nbuttons]
-             + ["-"] * (6 - nbuttons)
-             + ["Start", "Coin", "Pause", "Service"])
-    default = ["A", "B"][:nbuttons] + ["Start", "Select", "L", "R"]
+    have = BUTTON_LAYOUTS[layout]
+    n = len(have)
+    names = have + ["-"] * (6 - n) + ["Start", "Coin", "Pause", "Service"]
+    default = ["A", "B", "X", "Y", "L", "R"][:n] + ["Start", "Select", "L", "R"]
     return (f'<buttons names="{esc(",".join(names))}" '
-            f'default="{esc(",".join(default))}" count="{nbuttons}"/>')
+            f'default="{esc(",".join(default))}" count="{n}"/>')
 
 
 def mra_filename(title):
@@ -388,6 +514,19 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     zippath, key = zip_for(setname, all_blocks)
     body = all_blocks[setname]
 
+    # A clone borrowing a parent's mod byte gets the parent's ROM geometry in
+    # the RTL. Prove the geometry is the same rather than assuming it.
+    if setname in CLONE_OF:
+        parent = CLONE_OF[setname]
+        same, a, b = clone_regions_match(setname, parent, all_blocks)
+        if not same:
+            sys.exit(f"{setname} borrows {parent}'s board config but their "
+                     f"ROM_REGIONs differ: {a} vs {b}")
+        if gl[setname]["machine"] != gl[parent]["machine"]:
+            sys.exit(f"{setname} borrows {parent}'s board config but the driver "
+                     f"gives it a different machine config "
+                     f"({gl[setname]['machine']} vs {gl[parent]['machine']})")
+
     # ---- ground truth, region by region ----------------------------------
     import zipfile
     from romset import RomSet
@@ -401,7 +540,7 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
             sys.exit(f"{setname}/{region}: unrecognised load line(s): {unknown[:2]}")
         if not recs:
             sys.exit(f"{setname}: no {region} region")
-        gs = groups_for(recs, region, setname)
+        gs = groups_for(recs, region, setname, body)
         blob = bytearray()
         for g in gs:
             # A GAP BETWEEN GROUPS IS REAL PADDING, not an error. rezon's
@@ -512,12 +651,22 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
                 lines.append(f'        <part repeat="{g["dest"] - (pos - rbase)}">FF</part>')
                 pos = rbase + g["dest"]
             maps = pick_map(rs, g, group_truth_from(rs, g))
+            # A slice carries offset/length; mra.py applies them to the file
+            # before the map, which is what mra-tools-c does.
+            cut = (f' offset="{g["off"]:#x}" length="{g["size"]:#x}"'
+                   if "off" in g else "")
+            # crc: the driver's CRC32 of the whole file, as the shipped .mra
+            # files carry it (Arcade-Psikyo_MiSTer, MRA-Alternatives). It is
+            # the FILE's CRC even on a sliced part -- mra.py checks it
+            # before applying offset/length.
             if maps is None:
-                lines.append(f'        <part name="{esc(g["names"][0])}"/>')
+                lines.append(f'        <part name="{esc(g["names"][0])}" '
+                             f'crc="{g["crcs"][0]:08x}"{cut}/>')
             else:
                 lines.append(f'        <interleave output="{OUTPUT_BITS[g["kind"]]}">')
-                for fn, mp in zip(g["names"], maps):
-                    lines.append(f'            <part name="{esc(fn)}" map="{mp}"/>')
+                for fn, c, mp in zip(g["names"], g["crcs"], maps):
+                    lines.append(f'            <part name="{esc(fn)}" '
+                                 f'crc="{c:08x}"{cut} map="{mp}"/>')
                 lines.append('        </interleave>')
             pos += g["size"]
         declared = region_size(body, region)
@@ -537,8 +686,8 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         lines.append(f'        <dip name="{name}" bits="{bits}" ids="{ids}"/>')
     lines.append('    </switches>')
     lines.append('')
-    nb = 1 if "JOY_TYPE1_1BUTTON" in dip_blocks[info["inputs"]] else 2
-    lines.append('    ' + buttons_xml(nb))
+    lines.append('    ' + buttons_xml(
+        input_layout(setname, dip_blocks[info["inputs"]], dip_blocks)))
     lines.append('</misterromdescription>')
     xml = "\n".join(lines) + "\n"
 
@@ -597,13 +746,28 @@ def check_basename(rs, path):
     return base
 
 
+def sliced(rs, g, ix=0):
+    """One of a group's files, cut down by `off`/`size` if the group is a slice.
+
+    Applied to the FILE, which is what a .mra's offset/length do -- so this and
+    the XML the writer emits are the same operation, and the cross-check
+    against build_region.py is what says the operation is the right one.
+    """
+    d = bytearray(rs.zip.read(g["files"][ix]))
+    if "off" not in g:
+        return d
+    return d[g["off"]:g["off"] + g["size"]]
+
+
 def group_truth_from(rs, g):
     if g["kind"] == "load":
-        return bytearray(rs.zip.read(g["files"][0]))
+        return sliced(rs, g)
     if g["kind"] == "swap16":
-        d = bytearray(rs.zip.read(g["files"][0]))
+        d = sliced(rs, g)
         d[0::2], d[1::2] = d[1::2], d[0::2]
         return d
+    if "off" in g:
+        sys.exit(f"a sliced {g['kind']} group is not supported")
     a = rs.zip.read(g["files"][0])
     b = rs.zip.read(g["files"][1])
 

@@ -28,6 +28,31 @@ Three properties matter and must survive the port:
 - **Keeps `output_files/` and the log under `build/`**, so a failed build cannot be mistaken for
   the previous good one.
 
+### Two revisions from one source
+
+`Seta_stp` is the instrumented revision and `Seta` the release one. The only difference between the
+two `.qsf` files is `VERILOG_MACRO "DEBUG_ISSP=1"`: with it the six ISSP probes are built and the
+OSD's Debug page is visible, without it the probes, their ring buffer, their counters and the menu
+page all compile out. No `#ifdef` clutter in the middle of the logic — the guard sits around the
+probe instances in `Seta.sv` and around one `localparam` that drives `status_menumask`.
+
+```
+python scripts/build_staged.py               # Seta_stp, the default
+python scripts/build_staged.py --rev Seta    # the release build
+```
+
+Outputs are named after the revision (`build/output_files/Seta_stp.rbf`), so the two never
+overwrite each other.
+
+### The fitter seed is part of the build, and it is recorded
+
+Both `.qsf` files pin `SEED 7`, and `build/BUILT_COMMIT` records the seed each build used. This is
+not tidiness: build 10000019 and build 10000020 are the same commit at seeds 2 and 7, the first
+reported every clock domain positive and broke five games on hardware, the second has a worse worst
+slack and runs all twenty. A commit alone does not identify a bitstream. When a build regresses
+games whose code paths the diff cannot reach, rebuild the same commit at another seed before
+bisecting the source.
+
 Keep an in-tree `scripts/build.sh` for the one case that needs it — a compile that must see
 uncommitted work — and treat it as the exception.
 

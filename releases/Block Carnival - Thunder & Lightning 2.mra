@@ -14,21 +14,21 @@
     <rom index="0" zip="blockcar.zip" md5="none">
         <!-- maincpu -->
         <interleave output="16">
-            <part name="u1.a1" map="01"/>
-            <part name="u4.a3" map="10"/>
+            <part name="u1.a1" crc="4313fb00" map="01"/>
+            <part name="u4.a3" crc="2237196d" map="10"/>
         </interleave>
         <!-- pad to 0x100000 -->
         <part repeat="786432">00</part>
         <!-- gfx1 -->
-        <part name="bl-chr-0.u6.j3"/>
-        <part name="bl-chr-1.u9.l3"/>
+        <part name="bl-chr-0.u6.j3" crc="a33300ca"/>
+        <part name="bl-chr-1.u9.l3" crc="563de808"/>
         <!-- pad to 0x300000 -->
         <part repeat="1048576">00</part>
         <!-- x1snd -->
-        <part name="bl-snd-0.u39.a13"/>
+        <part name="bl-snd-0.u39.a13" crc="9c2130a2"/>
     </rom>
 
-    <switches default="FF,FF,00" base="0">
+    <switches default="FF,FF,EF" base="0">
         <dip name="Flip Screen" bits="1" ids="On,Off"/>
         <dip name="Demo Sounds" bits="2" ids="Off,On"/>
         <dip name="Unknown 1-3" bits="3" ids="On,Off"/>

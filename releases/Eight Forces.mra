@@ -14,33 +14,33 @@
     <rom index="0" zip="eightfrc.zip" md5="none">
         <!-- maincpu -->
         <interleave output="16">
-            <part name="uy2-u4.u3" map="01"/>
-            <part name="uy2-u3.u4" map="10"/>
+            <part name="uy2-u4.u3" crc="f1f249c5" map="01"/>
+            <part name="uy2-u3.u4" crc="6f2d8618" map="10"/>
         </interleave>
         <part repeat="1572864">00</part>
         <!-- gfx1 -->
-        <part name="u64.bin"/>
-        <part name="u63.bin"/>
+        <part name="u64.bin" crc="f561ff2e"/>
+        <part name="u63.bin" crc="4c3f8366"/>
         <!-- pad to 0x600000 -->
         <part repeat="3145728">00</part>
         <!-- gfx2 -->
         <interleave output="16">
-            <part name="u66.bin" map="12"/>
+            <part name="u66.bin" crc="6fad2b7f" map="12"/>
         </interleave>
         <!-- pad to 0x800000 -->
         <part repeat="1048576">00</part>
         <!-- gfx3 -->
         <interleave output="16">
-            <part name="u68.bin" map="12"/>
+            <part name="u68.bin" crc="c17aad22" map="12"/>
         </interleave>
         <!-- pad to 0xa00000 -->
         <part repeat="1048576">00</part>
         <!-- x1snd -->
-        <part name="u70.bin"/>
-        <part name="u69.bin"/>
+        <part name="u70.bin" crc="dfdb67a3"/>
+        <part name="u69.bin" crc="82ec08f1"/>
     </rom>
 
-    <switches default="7B,FF,00" base="0">
+    <switches default="7B,FF,FF" base="0">
         <dip name="Service Mode" bits="0" ids="On,Off"/>
         <dip name="Flip Screen" bits="1" ids="On,Off"/>
         <dip name="Demo Sounds" bits="2" ids="On,Off"/>

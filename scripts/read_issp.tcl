@@ -21,7 +21,7 @@
 # error, which is worse than a crash. On Fuuki a field kept the label
 # `board_fg3` after the layout moved and decoded an FG-2 game as an FG-3 board
 # -- exactly that failure.
-set fields {
+set fields_F {
     {lines            0  15 dec}
     {sprites         16  31 dec}
     {line_overrun    32  47 dec}
@@ -33,6 +33,90 @@ set fields {
     {irq_pending    120 126 hex}
     {pll_locked     127 127 bit}
 }
+
+# INSTANCE E -- CPU writes per video region, built in Seta.sv's u_issp_io.
+#
+# What it answers: a black screen with every counter at zero means the CPU
+# never reached the video hardware at all, so the fault is in the CPU, the
+# address decode or the ROM -- not in the video path. Palette and VRAM
+# counting up while the screen stays black means the opposite.
+#
+# Counters SATURATE at 65535 rather than wrapping, so a large value means
+# "at least this many", never "a small number after a wrap".
+# INSTANCE B -- one granule layer 0 received, built in Seta.sv's
+# u_issp_gran. The byte offset into gfx2 is l0_gran_addr * 8; compare
+# l0_gran_data with the ROM image there.
+# INSTANCE A -- the last twenty ROM reads before an exception, built in
+# Seta.sv's u_issp_pc. pc0 is the newest. frozen says the ring stopped on
+# a fetch of vectors 2..11; until then it is a live window.
+set fields_A {
+    {pc0               0  23 hex}
+    {pc1              24  47 hex}
+    {pc2              48  71 hex}
+    {pc3              72  95 hex}
+    {pc4              96 119 hex}
+    {pc5             120 143 hex}
+    {pc6             144 167 hex}
+    {pc7             168 191 hex}
+    {pc8             192 215 hex}
+    {pc9             216 239 hex}
+    {pc10            240 263 hex}
+    {pc11            264 287 hex}
+    {pc12            288 311 hex}
+    {pc13            312 335 hex}
+    {pc14            336 359 hex}
+    {pc15            360 383 hex}
+    {pc16            384 407 hex}
+    {pc17            408 431 hex}
+    {pc18            432 455 hex}
+    {pc19            456 479 hex}
+    {frozen           480 480 bit}
+}
+
+set fields_B {
+    {l0_gran_data      0  63 hex}
+    {l0_gran_addr     64  84 hex}
+    {last_vector      85 108 hex}
+}
+
+# INSTANCE C -- the two tilemap engines, built in Seta.sv's u_issp_tile.
+#
+# overrun near lines means the layer did not finish its line: it is being
+# starved on the SDRAM port it shares with the sprite engine, and most of
+# its tiles never arrive.
+set fields_C {
+    {l0_lines          0  15 dec}
+    {l0_tiles         16  31 dec}
+    {l0_overrun       32  47 dec}
+    {l1_lines         48  63 dec}
+    {l1_tiles         64  79 dec}
+    {l1_overrun       80  95 dec}
+}
+
+# INSTANCE D -- where the CPU is, built in Seta.sv's u_issp_cpu.
+#
+# last_rom parked in a narrow range means a spin loop; rom_fetches at zero
+# means the CPU never started. dl_max4k is the download's high-water mark
+# in 4096-byte units -- multiply by 0x1000 for the byte address, and
+# compare against the .mra's size before reading anything into the rest.
+set fields_D {
+    {last_rom         0  23 hex}
+    {rom_fetches     24  39 dec}
+    {wram_writes     40  55 dec}
+    {io_reads        56  71 dec}
+    {dl_max4k        72  85 hex}
+    {last_io         86 109 hex}
+}
+
+set fields_E {
+    {w_palette        0  15 dec}
+    {w_l0_vram       16  31 dec}
+    {w_l1_vram       32  47 dec}
+    {w_l0_ctrl       48  63 dec}
+    {w_l1_ctrl       64  79 dec}
+    {w_vregs         80  95 dec}
+    {w_sprite_code   96 111 dec}
+    {w_x1snd        112 127 dec}
 }
 
 # WHAT EACH ONE ANSWERS
@@ -112,11 +196,29 @@ foreach i $insts { puts "instance: $i" }
 set want ""
 foreach a $argv { if {$a ne "clear"} { set want $a } }
 set idx [lindex [lindex $insts 0] 0]
+set inst_id [lindex [lindex $insts 0] 3]
 if {$want ne ""} {
     foreach i $insts {
-        if {[lindex $i 3] eq $want} { set idx [lindex $i 0] }
+        if {[lindex $i 3] eq $want} { set idx [lindex $i 0]; set inst_id $want }
     }
 }
+
+# The field table belongs to the INSTANCE, not to the script. Decoding one
+# probe with the other's table is exactly the silent-nonsense failure the
+# comment above warns about, so an unrecognised id stops rather than guesses.
+switch -- $inst_id {
+    F       { set fields $fields_F }
+    D       { set fields $fields_D }
+    C       { set fields $fields_C }
+    B       { set fields $fields_B }
+    A       { set fields $fields_A }
+    E       { set fields $fields_E }
+    default {
+        puts "instance id '$inst_id' has no field table -- add one before reading it"
+        exit 1
+    }
+}
+puts "decoding instance $inst_id"
 
 start_insystem_source_probe -device_name $dev -hardware_name $hw
 set raw [read_probe_data -instance_index $idx]

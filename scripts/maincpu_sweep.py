@@ -45,6 +45,8 @@ BOARDS = {
     "blockcar": 11,
     "atehate": 12,
     "pairlove": 13,
+    "oisipuzl": 14,
+    "magspeed": 15,
 }
 
 # One representative per family, for the default run.

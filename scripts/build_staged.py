@@ -19,19 +19,27 @@ The build is exactly HEAD:
   * the built commit is written to build/BUILT_COMMIT beside the log, so
     every .rbf maps to one commit.
 
-    python scripts/build_staged.py                 # compile HEAD
+    python scripts/build_staged.py                 # compile HEAD, Seta_stp
+    python scripts/build_staged.py --rev Seta      # the release revision
     python scripts/build_staged.py --seed 12345    # try another placement
     python scripts/build_staged.py --allow-dirty   # HEAD, ignoring edits
 
-Outputs, all inside the stage:
-    build/q_staged.log                 the build log (deploy.py's gate reads it)
-    build/output_files/Seta.rbf        the bitstream
-    build/output_files/Seta.sta.summary
-    build/BUILT_COMMIT
+TWO REVISIONS, one source. Seta_stp.qsf defines DEBUG_ISSP: the six ISSP
+probes are built and the OSD's Debug page is visible. Seta.qsf does not, so
+the release build compiles the probes, their ring buffer and their counters
+out and hides the page. The default here is the instrumented one, because
+that is what bring-up iterates on; ship the other.
+
+Outputs, all inside the stage, named after the revision:
+    build/q_staged.log                     the build log (deploy.py's gate reads it)
+    build/output_files/Seta_stp.rbf        the bitstream
+    build/output_files/Seta_stp.sta.summary
+    build/BUILT_COMMIT                     commit, time and SEED
 
 Deploy it by pointing deploy.py at the stage:
     python scripts/deploy.py --rbf-only --log build/q_staged.log \\
-        --rbf build/output_files/Seta.rbf --sta build/output_files/Seta.sta.summary
+        --rbf build/output_files/Seta_stp.rbf \\
+        --sta build/output_files/Seta_stp.sta.summary
 
 The worktree persists between builds -- Quartus's db/ with it, which costs
 nothing for full compiles and avoids re-checkout churn -- and each run
@@ -50,7 +58,9 @@ import sys
 
 QUARTUS_BIN = os.environ.get(
     "QUARTUS_BIN", r"C:\intelFPGA_lite\17.0\quartus\bin64")
-REV = "Seta"
+# The revision being built; main() replaces it from --rev. Every output path
+# and the .qsf the seed is patched into are named after it.
+REV = "Seta_stp"
 
 
 def run(cmd, **kw):
@@ -117,7 +127,35 @@ REQUIRED_INSTANCES = (
     "sdram",              # the memory backend
     "arcade_video",       # the framework video chain...
     "Hq2x",               # ...including the scandoubler's blender
+    "screen_rotate_two",  # HDMI rotation
 )
+
+# Macros the design needs defined, and what breaks without each.
+#
+# PRESENCE IS NOT CONNECTION. screen_rotate_two was in the fitted netlist of
+# every build up to 20260910 -- 87 mentions in the fit report -- while HDMI
+# rotation did nothing, because MISTER_FB was undefined, emu therefore had no
+# FB_* ports, and the rotator's .FB_EN(FB_EN) and friends bound to implicitly
+# declared wires. Its DDRAM side stayed connected, so it neither vanished nor
+# went stuck-at, and REQUIRED_INSTANCES above could not have caught it.
+REQUIRED_MACROS = {
+    "MISTER_FB": "HDMI rotation and 180 flip; without it only the aspect "
+                 "ratio changes",
+}
+
+
+def check_macros(stage):
+    """Fail if a required VERILOG_MACRO is missing or commented out."""
+    qsf = os.path.join(stage, "%s.qsf" % REV)
+    try:
+        with open(qsf, encoding="utf8", errors="replace") as f:
+            live = [ln for ln in f if not ln.lstrip().startswith("#")]
+    except OSError as e:
+        return ["cannot read %s: %s" % (qsf, e)]
+    text = "".join(live)
+    return ['%s is not defined in %s -- %s' % (m, os.path.basename(qsf), why)
+            for m, why in REQUIRED_MACROS.items()
+            if 'VERILOG_MACRO "%s=' % m not in text]
 
 
 def check_present(stage):
@@ -136,6 +174,10 @@ def check_present(stage):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--rev", default="Seta_stp",
+                    help="Quartus revision: Seta_stp (default) builds the "
+                         "ISSP probes and the Debug page, Seta is the "
+                         "release build with both compiled out")
     ap.add_argument("--seed", type=int,
                     help="override the fitter SEED in the STAGED .qsf "
                          "(placement only; worth trying before restructuring "
@@ -147,6 +189,9 @@ def main():
                     help="build HEAD even though the tree has uncommitted "
                          "changes (they are NOT included in the build)")
     args = ap.parse_args()
+
+    global REV
+    REV = args.rev
 
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     stage = os.path.join(here, "build")
@@ -205,9 +250,18 @@ def main():
         open(qsf, "w", encoding="utf-8", newline="\n").write(new)
         print("seed:   %d (stage only)" % args.seed)
 
-    stamp = "%s  %s\n" % (head, datetime.datetime.now().isoformat())
+    # THE SEED IS PART OF THE BUILD. Two .rbf files from the same commit at
+    # different seeds are not interchangeable: 10000019 (seed 2) reported every
+    # clock domain positive and broke five games on hardware, where 10000020
+    # (seed 7, a WORSE worst slack) runs them all. Record it, or a good build
+    # cannot be rebuilt. LESSONS_LEARNED, "A clean STA summary is a property of
+    # one placement".
+    stamp = "%s  %s  seed=%s\n" % (
+        head, datetime.datetime.now().isoformat(),
+        args.seed if args.seed is not None else "default")
     open(os.path.join(stage, "BUILT_COMMIT"), "w").write(stamp)
     print("stage:  %s" % stage)
+    print("rev:    %s" % REV)
     print("commit: %s (%s)" % (head_short, head))
     if dirty and args.allow_dirty:
         print("NOTE:   the tree has uncommitted changes and they are NOT in "
@@ -235,11 +289,18 @@ def main():
     print("")
     print("==== the design is still there ====")
     missing = check_present(stage)
+    bad_macros = check_macros(stage)
+    for m in REQUIRED_MACROS:
+        print("  %-18s %s" % (m, "undefined" if any(m in b for b in bad_macros)
+                                   else "defined"))
 
     print("")
     print("==== timing ====")
     violations = read_slacks(
         os.path.join(stage, "output_files", "%s.sta.summary" % REV))
+
+    if bad_macros:
+        sys.exit("\nBUILD MISCONFIGURED --\n  " + "\n  ".join(bad_macros))
 
     if missing:
         sys.exit(

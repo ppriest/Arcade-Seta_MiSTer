@@ -179,7 +179,7 @@ module tb_maincpu_sdram;
 	int board_sel = 8;    // BOARD_THUNDERL
 
 	maincpu dut (
-		.clk(clk), .reset(core_reset), .board(board_sel[3:0]), .cpu_ce(cpu_ce),
+		.clk(clk), .reset(core_reset), .board(board_sel[4:0]), .cpu_ce(cpu_ce),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
 		.wram_addr(wram_addr), .wram_wel(wram_wel), .wram_weh(wram_weh),

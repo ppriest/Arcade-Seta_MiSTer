@@ -53,6 +53,15 @@ module seta_video #(
 	input  wire [15:0] code_mask,
 	input  wire [15:0] line_budget,
 
+	// DEBUG SWITCHES, from the OSD's Debug page. Each blanks one layer AT THE
+	// MIXER, not at its engine: the engines keep running, keep their counters
+	// and keep their SDRAM traffic, so turning a layer off does not change the
+	// timing of anything else and what is left on screen is the other layers
+	// exactly as they were. The sprite switch is en_spr in seta_core and works
+	// the other way round -- it starves the engine's ROM port -- because there
+	// the question being answered is usually "is the engine even fetching".
+	input  wire        en_l0, en_l1,
+
 	// ---- the X1-012 tile layer, LAYOUT_B only ------------------------------
 	// has_l0 low leaves the whole layer idle and the mixer takes the sprite
 	// buffer alone, which is exactly Group A's behaviour -- so the one video
@@ -139,6 +148,15 @@ module seta_video #(
 	output wire        irq_vblank_line, irq_mid_line, vblank_rise,
 
 	// ---- instrumentation ---------------------------------------------------
+	// The TILEMAP engines' own counters. dbg_l*_overrun counts line_start
+	// arriving while the engine is still rendering the previous line --
+	// i.e. it did not finish in time. Built into x1_012 from the start and
+	// connected to () until now, which is why nothing could say whether the
+	// layers were starved on hardware.
+	output wire [23:3] dbg_l0_last_addr,
+	output wire [63:0] dbg_l0_last_data,
+	output wire [15:0] dbg_l0_lines, dbg_l0_tiles, dbg_l0_overrun,
+	output wire [15:0] dbg_l1_lines, dbg_l1_tiles, dbg_l1_overrun,
 	output wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun,
 	output wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped
 );
@@ -259,12 +277,15 @@ module seta_video #(
 		.xoffs(l0_xoffs), .xoffs_flip(l0_xoffs_flip),
 		.flipscr(flipscr_l0),
 		.vis_dimy(vis_dimy), .colorbase(l0_colorbase), .code_mask(l0_code_mask),
+		.vblank_rise(vblank_rise),
 		.line_start(line_start & has_l0), .line(line),
 		.line_budget(line_budget), .line_done(), .busy(),
 		.rom_req(tile_req), .rom_addr(tile_addr),
 		.rom_valid(tile_valid), .rom_data(tile_data),
 		.lb_addr(lb_addr), .lb_data(l0_lb_data),
-		.dbg_lines(), .dbg_tiles(), .dbg_overrun()
+		.dbg_lines(dbg_l0_lines), .dbg_tiles(dbg_l0_tiles),
+		.dbg_overrun(dbg_l0_overrun),
+		.dbg_last_addr(dbg_l0_last_addr), .dbg_last_data(dbg_l0_last_data)
 	);
 
 	wire [LB_W-1:0] l1_lb_data;
@@ -280,12 +301,15 @@ module seta_video #(
 		.xoffs(l1_xoffs), .xoffs_flip(l1_xoffs_flip),
 		.flipscr(flipscr_l0),
 		.vis_dimy(vis_dimy), .colorbase(l1_colorbase), .code_mask(l1_code_mask),
+		.vblank_rise(vblank_rise),
 		.line_start(line_start & has_l1), .line(line),
 		.line_budget(line_budget), .line_done(), .busy(),
 		.rom_req(tile1_req), .rom_addr(tile1_addr),
 		.rom_valid(tile1_valid), .rom_data(tile1_data),
 		.lb_addr(lb_addr), .lb_data(l1_lb_data),
-		.dbg_lines(), .dbg_tiles(), .dbg_overrun()
+		.dbg_lines(dbg_l1_lines), .dbg_tiles(dbg_l1_tiles),
+		.dbg_overrun(dbg_l1_overrun),
+		.dbg_last_addr(), .dbg_last_data()
 	);
 
 	// COMPOSITION, for a one-layer game:
@@ -299,7 +323,14 @@ module seta_video #(
 	// which is the same bit the sprite engine uses to make front-to-back
 	// drawing work. With has_l0 low the mixer takes the sprite buffer alone --
 	// Group A, unchanged.
-	wire [LB_W-1:0] mixed_1l = (has_l0 && !lb_hit) ? l0_lb_data : lb_data;
+	// The debug switches land here, on the line-buffer data and nowhere else.
+	// Zero is what seta_layers_update's bitmap.fill(0) leaves behind, so a
+	// disabled layer reads as pen 0: transparent where the mixer tests the low
+	// four bits, and palette entry 0 where it does not.
+	wire [LB_W-1:0] l0_px_d = en_l0 ? l0_lb_data : '0;
+	wire [LB_W-1:0] l1_px_d = en_l1 ? l1_lb_data : '0;
+
+	wire [LB_W-1:0] mixed_1l = (has_l0 && !lb_hit) ? l0_px_d : lb_data;
 
 	// TWO LAYERS -- seta_layers_update's order, resolved per dot.
 	//
@@ -311,14 +342,18 @@ module seta_video #(
 	// the TOP layer is transparent on pen 0, and pen 0 of a tile is
 	// colorbase + colour*16 + 0 -- which is why "did the top layer draw here"
 	// is its low four bits being non-zero, not a written bit.
-	wire            swap    = vregs[0];
-	wire [LB_W-1:0] bot_px  = swap ? l1_lb_data : l0_lb_data;
-	wire [LB_W-1:0] top_px  = swap ? l0_lb_data : l1_lb_data;
+	// vregs latched at vblank, with the scroll and the sprite snapshot: the
+	// order bits are written mid-frame too, and MAME reads them at the draw.
+	logic [7:0] vregs_lat = '0;
+	always_ff @(posedge clk) if (vblank_rise) vregs_lat <= vregs;
+	wire            swap    = vregs_lat[0];
+	wire [LB_W-1:0] bot_px  = swap ? l1_px_d : l0_px_d;
+	wire [LB_W-1:0] top_px  = swap ? l0_px_d : l1_px_d;
 	wire            top_op  = |top_px[3:0];
 
 	// Sprites above the frontmost layer, or between the two.
 	wire [LB_W-1:0] under_spr = top_op ? top_px : bot_px;
-	wire [LB_W-1:0] mixed_2l  = vregs[1]
+	wire [LB_W-1:0] mixed_2l  = vregs_lat[1]
 	        // sprites go on before the top layer, so the top layer covers them
 	        ? (top_op ? top_px : (lb_hit ? lb_data : bot_px))
 	        // sprites go on last, over everything

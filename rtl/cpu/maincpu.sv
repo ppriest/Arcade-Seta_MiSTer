@@ -37,21 +37,23 @@ package seta_board_pkg;
 	// work RAM was cross-checked against the real reset stack pointer of every
 	// game assigned to it, which caught seven wrong entries. Treat that table
 	// as the authority and this as its RTL mirror.
-	typedef enum logic [3:0] {
-		BOARD_TWO_LAYER = 4'd0,   // rezon_map / zingzip_map / wrofaero_map
-		BOARD_DAIOH     = 4'd1,   // daioh_map      -- work RAM at 0x100000
-		BOARD_EXTDWNHL  = 4'd2,   // extdwnhl_map   -- palette at 0x600400
-		BOARD_KAMENRID  = 4'd3,   // kamenrid_map   -- vregs at 0x600003
-		BOARD_MSGUNDAM  = 4'd4,   // msgundam_map   -- sprites and tilemaps swap
-		BOARD_BLANDIA   = 4'd5,   // blandia_map
-		BOARD_BLANDIAP  = 4'd6,   // blandiap_map   -- NOT blandia_map
-		BOARD_DRGNUNIT  = 4'd7,   // drgnunit_map   -- one layer, two work RAMs
-		BOARD_THUNDERL  = 4'd8,   // thunderl_map   -- no layers
-		BOARD_WITS      = 4'd9,   // wits_map       -- thunderl plus spare RAM
-		BOARD_UMANCLUB  = 4'd10,  // umanclub_map   -- NOT thunderl_map
-		BOARD_BLOCKCAR  = 4'd11,  // blockcar_map
-		BOARD_ATEHATE   = 4'd12,  // atehate_map    -- 1 MB of work RAM
-		BOARD_PAIRLOVE  = 4'd13   // pairlove_map   -- 2048 palette entries,
+	typedef enum logic [4:0] {
+		BOARD_TWO_LAYER = 5'd0,   // rezon_map / zingzip_map / wrofaero_map
+		BOARD_DAIOH     = 5'd1,   // daioh_map      -- work RAM at 0x100000
+		BOARD_EXTDWNHL  = 5'd2,   // extdwnhl_map   -- palette at 0x600400
+		BOARD_KAMENRID  = 5'd3,   // kamenrid_map   -- vregs at 0x600003
+		BOARD_MSGUNDAM  = 5'd4,   // msgundam_map   -- sprites and tilemaps swap
+		BOARD_BLANDIA   = 5'd5,   // blandia_map
+		BOARD_BLANDIAP  = 5'd6,   // blandiap_map   -- NOT blandia_map
+		BOARD_DRGNUNIT  = 5'd7,   // drgnunit_map   -- one layer, two work RAMs
+		BOARD_THUNDERL  = 5'd8,   // thunderl_map   -- no layers
+		BOARD_WITS      = 5'd9,   // wits_map       -- thunderl plus spare RAM
+		BOARD_UMANCLUB  = 5'd10,  // umanclub_map   -- NOT thunderl_map
+		BOARD_BLOCKCAR  = 5'd11,  // blockcar_map
+		BOARD_OISIPUZL  = 5'd14,  // oisipuzl_map   -- palette and sound swap
+		BOARD_MAGSPEED  = 5'd15,  // magspeed_map   -- almost every base moves
+		BOARD_ATEHATE   = 5'd12,  // atehate_map    -- 1 MB of work RAM
+		BOARD_PAIRLOVE  = 5'd13   // pairlove_map   -- 2048 palette entries,
 		                          //                   plus a protection RAM
 	} board_t;
 endpackage
@@ -63,7 +65,13 @@ module maincpu (
 	input  wire         reset,
 
 	// Memory-map family. See seta_board_pkg above.
-	input  wire  [3:0]  board,
+	// FIVE bits. Four held sixteen maps and fifteen were used once oisipuzl
+	// and magspeed got arms of their own -- and the guard against an
+	// unmapped board was a `board > BOARD_PAIRLOVE` comparison that a full
+	// 4-bit field can never satisfy, so it had stopped guarding anything.
+	// The guard now comes from the decode's own default arm; this widening
+	// is just headroom.
+	input  wire  [4:0]  board,
 
 	// CPU clock enable TICK -- one pulse per emulated CPU cycle, generated
 	// outside this module so the 16 MHz and 8 MHz boards, and the three
@@ -116,6 +124,17 @@ module maincpu (
 	output logic        io_req,
 	output logic        io_we,
 	output logic [23:1] io_addr,
+	// The palette window's base as a WORD index, low 11 bits. The palette
+	// is the one region whose base is not aligned to its own size --
+	// 0x?00400 on every Group C board, 0x?00000 on every other -- so its
+	// consumer must subtract rather than mask. Exported from here because
+	// this is where pal_base is decided.
+	output logic [10:0] pal_base_w,
+	// COINS is at in_base+8 on this board, not +4 -- seta_core's input mux
+	// needs it to answer index 4 with COINS instead of P3.
+	output wire         coins_at8,
+	// This access is daioh's EXTRA port rather than P1/P2/COINS.
+	output logic        io_extra,
 	output logic [15:0] io_wdata,
 	output logic        io_uds, io_lds,
 	output logic [15:0] io_sel,
@@ -163,7 +182,7 @@ module maincpu (
 	localparam int IO_INPUTS   = 10;  // P1 / P2 / COINS
 	localparam int IO_DSW      = 11;
 	localparam int IO_WRAM2    = 12;  // the second work RAM block, where present
-	localparam int IO_MISC     = 13;  // watchdog, coin counter, IRQ acks
+	localparam int IO_XRAM     = 13;  // RAM above the palette, where MAME maps one
 	// pairlove only. seta.cpp calls it protection; prot_r returns the current
 	// value and then reverts that cell to the PREVIOUS value written to it, so
 	// it is a one-deep write history and not an algorithm. Two small RAMs.
@@ -240,9 +259,37 @@ module maincpu (
 	logic [23:0] pit_base;
 	logic [23:0] vregs_base;
 	logic [23:0] in_base, dsw_base;
+	// HOW BIG THE INPUT WINDOW IS, and whether COINS sits at +8 rather
+	// than +4. Both are per map: wits reads P3 at +8 and P4 at +0xa, and
+	// kamenrid_map puts COINS at +8 above its own four-byte DSW. A flat
+	// six bytes left kamenrid's Country jumper and wits' two extra players
+	// decoding nowhere.
+	logic  [4:0] in_span;
+	logic        coins_hi;
+	// daioh_map's EXTRA port, buttons 4-6 for both players. It is inside
+	// the vregs window and has to be taken out of it: io_sel is one-hot.
+	logic        has_extra;
+	logic [23:0] extra_base;
 	logic [23:0] prot_base;
 	logic        has_l0, has_l1, has_wram2;
+	// THE PALETTE SRAM. On the Group C boards the palette is 0xC00 bytes
+	// of a 16 KB SRAM at 0x?00000, and the self-tests walk the SRAM:
+	// kamenrid_map marks 0x700000-0x7003ff "Palette RAM (tested)" and
+	// 0x701000-0x703fff after it, daioh_map maps 0x700000-0x7003ff and
+	// 0x701000-0x70ffff. Without the rest of the chip Daioh reports COLOR
+	// NG at 701000 and Magical Speed PALETTE RAM NG, and both stop there.
+	// has_xram: a 16 KB block at pal_base - 0x400. msgundam and oisipuzl
+	// map only the palette.
+	logic        has_xram;
+	// TAILS. kamenrid_map and magspeed_map mark 0x804000-0x807fff,
+	// 0x884000-0x887fff and 0xb04000-0xb07fff "tested": each VRAM and the
+	// sprite code RAM is a 32 KB SRAM of which the chip uses the lower
+	// half, and the test walks all of it. has_tails widens those three
+	// windows to 32 KB; the core puts plain RAM behind the upper halves.
+	logic        has_tails;
 	logic [23:0] wram_mask;
+	// Set by the decode's default arm: this board value has no map.
+	logic        board_unmapped;
 
 	// A base of ALL-ONES means "this board does not have that region". No real
 	// map places anything at 0xFFFFFF, and it keeps the comparison uniform.
@@ -264,11 +311,17 @@ module maincpu (
 		pit_base     = NONE;
 		vregs_base   = 24'h500000;
 		in_base      = 24'h400000;  dsw_base   = 24'h600000;
+		in_span      = 5'd6;        coins_hi   = 1'b0;
+		has_extra    = 1'b0;        extra_base = NONE;
 		prot_base    = NONE;
 		has_l0 = 1'b1; has_l1 = 1'b1; has_wram2 = 1'b1;
+		has_xram = 1'b0; has_tails = 1'b0;
+		board_unmapped = 1'b0;
 
 		case (board)
 			BOARD_TWO_LAYER: begin                   // rezon_map / wrofaero_map
+				has_xram = 1'b1;
+				has_tails = 1'b1;
 				// wrofaero_map maps the uPD71054C at 0xd00000 and acks IPL 4
 				// at 0xf00000. rezon has neither, and a NONE base leaves
 				// is_pit low so nothing decodes there.
@@ -276,21 +329,50 @@ module maincpu (
 			end
 
 			BOARD_DAIOH: begin                       // daioh_map
+				has_xram = 1'b1;
+				has_tails = 1'b1;
+				// ROM IS 1 MB HERE, NOT 2. daioh_map is
+				//   map(0x000000, 0x0fffff).rom()
+				//   map(0x100000, 0x10ffff).ram()
+				// and the work RAM starts where the Group C default rom_end
+				// (0x1FFFFF) still claims ROM. is_rom is `addr24 <= rom_end`
+				// and the read path takes is_rom first, so every read back from
+				// work RAM fetched SDRAM past the end of the program image
+				// while the writes landed in RAM correctly. The game wrote its
+				// variables and read back rubbish: on hardware it managed 129
+				// sound-chip writes and never touched the video hardware at all.
+				rom_end   = 24'h0FFFFF;
 				wram_base = 24'h100000; wram_end = 24'h10FFFF;
+				has_extra = 1'b1;       extra_base = 24'h500006;
 				wram2_base = NONE;      has_wram2 = 1'b0;
 			end
 
 			BOARD_EXTDWNHL: begin                    // extdwnhl_map
+				has_xram = 1'b1;
+				has_tails = 1'b1;
 				pal_base = 24'h600400; pal_end = 24'h600FFF;
 				dsw_base = 24'h400008;
 			end
 
 			BOARD_KAMENRID: begin                    // kamenrid_map
+				has_xram = 1'b1;
+				has_tails = 1'b1;
+				rom_end    = 24'h07FFFF;
 				vregs_base = 24'h600000;
 				in_base    = 24'h500000;
 				dsw_base   = 24'h500004;
+				in_span    = 5'd10;  coins_hi = 1'b1;
 				wram_end   = 24'h20FFFF;
 				wram2_base = NONE; has_wram2 = 1'b0;
+				// THE SOUND CHIP AND THE TIMER ARE NOT WHERE THE OTHER TWO-LAYER
+				// BOARDS PUT THEM. kamenrid_map:
+				//   map(0xc00000, 0xc00007) pit8254
+				//   map(0xd00000, 0xd03fff) x1_010
+				// With the Group C defaults (x1 at 0xc00000, no PIT) the game's
+				// timer writes landed in the sound chip's registers and its
+				// sound writes decoded nowhere.
+				x1_base    = 24'hD00000;
+				pit_base   = 24'hC00000;
 			end
 
 			BOARD_MSGUNDAM: begin                    // msgundam_map
@@ -307,7 +389,41 @@ module maincpu (
 				vregs_base   = 24'h500004;
 			end
 
+			// oisipuzl_map SWAPS THE PALETTE AND THE SOUND CHIP relative to
+			// every other two-layer board -- palette at 0xc00400, X1-010 at
+			// 0x700000 -- and puts the DSW at 0x300000, where the default
+			// two-layer arrangement has its second work RAM. Decoded as
+			// BOARD_TWO_LAYER the game's palette writes went into the sound
+			// chip and its DSW reads hit RAM.
+			BOARD_OISIPUZL: begin                    // oisipuzl_map
+				rom_end    = 24'h17FFFF;             // two ROM ranges, 0 and 0x100000
+				wram_end   = 24'h20FFFF;
+				wram2_base = NONE; has_wram2 = 1'b0; // 0x300000 is the DSW here
+				dsw_base   = 24'h300000;
+				x1_base    = 24'h700000;
+				pal_base   = 24'hC00400; pal_end = 24'hC00FFF;
+			end
+
+			// magspeed_map moves nearly everything: the inputs to 0x500000,
+			// the DSW to 0x500008, the video registers to 0x500015 and both
+			// interrupt acknowledges into the same block, with the sound chip
+			// and timer swapped as on kamenrid.
+			BOARD_MAGSPEED: begin                    // magspeed_map
+				has_xram = 1'b1; has_tails = 1'b1;
+				rom_end    = 24'h07FFFF;
+				wram_end   = 24'h20FFFF;
+				wram2_base = NONE; has_wram2 = 1'b0;
+				in_base    = 24'h500000;
+				dsw_base   = 24'h500008;
+				// 0x500015, reached as vregs_base + vregs_ofs; the range must
+				// clear the acknowledges at 0x500018 and 0x50001c.
+				vregs_base = 24'h500010;
+				x1_base    = 24'hD00000;
+				pit_base   = 24'hC00000;
+			end
+
 			BOARD_BLANDIA: begin                     // blandia_map
+				has_xram = 1'b1;
 				// 0x200000-0x21FFFF in two blocks, plus 0x300000 -- the
 				// defaults above are already right. Do NOT truncate.
 				spry_base    = 24'h800000; sprc_base = 24'h800600;
@@ -317,6 +433,7 @@ module maincpu (
 			end
 
 			BOARD_BLANDIAP: begin                    // blandiap_map
+				has_xram = 1'b1;
 				wram_end = 24'h21FFFF;               // two blocks, contiguous
 			end
 
@@ -336,6 +453,8 @@ module maincpu (
 			BOARD_THUNDERL, BOARD_WITS: begin        // thunderl_map / wits_map
 				rom_end    = 24'h0FFFFF;
 				wram_base  = 24'hFFC000; wram_end  = 24'hFFFFFF;
+				// wits is the four-player one: P3 at +8, P4 at +0xa.
+				in_span    = (board == BOARD_WITS) ? 5'd12 : 5'd6;
 				wram2_base = (board == BOARD_WITS) ? 24'hE04000 : NONE;
 				wram2_end  = 24'hE07FFF;
 				has_wram2  = (board == BOARD_WITS);
@@ -445,29 +564,58 @@ module maincpu (
 				vregs_base = NONE;
 			end
 
-			default: ;    // the two-layer defaults; see the assertion below
+			// NOT the two-layer defaults. A board with no arm would decode most
+			// addresses to the wrong region and read as a CPU fault, so say so.
+			default: board_unmapped = 1'b1;
 		endcase
 	end
 
+	// is_rom is the ONE decode taken from the live address: S_IDLE needs it
+	// in the cycle the access appears, and it is a single compare.
 	wire is_rom     = (addr24 <= rom_end);
-	wire is_wram    = (addr24 >= wram_base)  && (addr24 <= wram_end);
-	wire is_wram2   = has_wram2 && (addr24 >= wram2_base) && (addr24 <= wram2_end);
-	wire is_pal     = (addr24 >= pal_base)   && (addr24 <= pal_end);
-	wire is_prot    = (addr24 >= prot_base)  && (addr24 <  prot_base + 24'h400);
-	wire is_spry    = (addr24 >= spry_base)  && (addr24 <  spry_base + 24'h600);
-	wire is_sprc    = (addr24 >= sprc_base)  && (addr24 <  sprc_base + 24'h8);
-	wire is_sprcode = (addr24 >= sprcode_base) && (addr24 < sprcode_base + 24'h4000);
-	wire is_l0v     = has_l0 && (addr24 >= l0v_base) && (addr24 < l0v_base + 24'h4000);
-	wire is_l1v     = has_l1 && (addr24 >= l1v_base) && (addr24 < l1v_base + 24'h4000);
-	wire is_l0c     = has_l0 && (addr24 >= l0c_base) && (addr24 < l0c_base + 24'h6);
-	wire is_l1c     = has_l1 && (addr24 >= l1c_base) && (addr24 < l1c_base + 24'h6);
-	wire is_x1      = (addr24 >= x1_base)    && (addr24 <  x1_base + 24'h4000);
-	wire is_pit     = (pit_base != NONE) && (addr24 >= pit_base)
-	               && (addr24 <  pit_base + 24'h8);
-	wire is_vregs   = (vregs_base != NONE) && (addr24 >= vregs_base) &&
-	                  (addr24 < vregs_base + 24'h8);
-	wire is_inputs  = (addr24 >= in_base)    && (addr24 <  in_base + 24'h6);
-	wire is_dsw     = (addr24 >= dsw_base)   && (addr24 <  dsw_base + 24'h4);
+
+	// Every other region is decoded from q_a, a copy of the address latched
+	// in S_IDLE. The decode is consumed in S_MEM, one cycle later, and the
+	// address has not moved in between -- the CPU is stalled by cpu_clkena
+	// from the moment acc_active goes high -- so the copy is the same value.
+	//
+	// What it buys: addr24 is a32, TG68K's combinational address output, the
+	// sum off its effective-address adder fed from the register file M10K.
+	// With the compares hung off it, the worst path in the design ran
+	// regfile -> adder -> compares -> q_sel at -0.131 ns, and the M10K's own
+	// clock-to-out put 2.4 ns of skew on top. From q_a the same compares
+	// start at a plain register with a whole cycle to themselves.
+	logic [23:0] q_a;
+	wire is_wram    = (q_a >= wram_base)  && (q_a <= wram_end);
+	wire is_wram2   = has_wram2 && (q_a >= wram2_base) && (q_a <= wram2_end);
+	wire is_pal     = (q_a >= pal_base)   && (q_a <= pal_end);
+	wire is_prot    = (q_a >= prot_base)  && (q_a <  prot_base + 24'h400);
+	wire is_spry    = (q_a >= spry_base)  && (q_a <  spry_base + 24'h600);
+	wire is_sprc    = (q_a >= sprc_base)  && (q_a <  sprc_base + 24'h8);
+	// 16 KB the chip uses, or the whole 32 KB SRAM where the test walks it.
+	wire [23:0] vwin = has_tails ? 24'h8000 : 24'h4000;
+	wire is_sprcode = (q_a >= sprcode_base) && (q_a < sprcode_base + vwin);
+	wire is_l0v     = has_l0 && (q_a >= l0v_base) && (q_a < l0v_base + vwin);
+	wire is_l1v     = has_l1 && (q_a >= l1v_base) && (q_a < l1v_base + vwin);
+	wire is_l0c     = has_l0 && (q_a >= l0c_base) && (q_a < l0c_base + 24'h6);
+	wire is_l1c     = has_l1 && (q_a >= l1c_base) && (q_a < l1c_base + 24'h6);
+	wire is_x1      = (q_a >= x1_base)    && (q_a <  x1_base + 24'h4000);
+	wire is_pit     = (pit_base != NONE) && (q_a >= pit_base)
+	               && (q_a <  pit_base + 24'h8);
+	wire is_extra   = has_extra && (q_a >= extra_base)
+	               && (q_a <  extra_base + 24'h2);
+	wire is_vregs   = (vregs_base != NONE) && (q_a >= vregs_base) &&
+	                  (q_a < vregs_base + 24'h8) && !is_extra;
+	// The hole is kamenrid's: its DSW lives inside the span, at +4..+7,
+	// and has its own select. Subtracting it here keeps the two windows
+	// disjoint rather than relying on the read mux's if/else order.
+	wire is_inputs  = is_extra ||
+	                  (q_a >= in_base) && (q_a < in_base + {19'd0, in_span})
+	               && !(coins_hi && (q_a >= in_base + 24'h4)
+	                             && (q_a <  in_base + 24'h8));
+	wire is_dsw     = (q_a >= dsw_base)   && (q_a <  dsw_base + 24'h4);
+	wire [23:0] xram_base = pal_base - 24'h400;
+	wire is_xram    = has_xram && (q_a >= xram_base) && (q_a < xram_base + 24'h4000);
 
 	// =====================================================================
 	// Bus sequencing
@@ -511,11 +659,11 @@ module maincpu (
 	state_t state;
 
 	// Declared here, ABOVE the FSM that reads them.
-	wire [23:0] wram_off = (addr24 - wram_base) & wram_mask;
+	wire [23:0] wram_off = (q_a - wram_base) & wram_mask;
 
 	wire [15:0] io_sel_comb = {is_pit,  // 15 IO_PIT
 	                   is_prot,       // 14 IO_PROT
-	                   1'b0,          // 13 IO_MISC -- decoded in the core, not here
+	                   is_xram,       // 13
 	                   is_wram2,      // 12
 	                   is_dsw,        // 11
 	                   is_inputs,     // 10
@@ -541,6 +689,22 @@ module maincpu (
 	logic        q_wram, q_wram_wel, q_wram_weh;
 	logic [19:1] q_wram_addr;
 	logic [15:0] q_sel;
+
+	// rom_addr is REGISTERED, not wired straight out of addr24.
+	//
+	// addr24 is a32, which is TG68K's combinational address output -- the sum
+	// coming off its address adder. Driving the bridge from it put that adder,
+	// the bridge's 23-bit tag comparator and the tag_inflight enable in one
+	// 96 MHz cycle: measured as the worst path in the design at +0.133 ns
+	// slack (adder -> always0~0..2 -> tag_inflight[20]~0 -> tag_inflight[1]).
+	//
+	// The value does not change: the CPU is stalled by cpu_clkena from the
+	// moment acc_active goes high until acc_ready, so addr24 is already held
+	// for the whole access. Latching it in the same cycle that sets rom_req --
+	// which is itself registered, so it and the address arrive together --
+	// hands the bridge a register instead of an adder, and gives the fitter
+	// something it can place next to it.
+	logic [23:1] q_rom_addr;
 
 	// Latch the ROM word on its valid pulse. NOTHING in the path from sdram.sv
 	// to here holds it: the arbiter assigns c_data combinationally from a
@@ -571,10 +735,15 @@ module maincpu (
 		end else begin
 			case (state)
 				S_IDLE: begin
+					// Every idle cycle, not just the one that starts an
+					// access: the value at the S_IDLE -> S_MEM edge is the
+					// one S_MEM decodes.
+					q_a <= addr24;
 					if (acc_active && !acc_ready) begin
 						if (is_rom && !acc_write) begin
-							rom_req <= 1'b1;
-							state   <= S_ROM;
+							rom_req    <= 1'b1;
+							q_rom_addr <= addr24[23:1];
+							state      <= S_ROM;
 						end else begin
 							// Block RAM and I/O: registered read latency,
 							// spent rather than assumed.
@@ -595,12 +764,13 @@ module maincpu (
 				// only, and the peripheral latches address and data on that
 				// edge into its own input register.
 				S_MEM: begin
-					q_addr      <= addr24[23:1];
+					q_addr      <= q_a[23:1];
 					q_wdata     <= cpu_dout;
 					q_we        <= acc_write;
 					q_uds       <= ~n_uds;
 					q_lds       <= ~n_lds;
 					q_sel       <= io_sel_comb;
+					io_extra    <= is_extra;
 					q_wram      <= is_wram;
 					q_wram_addr <= wram_off[19:1];
 					q_wram_wel  <= is_wram && acc_write && !n_lds;
@@ -643,7 +813,10 @@ module maincpu (
 	assign cpu_clkena = cpu_ce && (!acc_active || acc_ready);
 	assign cpu_din    = rd_data;
 
-	assign rom_addr   = addr24[23:1];
+	assign pal_base_w = pal_base[11:1];
+	assign coins_at8  = coins_hi;
+
+	assign rom_addr   = q_rom_addr;
 
 	assign wram_addr  = q_wram_addr;
 	assign wram_wdata = q_wdata;
@@ -668,8 +841,44 @@ module maincpu (
 	// would decode most addresses to the wrong region and look like a CPU
 	// fault. Say so in simulation rather than letting it pass.
 	always_ff @(posedge clk) begin
-		if (!reset && board > BOARD_PAIRLOVE)
+		if (!reset && board_unmapped)
 			$fatal(1, "maincpu: board=%0d has no memory map", board);
+	end
+
+	// NOTHING MAY LIE INSIDE THE ROM RANGE. is_rom is `addr24 <= rom_end` and
+	// the read path takes it first, so a region that starts at or below
+	// rom_end is readable only as ROM: writes go to the region and reads come
+	// back from SDRAM. BOARD_DAIOH shipped like that -- its map has 1 MB of
+	// ROM and work RAM at 0x100000, but the arm left the Group C default
+	// rom_end of 0x1FFFFF -- and the boot trace could not see it, because the
+	// first few hundred accesses never read a variable back.
+	//
+	// Checked here rather than in a script because every bench instantiates
+	// this module, so every bench checks it.
+	always_ff @(posedge clk) begin
+		if (!reset) begin
+			if (wram_base <= rom_end)
+				$fatal(1, "maincpu: board=%0d work RAM at %06x is inside ROM (rom_end %06x)",
+				       board, wram_base, rom_end);
+			if (has_wram2 && wram2_base != NONE && wram2_base <= rom_end)
+				$fatal(1, "maincpu: board=%0d work RAM 2 at %06x is inside ROM (rom_end %06x)",
+				       board, wram2_base, rom_end);
+			if (pal_base != NONE && pal_base <= rom_end)
+				$fatal(1, "maincpu: board=%0d palette at %06x is inside ROM (rom_end %06x)",
+				       board, pal_base, rom_end);
+			if (has_xram && xram_base <= rom_end)
+				$fatal(1, "maincpu: board=%0d palette SRAM at %06x is inside ROM (rom_end %06x)",
+				       board, xram_base, rom_end);
+			if (x1_base != NONE && x1_base <= rom_end)
+				$fatal(1, "maincpu: board=%0d X1-010 at %06x is inside ROM (rom_end %06x)",
+				       board, x1_base, rom_end);
+			if (in_base != NONE && in_base <= rom_end)
+				$fatal(1, "maincpu: board=%0d inputs at %06x are inside ROM (rom_end %06x)",
+				       board, in_base, rom_end);
+			if (dsw_base != NONE && dsw_base <= rom_end)
+				$fatal(1, "maincpu: board=%0d DSW at %06x is inside ROM (rom_end %06x)",
+				       board, dsw_base, rom_end);
+		end
 	end
 // synthesis translate_on
 

@@ -93,6 +93,13 @@ module x1_012 #(
 	input  wire  [15:0] code_mask,          // gfx_element wraps a code past the end
 
 	// ---- line engine -------------------------------------------------------
+	// VBLANK LATCH. The bank bit is sampled at vblank_rise, the same pulse the
+	// sprite engine takes its snapshot on, not read live
+	// per tile. Daioh flips vctrl[2] bit 3 at scanline 112 every frame and
+	// writes the newly selected bank during the following vblank; read live,
+	// lines 112-247 showed a bank one frame stale. MAME draws the whole frame
+	// at vblank from the bit's value then; this is the same thing.
+	input  wire         vblank_rise,
 	input  wire         line_start,
 	input  wire   [8:0] line,
 	input  wire  [15:0] line_budget,
@@ -111,7 +118,13 @@ module x1_012 #(
 
 	output logic [15:0] dbg_lines   = '0,
 	output logic [15:0] dbg_tiles   = '0,
-	output logic [15:0] dbg_overrun = '0
+	output logic [15:0] dbg_overrun = '0,
+	// The last granule this engine received: the address it asked for and
+	// the 64 bits that came back. Compared against the ROM image offline,
+	// this separates "SDRAM holds the wrong bytes" from "the engine or the
+	// arbiter handed them to the wrong client".
+	output logic [23:3] dbg_last_addr = '0,
+	output logic [63:0] dbg_last_data = '0
 );
 
 	// =====================================================================
@@ -153,7 +166,20 @@ module x1_012 #(
 		vctrl_rdata <= vctrl[c_addr < 2'd3 ? c_addr : 2'd0];
 	end
 
-	wire        bank_sel = vctrl[2][3];
+	// THE SCROLL REGISTERS ARE LATCHED HERE TOO, at the same vblank the sprite
+	// engine snapshots its RAM on. Read per line, a scroll written at scanline
+	// 112 took effect on that frame while the sprite list written by the same
+	// handler showed a frame later: the layers and the sprites came apart by a
+	// frame. MAME draws everything from the registers' values at vblank.
+	// (Caliber 50's per-scanline raster effect is not reproduced by this;
+	// docs/MAME_DIVERGENCE.md.)
+	logic       bank_sel = 1'b0;
+	logic [15:0] vctrl0_lat = '0, vctrl1_lat = '0;
+	always_ff @(posedge clk) if (vblank_rise) begin
+		bank_sel   <= vctrl[2][3];
+		vctrl0_lat <= vctrl[0];
+		vctrl1_lat <= vctrl[1];
+	end
 	wire [12:0] bank_off = bank_sel ? 13'h1000 : 13'h0000;
 
 	// =====================================================================
@@ -168,8 +194,8 @@ module x1_012 #(
 	// engine's foreground hit test learned the expensive way.
 	// =====================================================================
 	wire signed [8:0] xo = flipscr ? xoffs_flip : xoffs;
-	wire [15:0] sx_base = vctrl[0] + 16'h0010 - {{7{xo[8]}}, xo};
-	wire [15:0] sy_base = vctrl[1] - {7'd0, (9'd256 - vis_dimy) >> 1};
+	wire [15:0] sx_base = vctrl0_lat + 16'h0010 - {{7{xo[8]}}, xo};
+	wire [15:0] sy_base = vctrl1_lat - {7'd0, (9'd256 - vis_dimy) >> 1};
 	// if (flip) { x = -x - 512; y = y - vis_dimy; }
 	//
 	// SCREEN FLIP IS NOT VERIFIED and is parked. This is the transcription of
@@ -338,6 +364,8 @@ module x1_012 #(
 			end
 
 			S_WAIT: if (rom_valid) begin
+				dbg_last_addr <= rom_addr;
+				dbg_last_data <= rom_data;
 				// TWO CONVENTIONS, BOTH EASY TO GET BACKWARDS.
 				//
 				// A granule is four consecutive 16-bit words with WORD 0 IN THE

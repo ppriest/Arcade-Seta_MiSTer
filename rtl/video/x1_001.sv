@@ -271,6 +271,23 @@ module x1_001 #(
 	logic  [7:0] ylowmem [0:1023];
 	logic  [7:0] ctrlmem [0:3];
 
+	// THE SNAPSHOT. The engine renders from copies of the three RAMs taken
+	// at vblank, not from the RAMs the CPU writes. Daioh and Eight Forces
+	// rewrite the whole sprite list in their scanline-112 handler -- the Y
+	// list at 113-117, control at 117, codes from 119 to past 200 -- while
+	// the raster is inside the picture (scripts/mame_capture.py --wlog).
+	// Rendered live, the lines above the write showed the old list and the
+	// lines below the new one: a tear across the middle of every frame.
+	// MAME draws the frame at vblank from whatever the list holds then, and
+	// a PCB shows no tear, so the chip does the equivalent. Copied AFTER
+	// setac_eof's half-copy, so a buffered game snapshots the buffered list.
+	logic [15:0] codesh [0:8191];
+	logic  [7:0] ylowsh [0:1023];
+	logic  [7:0] ctrlsh [0:3];
+	// The live RAMs' read-port data, for setac_eof and the snapshot copy.
+	logic [15:0] live_code_q;
+	logic  [7:0] live_ylow_q;
+
 	logic [12:0] eng_code_addr;
 	logic  [9:0] eng_ylow_addr;
 	logic [15:0] eng_code_q;
@@ -297,17 +314,27 @@ module x1_001 #(
 
 	// ctrl2 gates and directs the buffering copy as well as selecting the
 	// bank, so it is declared before both uses.
-	wire [7:0] ctrl2 = ctrlmem[2];
+	// MAME's setac_eof reads m_spritectrl[1] -- the SECOND byte, the same one
+	// the drawer's bank expression reads. It was taken from ctrlmem[2] here,
+	// which Mobile Suit Gundam holds at 0xff: bit 5 set, so the copy never
+	// ran, and the drawer read the bank nothing had filled. Live, not the
+	// snapshot: the copy happens at the vblank itself.
+	wire [7:0] eof_ctrl = ctrlmem[1];
 
 	// ---- setac_eof --------------------------------------------------------
 	logic        eof_busy = 1'b0;
 	logic [10:0] eof_i;
 	logic        eof_dir;              // ctrl2 bit 6: 1 = 0x1000 -> 0x0000
+	// WORD offsets, as m_spritecode is a u16 array: the halves are 0x1000
+	// words apart (bit 12). Written as bit 11 and the other way round, no
+	// game that copies had ever rendered -- Dragon Unit's family sets bit 5
+	// and never copies; Mobile Suit Gundam copies 0x0000 -> 0x1000 and the
+	// drawer reads 0x1000+, which nothing filled: no sprites at all.
 	logic        eof_wr;
 	logic [12:0] eof_waddr;
 
-	wire [12:0] eof_src = {1'b0, ~eof_dir, eof_i};
-	wire [12:0] eof_dst = {1'b0,  eof_dir, eof_i};
+	wire [12:0] eof_src = { eof_dir, 1'b0, eof_i};
+	wire [12:0] eof_dst = {~eof_dir, 1'b0, eof_i};
 
 	always_ff @(posedge clk) begin
 		eof_wr <= 1'b0;
@@ -315,9 +342,9 @@ module x1_001 #(
 			eof_busy <= 1'b0;
 		end else if (!eof_busy) begin
 			// ~ctrl2 & 0x20 -- bit 5 CLEAR means buffer.
-			if (vblank_rise && buffer_sprites && !ctrl2[5]) begin
+			if (vblank_rise && buffer_sprites && !eof_ctrl[5]) begin
 				eof_busy <= 1'b1;
-				eof_dir  <= ctrl2[6];
+				eof_dir  <= eof_ctrl[6];
 				eof_i    <= 11'd0;
 			end
 		end else begin
@@ -329,6 +356,39 @@ module x1_001 #(
 		end
 	end
 
+	// ---- the snapshot copy ------------------------------------------------
+	// 8192 code words then 1024 Y bytes, one a cycle: 9216 cycles, under two
+	// scanlines, started at vblank_rise and held until any setac_eof copy has
+	// finished. The engine reads the half-written snapshot meanwhile, on
+	// lines nobody sees. Control is sampled at the start.
+	logic        snap_pending = 1'b0, snap_busy = 1'b0;
+	logic [13:0] snap_i, snap_wi;
+	logic        snap_wr_code, snap_wr_ylow;
+	always_ff @(posedge clk) begin
+		snap_wr_code <= 1'b0;
+		snap_wr_ylow <= 1'b0;
+		if (reset) begin
+			snap_pending <= 1'b0;
+			snap_busy    <= 1'b0;
+		end else begin
+			if (vblank_rise) snap_pending <= 1'b1;
+			if (snap_busy) begin
+				// The word read on the previous cycle is written this one.
+				snap_wi      <= snap_i;
+				snap_wr_code <= (snap_i < 14'd8192);
+				snap_wr_ylow <= (snap_i >= 14'd8192);
+				if (snap_i == 14'd9215) snap_busy <= 1'b0;
+				else snap_i <= snap_i + 14'd1;
+			end else if (snap_pending && !eof_busy) begin
+				snap_pending <= 1'b0;
+				snap_busy    <= 1'b1;
+				snap_i       <= 14'd0;
+				ctrlsh[0] <= ctrlmem[0]; ctrlsh[1] <= ctrlmem[1];
+				ctrlsh[2] <= ctrlmem[2]; ctrlsh[3] <= ctrlmem[3];
+			end
+		end
+	end
+
 	// ONE WRITE ADDRESS, MUXED -- not two branches writing different addresses.
 	// Written the obvious way, with the copy in an if and the CPU in the else,
 	// this RAM stops inferring as block RAM and Quartus builds 8192 words out
@@ -336,7 +396,7 @@ module x1_001 #(
 	// device's 83,820. Same rule as LESSONS_LEARNED's "a true dual-port RAM
 	// must be ONE always block with both ports in it".
 	wire [12:0] cw_addr = eof_wr ? eof_waddr  : c_addr;
-	wire [15:0] cw_data = eof_wr ? eng_code_q : c_wdata;
+	wire [15:0] cw_data = eof_wr ? live_code_q : c_wdata;
 	wire        cw_lo   = eof_wr ? 1'b1 : (c_we && c_lds);
 	wire        cw_hi   = eof_wr ? 1'b1 : (c_we && c_uds);
 
@@ -346,15 +406,22 @@ module x1_001 #(
 		code_rdata <= codemem[c_addr];
 	end
 
-	// The engine's read port, borrowed by the copy while the engine is idle.
-	wire [12:0] eng_rd_addr = eof_busy ? eof_src : eng_code_addr;
-	always_ff @(posedge clk) eng_code_q <= codemem[eng_rd_addr];
+	// The live RAM's read port serves setac_eof's copy and the snapshot; the
+	// engine reads the snapshot.
+	wire [12:0] live_rd_addr = eof_busy ? eof_src : snap_i[12:0];
+	always_ff @(posedge clk) live_code_q <= codemem[live_rd_addr];
+	always_ff @(posedge clk) eng_code_q  <= codesh[eng_code_addr];
+	always_ff @(posedge clk)
+		if (snap_wr_code) codesh[snap_wi[12:0]] <= live_code_q;
 
 	always_ff @(posedge clk) begin
 		if (y_we) ylowmem[y_addr] <= y_wdata;
 		ylow_rdata <= ylowmem[y_addr];
 	end
-	always_ff @(posedge clk) eng_ylow_q <= ylowmem[eng_ylow_addr];
+	always_ff @(posedge clk) live_ylow_q <= ylowmem[snap_i[9:0]];
+	always_ff @(posedge clk) eng_ylow_q  <= ylowsh[eng_ylow_addr];
+	always_ff @(posedge clk)
+		if (snap_wr_ylow) ylowsh[snap_wi[9:0]] <= live_ylow_q;
 
 	always_ff @(posedge clk) begin
 		if (k_we) ctrlmem[k_addr] <= k_wdata;
@@ -364,9 +431,12 @@ module x1_001 #(
 	// The four control bytes are read continuously rather than through a port:
 	// the engine needs all of them at once, and a four-entry array is flops
 	// however it is written.
-	wire [7:0] ctrl0 = ctrlmem[0];
-	wire [7:0] ctrl1 = ctrlmem[1];
-	wire [7:0] ctrl3 = ctrlmem[3];
+	// The engine's view of the control registers is the snapshot's; ctrl2
+	// above stays live because setac_eof reads it at the vblank itself.
+	wire [7:0] ctrl0 = ctrlsh[0];
+	wire [7:0] ctrl1 = ctrlsh[1];
+	wire [7:0] ctrl2 = ctrlsh[2];
+	wire [7:0] ctrl3 = ctrlsh[3];
 
 	// =====================================================================
 	// Line buffers: two of 512, written by the engine, read by the video side.

@@ -14,20 +14,20 @@
     <rom index="0" zip="neobattl.zip" md5="none">
         <!-- maincpu -->
         <interleave output="16">
-            <part name="bp923001.u45" map="01"/>
-            <part name="bp923002.u46" map="10"/>
+            <part name="bp923001.u45" crc="0d0aeb73" map="01"/>
+            <part name="bp923002.u46" crc="9731fbbc" map="10"/>
         </interleave>
         <part repeat="786432">00</part>
         <!-- gfx1 -->
-        <part name="bp923-003.u15"/>
-        <part name="bp923-004.u9"/>
+        <part name="bp923-003.u15" crc="91ca98a1"/>
+        <part name="bp923-004.u9" crc="15c678e3"/>
         <!-- pad to 0x300000 -->
         <part repeat="1048576">00</part>
         <!-- x1snd -->
-        <part name="bp923-005.u4"/>
+        <part name="bp923-005.u4" crc="7c0e37be"/>
     </rom>
 
-    <switches default="FF,FF,00" base="0">
+    <switches default="FF,FF,FF" base="0">
         <dip name="Lives" bits="0,1" ids="4,3,1,2"/>
         <dip name="Difficulty" bits="2,3" ids="Hardest,Hard,Easy,Normal"/>
         <dip name="Coinage" bits="4,5,6,7" ids="Free Play,8 Coins/3 Credits,5 Coins/3 Credits,3 Coins/2 Credits,2 Coins/3 Credits,1 Coin/6 Credits,1 Coin/5 Credits,1 Coin/4 Credits,1 Coin/3 Credits,1 Coin/2 Credits,6 Coins/1 Credit,5 Coins/1 Credit,4 Coins/1 Credit,3 Coins/1 Credit,2 Coins/1 Credit,1 Coin/1 Credit"/>

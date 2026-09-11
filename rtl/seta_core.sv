@@ -58,6 +58,8 @@ module seta_core (
 	// ---- inputs, already assembled into the driver's port words -------------
 	// Active LOW, as the driver's PORT_START blocks are.
 	input  wire [15:0] p1_in, p2_in, coins_in,
+	// daioh's EXTRA port at 0x500006: buttons 4-6 for both players.
+	input  wire [15:0] extra_in,
 	input  wire [15:0] p3_in, p4_in,     // wits only
 	input  wire [15:0] dsw_in,
 
@@ -66,6 +68,7 @@ module seta_core (
 	// ---- debug switches, for bisecting a fault without a rebuild ------------
 	input  wire        en_spr,
 	input  wire        en_pcm,
+	input  wire        en_l0, en_l1,   // blank a tile layer at the mixer
 
 	// ---- video out ------------------------------------------------------------
 	output wire  [7:0] video_r, video_g, video_b,
@@ -76,12 +79,57 @@ module seta_core (
 	output wire signed [15:0] audio_l, audio_r,
 
 	// ---- instrumentation ------------------------------------------------------
+	output wire [23:3] dbg_l0_last_addr,
+	output wire [63:0] dbg_l0_last_data,
+	output wire [15:0] dbg_l0_lines, dbg_l0_tiles, dbg_l0_overrun,
+	output wire [15:0] dbg_l1_lines, dbg_l1_tiles, dbg_l1_overrun,
 	output wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun,
 	output wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped,
 	// The driver's ROT for this set, for the top level's Auto rotation.
 	output wire  [1:0] game_rot,
+	// Seta.sv assembles the P1/P2 words; see seta_board_cfg.sv.
+	output wire  [2:0] input_layout,
 	output wire [15:0] dbg_snd_samples, dbg_snd_overrun, dbg_snd_rom_reads,
 	output wire  [7:1] dbg_irq_pending,
+
+	// CPU WRITES PER VIDEO REGION. The other probe counts what the sprite
+	// engine and the sound chip DO; these count what the CPU SENDS, which
+	// is what a black screen asks first: a game that never writes the
+	// palette and never writes VRAM is failing before the video path, not
+	// inside it. Saturating, so a wrapped counter cannot read as a small
+	// one.
+	// WHERE THE CPU IS. dbg_last_rom is the byte address of the most recent
+	// program fetch, sampled continuously: a CPU spinning in a loop parks it
+	// in that loop's range, and a CPU that never started leaves it at 0.
+	output logic [23:0] dbg_last_rom,
+	output logic [15:0] dbg_rom_fetches,
+	output logic [15:0] dbg_wram_writes,
+	output logic [15:0] dbg_io_reads,
+	// The address of the most recent peripheral READ. With dbg_io_reads
+	// saturated this says what the CPU is polling, which a count alone
+	// cannot.
+	output logic [23:0] dbg_last_io,
+	// The last program fetch from BELOW 0x400, i.e. out of the 68000 vector
+	// table. Daioh sends illegal instruction, privilege violation and IRQ 4-7
+	// all to 0x400, so a restart loop is invisible in the PC but obvious in
+	// which vector was read: 0x10 illegal, 0x20 privilege, 0x64-0x7c the
+	// autovectors, 0x08/0x0c a bus or address error.
+	output logic [23:0] dbg_last_vec,
+	// PC HISTORY. The last twenty ROM reads -- instruction fetches and ROM
+	// data reads alike, newest in the low word -- frozen when a fetch lands
+	// on exception vectors 4..11 (0x010-0x02f: illegal
+	// instruction, zero divide, CHK, TRAPV, privilege, trace, line A/F).
+	// What the CPU was doing on its way into a handler.
+	output logic [479:0] dbg_pc_ring,
+	output logic         dbg_pc_frozen,
+	output logic [15:0] dbg_w_pal,
+	                    dbg_w_l0v,
+	                    dbg_w_l1v,
+	                    dbg_w_l0c,
+	                    dbg_w_l1c,
+	                    dbg_w_vregs,
+	                    dbg_w_sprc,
+	                    dbg_w_x1snd,
 	output wire        dbg_cpu_stb,
 	output wire [23:1] dbg_cpu_addr,
 	output wire        dbg_cpu_we,
@@ -91,7 +139,7 @@ module seta_core (
 	// =====================================================================
 	// Board configuration
 	// =====================================================================
-	wire  [3:0] map_board;
+	wire  [4:0] map_board;
 	wire  [4:0] cpu_div;
 	wire [22:0] gfx_half_words;
 	wire [15:0] code_mask;
@@ -101,6 +149,9 @@ module seta_core (
 	wire        irq_vbl_hold, has_ack, has_prot, has_tl_prot;
 	wire [23:1] ack_addr;
 	wire        ack_d0_low;
+	wire        has_ack2;
+	wire [23:1] ack2_addr;
+	wire  [2:0] ack2_level;
 	wire  [2:0] ack_level;
 	wire [23:0] tl_prot_base, tl_prot_size, tl_prot_rd;
 	wire signed [8:0] fg_xoffs, fg_xoffs_flip, fg_yoffs, fg_yoffs_flip;
@@ -130,7 +181,7 @@ module seta_core (
 
 	seta_board_cfg u_cfg (
 		.game(game),
-		.game_rot(game_rot),
+		.game_rot(game_rot), .input_layout(input_layout),
 		.map_board(map_board), .cpu_div(cpu_div),
 		.gfx_half_words(gfx_half_words), .code_mask(code_mask),
 		.pal_entries(pal_entries),
@@ -139,6 +190,7 @@ module seta_core (
 		.irq_sl240_level(irq_sl240_level), .irq_sl112_level(irq_sl112_level),
 		.has_ack(has_ack), .ack_addr(ack_addr), .ack_level(ack_level),
 		.ack_d0_low(ack_d0_low),
+		.has_ack2(has_ack2), .ack2_addr(ack2_addr), .ack2_level(ack2_level),
 		.has_l0(has_l0), .has_l1(has_l1), .layout(layout),
 		.has_x1_bank(has_x1_bank),
 		.vregs_ofs(vregs_ofs),
@@ -199,6 +251,9 @@ module seta_core (
 
 	wire        io_req, io_we, io_uds, io_lds;
 	wire [23:1] io_addr;
+	wire [10:0] pal_base_w;
+	wire        coins_at8;
+	wire        io_extra;
 	wire [15:0] io_wdata;
 	wire [15:0] io_sel;
 	logic [15:0] io_rdata;
@@ -213,6 +268,8 @@ module seta_core (
 		.wram_addr(wram_addr), .wram_wel(wram_wel), .wram_weh(wram_weh),
 		.wram_wdata(wram_wdata), .wram_rdata(wram_rdata),
 		.io_req(io_req), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata),
+		.pal_base_w(pal_base_w), .coins_at8(coins_at8),
+		.io_extra(io_extra),
 		.io_uds(io_uds), .io_lds(io_lds), .io_sel(io_sel), .io_rdata(io_rdata),
 		.ipl_level(ipl_level), .iack(iack), .iack_level(iack_level),
 		.dbg_stb(dbg_cpu_stb), .dbg_addr(dbg_cpu_addr),
@@ -232,6 +289,62 @@ module seta_core (
 	localparam int IO_PIT = 15;
 	localparam int IO_X1SND = 8, IO_INPUTS = 10, IO_DSW = 11, IO_WRAM2 = 12;
 	localparam int IO_PROT = 14;
+	localparam int IO_XRAM = 13;
+
+	always_ff @(posedge clk) begin
+		if (reset) begin
+			dbg_last_rom    <= 24'd0;
+			dbg_rom_fetches <= 16'd0;
+			dbg_wram_writes <= 16'd0;
+			dbg_io_reads    <= 16'd0;
+			dbg_last_io     <= 24'd0;
+			dbg_last_vec    <= 24'd0;
+			dbg_pc_ring     <= '0;
+			dbg_pc_frozen   <= 1'b0;
+		end else begin
+			if (rom_req) begin
+				dbg_last_rom <= {rom_addr, 1'b0};
+				if ({rom_addr, 1'b0} < 24'h000400 && {rom_addr, 1'b0} >= 24'h000008)
+					dbg_last_vec <= {rom_addr, 1'b0};
+				if (~&dbg_rom_fetches) dbg_rom_fetches <= dbg_rom_fetches + 16'd1;
+				if (!dbg_pc_frozen) begin
+					dbg_pc_ring <= {dbg_pc_ring[455:0], rom_addr, 1'b0};
+					// From 0x10, not 0x8: the reset sequence prefetches 0x8 and
+					// froze the ring before the first instruction.
+					if ({rom_addr, 1'b0} >= 24'h000010 && {rom_addr, 1'b0} < 24'h000030)
+						dbg_pc_frozen <= 1'b1;
+				end
+			end
+			if (wram_wel | wram_weh)
+				if (~&dbg_wram_writes) dbg_wram_writes <= dbg_wram_writes + 16'd1;
+			if (io_req && !io_we) begin
+				dbg_last_io <= {io_addr, 1'b0};
+				if (~&dbg_io_reads) dbg_io_reads <= dbg_io_reads + 16'd1;
+			end
+		end
+	end
+
+	always_ff @(posedge clk) begin
+		if (reset) begin
+			dbg_w_pal <= 16'd0;
+			dbg_w_l0v <= 16'd0;
+			dbg_w_l1v <= 16'd0;
+			dbg_w_l0c <= 16'd0;
+			dbg_w_l1c <= 16'd0;
+			dbg_w_vregs <= 16'd0;
+			dbg_w_sprc <= 16'd0;
+			dbg_w_x1snd <= 16'd0;
+		end else if (io_req && io_we) begin
+			if (io_sel[IO_PALETTE] && dbg_w_pal != 16'hFFFF) dbg_w_pal <= dbg_w_pal + 16'd1;
+			if (io_sel[IO_L0VRAM] && dbg_w_l0v != 16'hFFFF) dbg_w_l0v <= dbg_w_l0v + 16'd1;
+			if (io_sel[IO_L1VRAM] && dbg_w_l1v != 16'hFFFF) dbg_w_l1v <= dbg_w_l1v + 16'd1;
+			if (io_sel[IO_L0CTRL] && dbg_w_l0c != 16'hFFFF) dbg_w_l0c <= dbg_w_l0c + 16'd1;
+			if (io_sel[IO_L1CTRL] && dbg_w_l1c != 16'hFFFF) dbg_w_l1c <= dbg_w_l1c + 16'd1;
+			if (io_sel[IO_VREGS] && dbg_w_vregs != 16'hFFFF) dbg_w_vregs <= dbg_w_vregs + 16'd1;
+			if (io_sel[IO_SPRCODE] && dbg_w_sprc != 16'hFFFF) dbg_w_sprc <= dbg_w_sprc + 16'd1;
+			if (io_sel[IO_X1SND] && dbg_w_x1snd != 16'hFFFF) dbg_w_x1snd <= dbg_w_x1snd + 16'd1;
+		end
+	end
 
 	// =====================================================================
 	// Work RAM
@@ -274,20 +387,72 @@ module seta_core (
 	// The second block, where a board has one. In Group A only wits does:
 	// 0xe04000-0xe07fff, 16 KB.
 	// Registered in for the same reason, and on the same three-cycle budget.
-	logic [15:0] wram2 [0:8191];
+	// 64 KB: zingzip_map's 0x300000-0x30ffff, which War of Aero uses as its
+	// main work RAM. At 16 KB it aliased, and probe A caught the CPU jumping
+	// through a null function pointer out of a table there.
+	logic [15:0] wram2 [0:32767];
 	logic [15:0] wram2_q;
 	wire         w2_we = io_req && io_we && io_sel[IO_WRAM2];
 	logic        n2_we, n2_lds, n2_uds;
-	logic [13:1] n2_addr;
+	logic [15:1] n2_addr;
 	logic [15:0] n2_wdata;
 	always_ff @(posedge clk) begin
 		n2_we <= w2_we; n2_lds <= io_lds; n2_uds <= io_uds;
-		n2_addr <= io_addr[13:1]; n2_wdata <= io_wdata;
+		n2_addr <= io_addr[15:1]; n2_wdata <= io_wdata;
 	end
 	always_ff @(posedge clk) begin
 		if (n2_we && n2_lds) wram2[n2_addr][7:0]  <= n2_wdata[7:0];
 		if (n2_we && n2_uds) wram2[n2_addr][15:8] <= n2_wdata[15:8];
 		wram2_q <= wram2[n2_addr];
+	end
+
+	// The palette SRAM, 16 KB at 0x?00000, on the boards maincpu.sv says
+	// have one (has_xram). The palette proper is 0x400-0xFFF of it and is
+	// ALSO written into seta_palette (IO_PALETTE is set alongside IO_XRAM
+	// there); reads come from here, so the whole chip reads back.
+	logic [15:0] xram [0:8191];
+	logic [15:0] xram_q;
+	wire         w3_we = io_req && io_we && io_sel[IO_XRAM];
+	logic        n3_we, n3_lds, n3_uds;
+	logic [12:0] n3_addr;
+	logic [15:0] n3_wdata;
+	always_ff @(posedge clk) begin
+		n3_we <= w3_we; n3_lds <= io_lds; n3_uds <= io_uds;
+		n3_addr <= io_addr[13:1]; n3_wdata <= io_wdata;
+	end
+	always_ff @(posedge clk) begin
+		if (n3_we && n3_lds) xram[n3_addr][7:0]  <= n3_wdata[7:0];
+		if (n3_we && n3_uds) xram[n3_addr][15:8] <= n3_wdata[15:8];
+		xram_q <= xram[n3_addr];
+	end
+
+	// TAILS: the upper 16 KB of each 32 KB VRAM / sprite-code SRAM. The
+	// chips use the lower half; kamenrid_map and magspeed_map mark the
+	// upper half "tested", and the test says NG without it. maincpu.sv
+	// widens the windows only where has_tails is set, so on every other
+	// board io_addr[14] is never high inside them.
+	logic [15:0] l0_tail [0:8191], l1_tail [0:8191], code_tail [0:8191];
+	logic [15:0] l0_tail_q, l1_tail_q, code_tail_q;
+	logic        t_l0_we, t_l1_we, t_code_we, t_lds, t_uds;
+	logic [12:0] t_addr;
+	logic [15:0] t_wdata;
+	always_ff @(posedge clk) begin
+		t_l0_we   <= io_req && io_we && io_addr[14] && io_sel[IO_L0VRAM];
+		t_l1_we   <= io_req && io_we && io_addr[14] && io_sel[IO_L1VRAM];
+		t_code_we <= io_req && io_we && io_addr[14] && io_sel[IO_SPRCODE];
+		t_lds <= io_lds; t_uds <= io_uds;
+		t_addr <= io_addr[13:1]; t_wdata <= io_wdata;
+	end
+	always_ff @(posedge clk) begin
+		if (t_l0_we && t_lds) l0_tail[t_addr][7:0]  <= t_wdata[7:0];
+		if (t_l0_we && t_uds) l0_tail[t_addr][15:8] <= t_wdata[15:8];
+		l0_tail_q <= l0_tail[t_addr];
+		if (t_l1_we && t_lds) l1_tail[t_addr][7:0]  <= t_wdata[7:0];
+		if (t_l1_we && t_uds) l1_tail[t_addr][15:8] <= t_wdata[15:8];
+		l1_tail_q <= l1_tail[t_addr];
+		if (t_code_we && t_lds) code_tail[t_addr][7:0]  <= t_wdata[7:0];
+		if (t_code_we && t_uds) code_tail[t_addr][15:8] <= t_wdata[15:8];
+		code_tail_q <= code_tail[t_addr];
 	end
 
 	// =====================================================================
@@ -342,6 +507,7 @@ module seta_core (
 		.colorbase_fg(colorbase_fg), .colorbase_bg(colorbase_bg),
 		.screen_h(screen_h), .vis_max_y(vact_end[8:0]), .backdrop(backdrop),
 		.code_mask(code_mask), .line_budget(line_budget),
+		.en_l0(en_l0), .en_l1(en_l1),
 
 		// ---- the X1-012 tile layer, Phase 2 --------------------------------
 		// has_l0 comes from the board config and is low for every Group A set,
@@ -349,7 +515,7 @@ module seta_core (
 		// buffer alone. maincpu.sv has decoded IO_L0VRAM and IO_L0CTRL since
 		// Phase 1; nothing was listening.
 		.has_l0(has_l0),
-		.l0_vram_we(io_req && io_we && io_sel[IO_L0VRAM]),
+		.l0_vram_we(io_req && io_we && io_sel[IO_L0VRAM] && !io_addr[14]),
 		.l0_vram_addr(io_addr[13:1]), .l0_vram_wdata(io_wdata),
 		.l0_vram_uds(io_uds), .l0_vram_lds(io_lds),
 		.l0_vram_rdata(l0_vram_rdata),
@@ -363,7 +529,7 @@ module seta_core (
 		.tile_valid(tile_valid), .tile_data(tile_data),
 
 		.has_l1(has_l1),
-		.l1_vram_we(io_req && io_we && io_sel[IO_L1VRAM]),
+		.l1_vram_we(io_req && io_we && io_sel[IO_L1VRAM] && !io_addr[14]),
 		.l1_vram_addr(io_addr[13:1]), .l1_vram_wdata(io_wdata),
 		.l1_vram_uds(io_uds), .l1_vram_lds(io_lds),
 		.l1_vram_rdata(l1_vram_rdata),
@@ -377,7 +543,7 @@ module seta_core (
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.vregs(vregs),
 
-		.code_we(io_req && io_we && io_sel[IO_SPRCODE]),
+		.code_we(io_req && io_we && io_sel[IO_SPRCODE] && !io_addr[14]),
 		.code_addr(io_addr[13:1]), .code_wdata(io_wdata),
 		.code_uds(io_uds), .code_lds(io_lds), .code_rdata(code_rdata),
 		// spriteylow is a byte array the CPU sees as words, and
@@ -389,7 +555,10 @@ module seta_core (
 		.ctrl_addr(io_addr[2:1]), .ctrl_wdata(io_wdata[7:0]),
 		.ctrl_rdata(ctrl_rdata),
 		.pal_we(io_req && io_we && io_sel[IO_PALETTE]),
-		.pal_addr(io_addr[11:1]), .pal_wdata(io_wdata),
+		// OFFSET from the window's base, not the raw address. See
+		// pal_base_w in maincpu.sv: the palette is the one region whose base
+		// is not aligned to its own size.
+		.pal_addr(io_addr[11:1] - pal_base_w), .pal_wdata(io_wdata),
 		.pal_uds(io_uds), .pal_lds(io_lds), .pal_rdata(pal_rdata),
 		.rom_req(spr_req), .rom_addr(spr_addr),
 		.rom_valid(spr_valid_g), .rom_data(spr_data),
@@ -398,6 +567,12 @@ module seta_core (
 		.vga_vb(video_vb), .vga_de(video_de), .vga_ce(video_ce),
 		.irq_vblank_line(irq_sl240_pulse), .irq_mid_line(irq_sl112_pulse),
 		.vblank_rise(irq_vbl_pulse),
+		.dbg_l0_last_addr(dbg_l0_last_addr),
+		.dbg_l0_last_data(dbg_l0_last_data),
+		.dbg_l0_lines(dbg_l0_lines), .dbg_l0_tiles(dbg_l0_tiles),
+		.dbg_l0_overrun(dbg_l0_overrun),
+		.dbg_l1_lines(dbg_l1_lines), .dbg_l1_tiles(dbg_l1_tiles),
+		.dbg_l1_overrun(dbg_l1_overrun),
 		.dbg_lines(dbg_lines), .dbg_sprites(dbg_sprites),
 		.dbg_fetches(dbg_fetches), .dbg_overrun(dbg_overrun),
 		.dbg_worst_line(dbg_worst_line), .dbg_worst_sprites(dbg_worst_sprites),
@@ -452,6 +627,11 @@ module seta_core (
 		if (has_ack && io_req && io_addr == ack_addr && ack_level != 3'd0
 		    && (!ack_d0_low || !io_wdata[0]))
 			irq_clr[ack_level] = 1'b1;
+
+		// The second acknowledge, where the board has two. ack_d0_low is
+		// blockcar's alone and blockcar has one ack, so it does not apply here.
+		if (has_ack2 && io_req && io_addr == ack2_addr && ack2_level != 3'd0)
+			irq_clr[ack2_level] = 1'b1;
 	end
 
 	seta_irq u_irq (
@@ -574,17 +754,22 @@ module seta_core (
 		// maincpu.sv decodes, but putting it ahead of the mux makes that
 		// independent of where the inputs window happens to end.
 		if      (tl_prot_rd_hit)     io_rdata = {8'h00, tl_prot_value};
+		// The palette SRAM before the palette: on a board that has it both
+		// bits are set for a palette address and the SRAM holds the same
+		// word.
+		else if (io_sel[IO_XRAM])    io_rdata = xram_q;
 		else if (io_sel[IO_PALETTE]) io_rdata = pal_rdata;
-		else if (io_sel[IO_L0VRAM])  io_rdata = l0_vram_rdata;
+		else if (io_sel[IO_L0VRAM])  io_rdata = io_addr[14] ? l0_tail_q : l0_vram_rdata;
 		else if (io_sel[IO_L0CTRL])  io_rdata = l0_ctrl_rdata;
-		else if (io_sel[IO_L1VRAM])  io_rdata = l1_vram_rdata;
+		else if (io_sel[IO_L1VRAM])  io_rdata = io_addr[14] ? l1_tail_q : l1_vram_rdata;
 		else if (io_sel[IO_L1CTRL])  io_rdata = l1_ctrl_rdata;
-		else if (io_sel[IO_SPRCODE]) io_rdata = code_rdata;
+		else if (io_sel[IO_SPRCODE]) io_rdata = io_addr[14] ? code_tail_q : code_rdata;
 		else if (io_sel[IO_SPRYLOW]) io_rdata = {8'h00, ylow_rdata};
 		else if (io_sel[IO_SPRCTRL]) io_rdata = {8'h00, ctrl_rdata};
 		else if (io_sel[IO_X1SND])   io_rdata = x1_rdata;
 		else if (io_sel[IO_WRAM2])   io_rdata = wram2_q;
 		else if (io_sel[IO_PROT])    io_rdata = prot_rdata;
+		else if (io_sel[IO_INPUTS] && io_extra) io_rdata = extra_in;
 		else if (io_sel[IO_INPUTS])  begin
 			// P1 at +0, P2 at +2, COINS at +4, and wits alone adds P3 at +8 and
 			// P4 at +0xa. Uniform across every Group A map; only the base moves.
@@ -592,7 +777,8 @@ module seta_core (
 				3'd0:    io_rdata = p1_in;
 				3'd1:    io_rdata = p2_in;
 				3'd2:    io_rdata = coins_in;
-				3'd4:    io_rdata = p3_in;
+				// kamenrid_map reads COINS here instead. It has no P3.
+				3'd4:    io_rdata = coins_at8 ? coins_in : p3_in;
 				3'd5:    io_rdata = p4_in;
 				default: io_rdata = 16'hffff;   // active low: nothing pressed
 			endcase

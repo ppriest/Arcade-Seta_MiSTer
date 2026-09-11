@@ -512,6 +512,27 @@ propagation delay. Interface tuning (clock phase, drive strength, IOE registers)
 *external* margins by a fraction of a clock period; if a change that size makes no difference at
 all, the problem is not at the interface.
 
+### [Seta] A clean STA summary is a property of one placement, not of the design
+
+Build 10000019 and build 10000020 are the same commit, d908cd9. 19 was fitted
+with seed 2 and reported every clock domain positive -- worst clk_sys setup
++0.950, TNS 0.000. On hardware it was broken across the board: Daioh took the
+illegal-instruction vector because the reset PC came back as 0x0008040A instead
+of 0x0000040A, one wrong bit in a word read from SDRAM, and then hung in the
+bus FSM's S_ROM waiting for a fetch that never returned; Kamen Rider, Rezon and
+Oishii Puzzle died in boot; Mobile Suit Gundam ran with a black screen. Build
+20, seed 7, reports a WORSE worst slack (+0.446) and every set runs.
+
+Nothing in the three source changes between 18 and 19 could reach those games
+-- Daioh has has_wram2 = 0 and buffer_sprites = 0 -- which is what ruled logic
+out and made the seed the thing to vary. The SDRAM interface is the likely
+victim: neither Seta.sdc nor sys/sys_top.sdc constrains a single SDRAM pin, so
+those paths are analysed on trust and the fitter is free to move them.
+
+So: when a build regresses games whose code paths the diff does not touch,
+rebuild the SAME commit at another seed before bisecting the source. It costs
+one compile and it separates logic from placement outright.
+
 ### [Seta] Estimate the worst case from the hardware, not from the frames you happened to look at
 
 The sprite engine was budgeted against a count taken from the captured frames:
@@ -1470,6 +1491,34 @@ transport is wrong. And when standing up a CPU bench, back every region the
 hardware backs — `blandia_map` has three separate work-RAM blocks plus palette,
 two tilemap VRAMs and three sprite arrays, and the boot exercises them before it
 does anything visible.
+
+### [Seta] The self-tests walk the whole SRAM chip, not the window the custom chip uses
+
+The Group C boards put a 16 KB SRAM behind the palette (0x?00000-0x?03fff, of
+which 0x400-0xfff is the palette) and 32 KB SRAMs behind each VRAM and the
+sprite code RAM, of which the X1-012 and X1-001 use the lower 16 KB. The
+power-on tests walk the chips: `kamenrid_map` marks 0x700000-0x7003ff,
+0x701000-0x703fff, 0x804000-0x807fff, 0x884000-0x887fff and 0xb04000-0xb07fff
+"tested". A core that decodes only the windows the chips use passes every
+simulation (the benches drive the chips, not the tests) and fails on hardware
+with COLOR NG / PALETTE RAM NG / VRAM1 NG on a screen that then never
+changes -- or, on Eight Forces, a plain black screen with the CPU running.
+
+The boot-trace sweep cannot see it either: the tests happen after its 400
+accesses. Model the chip, not the window (`has_xram`, `has_tails` in
+`maincpu.sv`), and treat MAME's `.ram()` lines around a device as the size of
+the physical SRAM.
+
+### [Seta] A region whose base is not aligned to its size must be indexed by subtraction, not by masking
+
+Every region in `maincpu.sv` was indexed by the low address bits, which is
+right only when the base's low bits are zero. The palette on every Group C
+board is at 0x?00400: entry 0 landed at RAM index 0x200, sprite entries
+0x000-0x1ff were never written (black sprites) and each layer read colours
+meant for another (right art, wrong colours) -- on every Group C set, on
+none of Group A or B, and in no simulation, because the benches write the
+palette RAM directly. The one region with an unaligned base was the one that
+failed; `pal_base_w` now exports the base and the consumer subtracts.
 
 ### [Seta] `bash` on a Windows dev box may be WSL's, which is a different operating system
 

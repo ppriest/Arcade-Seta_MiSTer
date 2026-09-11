@@ -116,12 +116,16 @@ module sdram_narrow_bridge #(
 					if (req) begin
 						word_sel <= addr[2:1];
 						byte_sel <= addr[0];
-						if (hit && !inval) begin
-							bstate <= B_HIT;
-						end else begin
-							tag_inflight <= addr[25:3];
-							bstate        <= B_WAIT;
-						end
+						// tag_inflight is loaded on EVERY accepted request,
+						// not only on a miss. It is read in B_WAIT alone, so
+						// loading it on a hit too is harmless -- and it keeps
+						// `hit` out of a 23-bit register's enable, which is
+						// what a comparator driving that enable costs: the
+						// enable net's own fanout was 1.6 ns of the worst
+						// path in the design. `req` is a register in every
+						// client, so the enable is now register AND state.
+						tag_inflight <= addr[25:3];
+						bstate <= (hit && !inval) ? B_HIT : B_WAIT;
 					end
 				end
 				B_WAIT: begin

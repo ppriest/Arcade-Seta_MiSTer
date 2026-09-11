@@ -93,6 +93,9 @@ GAMES = {
     "atehate":   dict(_GROUP_A, rot=0),
     # gfx_pairlove puts the sprites at palette index 0x200 of 2048.
     "pairlove":  dict(_GROUP_A, rot=270, gfx_colorbase=0x200, palette_entries=2048),
+    # Group C: the same sprite offsets as Group A, 1536 palette entries. Here
+    # for the setac_eof copy, which msgundam alone of the supported sets uses.
+    "msgundam":  dict(_GROUP_A, rot=0, palette_entries=1536),
 }
 
 

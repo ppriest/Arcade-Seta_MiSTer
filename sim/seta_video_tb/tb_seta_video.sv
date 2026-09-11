@@ -31,7 +31,7 @@ module tb_seta_video;
 	localparam int CE_DIV    = 12;              // -> 8 MHz dot clock
 	localparam int LB_W      = 11;
 	localparam int PAL_MAX   = 2048;
-	localparam int GFX_WORDS = 1 << 20;         // atehate's 2 MB region
+	localparam int GFX_WORDS = 1 << 21;         // msgundam's 4 MB region
 	localparam int MAX_PIX   = 384 * 256;
 
 	logic clk = 0;
@@ -162,6 +162,7 @@ module tb_seta_video;
 		.backdrop(cfgv[C_BACKDROP][LB_W-1:0]),
 		.code_mask(cfgv[C_CODEMASK][15:0]),
 		.line_budget(cfgv[C_BUDGET][15:0]),
+		.en_l0(1'b1), .en_l1(1'b1),
 		.code_we(code_we), .code_addr(code_addr), .code_wdata(code_wdata),
 		.code_uds(code_uds), .code_lds(code_lds), .code_rdata(),
 		.ylow_we(ylow_we), .ylow_addr(ylow_addr), .ylow_wdata(ylow_wdata),
@@ -230,10 +231,10 @@ module tb_seta_video;
 			rom_busy <= 1'b1; rom_hold_a <= rom_addr; rom_cnt <= rom_latency;
 		end else if (rom_busy) begin
 			if (rom_cnt <= 1) begin
-				rom_data  <= { gfxrom[{rom_hold_a[20:3], 2'd3}],
-				               gfxrom[{rom_hold_a[20:3], 2'd2}],
-				               gfxrom[{rom_hold_a[20:3], 2'd1}],
-				               gfxrom[{rom_hold_a[20:3], 2'd0}] };
+				rom_data  <= { gfxrom[{rom_hold_a[21:3], 2'd3}],
+				               gfxrom[{rom_hold_a[21:3], 2'd2}],
+				               gfxrom[{rom_hold_a[21:3], 2'd1}],
+				               gfxrom[{rom_hold_a[21:3], 2'd0}] };
 				rom_valid <= 1'b1;
 				rom_busy  <= 1'b0;
 				rom_reads <= rom_reads + 1;
@@ -379,7 +380,7 @@ module tb_seta_video;
 		swz_half_words = cfgv[C_GFXHALF][23:1];
 		for (i = 0; i < 2 * int'(swz_half_words); i++) begin
 			swz_in = i[22:0];
-			#1 gfxrom[swz_out[19:0]] = gfxnat[i];
+			#1 gfxrom[swz_out[20:0]] = gfxnat[i];
 		end
 
 		void'($value$plusargs("ROMLAT=%d", rom_latency));

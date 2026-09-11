@@ -83,6 +83,38 @@ replace fourteen constants.
 
 *Transcribed per game. Not investigated.*
 
+### `seta_vregs_w`'s comment contradicts its code
+
+The register documentation says:
+
+```
+    ---- --1-     Sprites Above Frontmost Layer
+    ---- ---0     Layer 0 Above Layer 1
+```
+
+Bit 0 matches: `if (order & 1)` draws layer 1 opaque underneath and layer 0
+over it. Bit 1 does not. `seta_layers_update` under `order & 2` draws the
+sprites FIRST and the frontmost layer AFTER, so the bit set means the **layer**
+is above the sprites -- the opposite of the comment.
+
+This core follows the code. `rtl/video/seta_video.sv`:
+
+```systemverilog
+mixed_2l = vregs[1] ? (top_op ? top_px : (lb_hit ? lb_data : bot_px))
+                    : (lb_hit ? lb_data : (top_op ? top_px : bot_px));
+```
+
+*Verified against `seta.cpp`'s `seta_layers_update`, both branches. Unresolved
+which of the two is what the silicon does; no set in scope has been seen to
+depend on it.*
+
+### There is no layer-enable bit
+
+`layers_ctrl` in `seta_layers_update` is `~0U` and is only ever narrowed inside
+`#ifdef MAME_DEBUG`, by a keypress. It is a debugging aid, not hardware. Worth
+recording because a black screen invites the theory that a layer is disabled,
+and there is nothing there to disable.
+
 ### Colour mode 1 with no second decode
 
 `get_tile_info` selects a gfx set from `vctrl[2]` bit 4; for a 4bpp game that
@@ -105,6 +137,28 @@ daioh's verified 57.42. `daioh` declares the same `set_size` and `set_visarea`
 as every Group A game on the same 16 MHz X1-001.
 
 *Deliberate; believed more accurate than MAME's declared rates.*
+
+### Everything the renderer reads is sampled at vblank
+
+The X1-001 renders from a snapshot of its code, Y and control RAM taken at
+vblank; the X1-012 latches its scroll registers and bank bit there, and the
+mixer its order register. MAME draws the whole frame at vblank from the
+registers' values then, which is the same picture. The chip reads scroll per
+scanline (MAME's own comment cites Caliber 50's underground raster effect),
+so a game that changes scroll mid-frame ON PURPOSE will not show it here.
+None of the twenty sets in scope does; Daioh and Eight Forces write scroll
+and their whole sprite list from the scanline-112 handler, and rendered live
+that showed as a tear across the middle of every frame.
+
+The TILE VRAM itself is NOT buffered -- the engine reads it live, as the chip
+does. Measured from MAME's write log: of Daioh's 151,802 mid-picture VRAM
+writes, 76,460 go to the bank being displayed and only 16,829 of those to a
+tile on screen at the current scroll -- about six visible-tile writes a frame
+(Eight Forces: 15,180, the same order). A handful of 16-pixel squares, against
+one scroll write that moves every line below it, which is what the split across
+the middle actually was.
+
+*Deliberate; matches MAME's picture. Caliber 50 would need per-line scroll.*
 
 ### Sprites drawn front to back, with a per-line budget
 

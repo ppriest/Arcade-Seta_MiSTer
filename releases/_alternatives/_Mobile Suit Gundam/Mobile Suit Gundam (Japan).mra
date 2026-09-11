@@ -1,6 +1,6 @@
 <misterromdescription>
-    <name>Mobile Suit Gundam</name>
-    <setname>msgundam</setname>
+    <name>Mobile Suit Gundam (Japan)</name>
+    <setname>msgundam1</setname>
     <rbf>Seta</rbf>
     <mameversion>0286</mameversion>
     <year>1993</year>
@@ -11,10 +11,10 @@
     <!-- which game, for rtl/seta_board_cfg.sv. FIRST, because the download is permuted with it. -->
     <rom index="1"><part>0F</part></rom>
 
-    <rom index="0" zip="msgundam.zip" md5="none">
+    <rom index="0" zip="msgundam1.zip|msgundam.zip" md5="none">
         <!-- maincpu -->
         <interleave output="16">
-            <part name="fa003002.u25" crc="1cc72d4c" map="12"/>
+            <part name="fa002002.u25" crc="dee3b083" map="12"/>
         </interleave>
         <part repeat="524288">FF</part>
         <interleave output="16">
@@ -39,7 +39,7 @@
         <part name="fa001004.u26" crc="b965f07c"/>
     </rom>
 
-    <switches default="FF,FF,FF" base="0">
+    <switches default="FF,FF,7F" base="0">
         <dip name="Demo Sounds" bits="0" ids="Off,On"/>
         <dip name="Difficulty" bits="1,2" ids="Hardest,Hard,Easy,Normal"/>
         <dip name="Unknown 1-4" bits="3" ids="On,Off"/>
@@ -52,6 +52,7 @@
         <dip name="Unknown 2-7" bits="14" ids="On,Off"/>
         <dip name="Free Play" bits="15" ids="On,Off"/>
         <dip name="Language" bits="23" ids="Japanese,English"/>
+        <dip name="Language" bits="23" ids="Japanese,-"/>
     </switches>
 
     <buttons names="Button 1,Button 2,-,-,-,-,Start,Coin,Pause,Service" default="A,B,Start,Select,L,R" count="2"/>

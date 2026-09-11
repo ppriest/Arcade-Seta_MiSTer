@@ -43,6 +43,11 @@ assign HDMI_FREEZE = 0;
 assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 
+// The framebuffer's forced-blank input, a real port only because Seta.qsf
+// defines MISTER_FB=1 for the HDMI rotator. screen_rotate_two does not drive
+// it, so it is tied off here as every rotating core does.
+assign FB_FORCE_BLANK = 0;
+
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
 assign LED_USER  = ioctl_download;
@@ -91,6 +96,16 @@ wire [11:0] base_arx = rotate_en ? 12'd3 : 12'd4;
 wire [11:0] base_ary = rotate_en ? 12'd4 : 12'd3;
 
 `include "build_id.v"
+
+// The Debug page is hidden in the release revision. Every P1 line carries an
+// H1 prefix, so status_menumask bit 1 hides the whole page; the bits still
+// work if a .CFG sets them, only the MENU goes away.
+`ifdef DEBUG_ISSP
+localparam DEBUG_MENU_HIDE = 1'b0;
+`else
+localparam DEBUG_MENU_HIDE = 1'b1;
+`endif
+wire debug_menu_hide = DEBUG_MENU_HIDE;
 localparam CONF_STR = {
 	"Seta;;",
 	"-;",
@@ -107,11 +122,13 @@ localparam CONF_STR = {
 	// carries over from Psikyo and Fuuki: on hardware the difference between
 	// "the sprite engine is dead" and "the palette is wrong" is one toggle,
 	// and finding it out by rebuilding costs half an hour each time.
-	"P1,Debug;",
-	"P1-;",
-	"P1O[80],Sprites,On,Off;",
-	"P1O[81],PCM sound,On,Off;",
-	"P1O[82],Pause CPU,Off,On;",
+	"H1P1,Debug;",
+	"H1P1-;",
+	"H1P1O[80],Sprites,On,Off;",
+	"H1P1O[83],Tilemap 0,On,Off;",
+	"H1P1O[84],Tilemap 1,On,Off;",
+	"H1P1O[81],PCM sound,On,Off;",
+	"H1P1O[82],Pause CPU,Off,On;",
 	"-;",
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
@@ -152,7 +169,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask(0),
+	.status_menumask({14'd0, debug_menu_hide, 1'b0}),  // H1: the Debug page
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -260,29 +277,50 @@ wire [15:0] dsw_in = {sw[0], sw[1]};
 // Those are Arcade-Psikyo_MiSTer's positions, which is why its six-button and
 // three-button sets both work. scripts/build_mra.py pads the name list to
 // match.
-wire [15:0] p1_in = ~{
-	8'h00,
-	joystick_0[10],   // 7 START1
-	1'b0,             // 6 unused
-	joystick_0[5],    // 5 BUTTON2
-	joystick_0[4],    // 4 BUTTON1
-	joystick_0[2],    // 3 DOWN
-	joystick_0[3],    // 2 UP
-	joystick_0[0],    // 1 RIGHT
-	joystick_0[1]     // 0 LEFT
-};
+// THE LAYOUT IS PER GAME, from seta_board_cfg.sv's input_layout. seta.cpp has
+// three joystick macros and three one-off panels among the sets in scope, and
+// assembling every one of them as JOY_TYPE1_2BUTTONS meant the five
+// three-button games could not press button 3 at all -- bit 6 was tied low --
+// and the four-answer-button games read their buttons off the joystick
+// directions.
+//
+//   0 JOY2    LRUD at 0-3, B1 B2 at 4-5, 6 unused
+//   1 JOY1    as JOY2 with 5 and 6 unused
+//   2 JOY3    as JOY2 plus BUTTON3 at 6
+//   3 PANEL4  B3 B4 B1 B2 at 0-3 -- atehate's default panel, and qzkklgy2
+//   4 PANEL5  PANEL4 plus BUTTON5 at 4 (qzkklogy's pause cheat)
+//   5 CARDS   magspeed: Card 1-4 at 0-3, B1 B2 at 4-5
+//
+// Bit 7 is START in all six. The MiSTer joystick word is 0 Right, 1 Left,
+// 2 Down, 3 Up, buttons 1-6 at 4-9, then Start 10, Coin 11, Pause 12,
+// Service 13 -- fixed positions the .mra's <buttons> list has to match.
+function automatic [7:0] seta_port(input [31:0] j, input [2:0] layout);
+	case (layout)
+		3'd1:    seta_port = {j[10], 1'b0,  1'b0,  j[4],
+		                      j[2],  j[3],  j[0],  j[1]};
+		3'd2:    seta_port = {j[10], j[6],  j[5],  j[4],
+		                      j[2],  j[3],  j[0],  j[1]};
+		3'd3:    seta_port = {j[10], 1'b0,  1'b0,  1'b0,
+		                      j[5],  j[4],  j[7],  j[6]};
+		3'd4:    seta_port = {j[10], 1'b0,  1'b0,  j[8],
+		                      j[5],  j[4],  j[7],  j[6]};
+		3'd5:    seta_port = {j[10], 1'b0,  j[5],  j[4],
+		                      j[9],  j[8],  j[7],  j[6]};
+		default: seta_port = {j[10], 1'b0,  j[5],  j[4],
+		                      j[2],  j[3],  j[0],  j[1]};
+	endcase
+endfunction
 
-wire [15:0] p2_in = ~{
-	8'h00,
-	joystick_1[10],
-	1'b0,
-	joystick_1[5],
-	joystick_1[4],
-	joystick_1[2],
-	joystick_1[3],
-	joystick_1[0],
-	joystick_1[1]
-};
+wire [2:0] input_layout;
+
+// daioh's EXTRA port: P1 buttons 4-6 at bits 0-2, P2's at 3-5. Buttons 4, 5
+// and 6 are joystick bits 7, 8 and 9. Every other board leaves it undecoded.
+wire [15:0] extra_in = ~{10'h000,
+	joystick_1[9], joystick_1[8], joystick_1[7],
+	joystick_0[9], joystick_0[8], joystick_0[7]};
+
+wire [15:0] p1_in = ~{8'h00, seta_port(joystick_0, input_layout)};
+wire [15:0] p2_in = ~{8'h00, seta_port(joystick_1, input_layout)};
 
 // COINS: coin 1 and 2, service, tilt, and then whatever DIP bits the game puts
 // in the top nibble. sw[2] supplies those; where a game uses none of them the
@@ -342,6 +380,29 @@ wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun;
 wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped;
 wire [15:0] dbg_snd_samples, dbg_snd_overrun, dbg_snd_rom_reads;
 wire  [7:1] dbg_irq_pending;
+wire [23:0] dbg_last_rom;
+wire [15:0] dbg_rom_fetches, dbg_wram_writes, dbg_io_reads;
+wire [23:0] dbg_last_io;
+wire [23:0] dbg_last_vec;
+wire [479:0] dbg_pc_ring;
+wire         dbg_pc_frozen;
+wire [23:3] dbg_l0_last_addr;
+wire [63:0] dbg_l0_last_data;
+wire [15:0] dbg_l0_lines, dbg_l0_tiles, dbg_l0_overrun;
+wire [15:0] dbg_l1_lines, dbg_l1_tiles, dbg_l1_overrun;
+
+// THE DOWNLOAD'S HIGH-WATER MARK, in 4096-byte units. An .mra that stops
+// short leaves the CPU fetching from SDRAM that was never written, which
+// looks exactly like a CPU fault and is not one. Unlike a trace buffer
+// this has no idle timeout, so a pause mid-download cannot look like the
+// end. Daioh's image is 11 MB, so a complete load must reach 0xB00.
+reg [13:0] dbg_dl_max4k = 14'd0;
+always @(posedge clk_sys) begin
+	if (ioctl_download && ioctl_wr && ioctl_addr[26:12] > {1'b0, dbg_dl_max4k})
+		dbg_dl_max4k <= ioctl_addr[25:12];
+end
+
+wire [15:0] dbg_w_pal, dbg_w_l0v, dbg_w_l1v, dbg_w_l0c, dbg_w_l1c, dbg_w_vregs, dbg_w_sprc, dbg_w_x1snd;
 wire        dbg_cpu_stb, dbg_cpu_we;
 wire [23:1] dbg_cpu_addr;
 wire [15:0] dbg_cpu_data;
@@ -354,7 +415,7 @@ seta_core seta_core
 	.init(~pll_locked),
 
 	.game(mod_byte[4:0]),
-	.game_rot(game_rot),
+	.game_rot(game_rot), .input_layout(input_layout),
 
 	.SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ),
 	.SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
@@ -367,12 +428,13 @@ seta_core seta_core
 	.ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
 
-	.p1_in(p1_in), .p2_in(p2_in), .coins_in(coins_in),
+	.p1_in(p1_in), .p2_in(p2_in), .coins_in(coins_in), .extra_in(extra_in),
 	.p3_in(p3_in), .p4_in(p4_in), .dsw_in(dsw_in),
 
 	.pause_cpu(pause_core),
 	.en_spr(~status[80]),
 	.en_pcm(~status[81]),
+	.en_l0(~status[83]), .en_l1(~status[84]),
 
 	.video_r(core_r), .video_g(core_g), .video_b(core_b),
 	.video_hs(core_hs), .video_vs(core_vs),
@@ -381,6 +443,24 @@ seta_core seta_core
 
 	.audio_l(core_audio_l), .audio_r(core_audio_r),
 
+	.dbg_last_rom(dbg_last_rom), .dbg_rom_fetches(dbg_rom_fetches),
+	.dbg_wram_writes(dbg_wram_writes), .dbg_io_reads(dbg_io_reads),
+	.dbg_last_io(dbg_last_io), .dbg_last_vec(dbg_last_vec),
+	.dbg_pc_ring(dbg_pc_ring), .dbg_pc_frozen(dbg_pc_frozen),
+	.dbg_l0_last_addr(dbg_l0_last_addr),
+	.dbg_l0_last_data(dbg_l0_last_data),
+	.dbg_l0_lines(dbg_l0_lines), .dbg_l0_tiles(dbg_l0_tiles),
+	.dbg_l0_overrun(dbg_l0_overrun),
+	.dbg_l1_lines(dbg_l1_lines), .dbg_l1_tiles(dbg_l1_tiles),
+	.dbg_l1_overrun(dbg_l1_overrun),
+	.dbg_w_pal(dbg_w_pal),
+	.dbg_w_l0v(dbg_w_l0v),
+	.dbg_w_l1v(dbg_w_l1v),
+	.dbg_w_l0c(dbg_w_l0c),
+	.dbg_w_l1c(dbg_w_l1c),
+	.dbg_w_vregs(dbg_w_vregs),
+	.dbg_w_sprc(dbg_w_sprc),
+	.dbg_w_x1snd(dbg_w_x1snd),
 	.dbg_lines(dbg_lines), .dbg_sprites(dbg_sprites),
 	.dbg_fetches(dbg_fetches), .dbg_overrun(dbg_overrun),
 	.dbg_worst_line(dbg_worst_line), .dbg_worst_sprites(dbg_worst_sprites),
@@ -392,6 +472,12 @@ seta_core seta_core
 	.dbg_cpu_we(dbg_cpu_we), .dbg_cpu_data(dbg_cpu_data)
 );
 
+// ---------------------------------------------------------------------------
+// THE PROBES ARE BUILT BY THE Seta_stp REVISION ONLY. `DEBUG_ISSP is set in
+// Seta_stp.qsf and nowhere else, so the release revision compiles them out
+// -- and with them the ring buffer, the counters and the JTAG hub they carry.
+// Same source, two revisions; see docs/WORKFLOW.md.
+`ifdef DEBUG_ISSP
 // ---------------------------------------------------------------------------
 // JTAG READBACK. The counters above were wired out of the core from the start
 // and then went nowhere -- rtl/debug/ held the probe, files.qip compiled it,
@@ -431,6 +517,118 @@ issp_probe #(.INSTANCE_ID("F"), .PROBE_W(128), .SOURCE_W(8)) u_issp (
 	}),
 	.source()
 );
+
+// PROBE LAYOUT, INSTANCE A -- the last twenty ROM reads before an
+// exception, 488 bits. Keep scripts/read_issp.tcl's decode in step.
+//
+//   [ 23:  0]  pc0      the newest ROM read (byte address)
+//   ...                 pc1..pc19 at 24-bit steps, oldest at [479:456]
+//   [480]      frozen   a fetch hit vectors 2..11 and the ring stopped
+//   [487:481]  spare
+//
+// Instruction fetches and ROM data reads are not distinguished; the
+// disassembly around the addresses says which is which.
+issp_probe #(.INSTANCE_ID("A"), .PROBE_W(488), .SOURCE_W(8)) u_issp_pc (
+	.clk(clk_sys),
+	.probe({7'd0, dbg_pc_frozen, dbg_pc_ring}),
+	.source()
+);
+
+// PROBE LAYOUT, INSTANCE B -- one granule layer 0 actually received.
+//
+//   [ 63:  0]  dbg_l0_last_data  the 64 bits that came back
+//   [ 84: 64]  dbg_l0_last_addr  the granule address asked for
+//   [108: 85]  dbg_last_vec      the last 68000 vector fetched
+//   [127:109]  spare
+//
+// The byte address in gfx2 is dbg_l0_last_addr * 8. Compare the data
+// against the ROM image at that offset: equal means SDRAM holds the
+// right bytes and the fault is in the engine, different means the
+// download or the arbiter put the wrong bytes there.
+issp_probe #(.INSTANCE_ID("B"), .PROBE_W(128), .SOURCE_W(8)) u_issp_gran (
+	.clk(clk_sys),
+	.probe({19'd0, dbg_last_vec, dbg_l0_last_addr, dbg_l0_last_data}),
+	.source()
+);
+
+// PROBE LAYOUT, INSTANCE C -- the two tilemap engines, 128 bits.
+// Keep scripts/read_issp.tcl's decode in step.
+//
+//   [ 15:  0]  dbg_l0_lines     lines layer 0 started
+//   [ 31: 16]  dbg_l0_tiles     tiles layer 0 blitted
+//   [ 47: 32]  dbg_l0_overrun   lines layer 0 did not finish in time
+//   [ 63: 48]  dbg_l1_lines
+//   [ 79: 64]  dbg_l1_tiles
+//   [ 95: 80]  dbg_l1_overrun
+//   [127: 96]  spare
+//
+// An overrun count near the line count means the layer is being starved
+// on the shared SDRAM port and most of its tiles never arrive -- which
+// is what a mostly-black screen with a few real tiles looks like.
+issp_probe #(.INSTANCE_ID("C"), .PROBE_W(128), .SOURCE_W(8)) u_issp_tile (
+	.clk(clk_sys),
+	.probe({
+		32'd0,
+		dbg_l1_overrun, dbg_l1_tiles, dbg_l1_lines,
+		dbg_l0_overrun, dbg_l0_tiles, dbg_l0_lines
+	}),
+	.source()
+);
+
+// PROBE LAYOUT, INSTANCE D -- where the CPU is, 128 bits.
+// Keep scripts/read_issp.tcl's decode in step.
+//
+//   [ 23:  0]  dbg_last_rom     byte address of the last program fetch
+//   [ 39: 24]  dbg_rom_fetches  program fetches issued
+//   [ 55: 40]  dbg_wram_writes  work RAM writes
+//   [ 71: 56]  dbg_io_reads     peripheral reads
+//   [ 85: 72]  dbg_dl_max4k     highest download address, in 4 KB units
+//   [109: 86]  dbg_last_io      address of the last peripheral read
+//   [127:110]  spare
+issp_probe #(.INSTANCE_ID("D"), .PROBE_W(128), .SOURCE_W(8)) u_issp_cpu (
+	.clk(clk_sys),
+	.probe({
+		18'd0,
+		dbg_last_io,
+		dbg_dl_max4k,
+		dbg_io_reads,
+		dbg_wram_writes,
+		dbg_rom_fetches,
+		dbg_last_rom
+	}),
+	.source()
+);
+
+// PROBE LAYOUT, INSTANCE E -- CPU writes per video region, 128 bits.
+// Keep scripts/read_issp.tcl's decode in step.
+//
+//   [ 15:  0]  dbg_w_pal      palette writes
+//   [ 31: 16]  dbg_w_l0v      layer 0 VRAM writes
+//   [ 47: 32]  dbg_w_l1v      layer 1 VRAM writes
+//   [ 63: 48]  dbg_w_l0c      layer 0 control writes
+//   [ 79: 64]  dbg_w_l1c      layer 1 control writes
+//   [ 95: 80]  dbg_w_vregs    video register writes
+//   [111: 96]  dbg_w_sprc     sprite code/attribute writes
+//   [127:112]  dbg_w_x1snd    sound chip writes
+//
+// All zero means the CPU never reached the video hardware. Palette and
+// VRAM counting up while the screen stays black means it did, and the
+// fault is downstream.
+issp_probe #(.INSTANCE_ID("E"), .PROBE_W(128), .SOURCE_W(8)) u_issp_io (
+	.clk(clk_sys),
+	.probe({
+		dbg_w_x1snd,
+		dbg_w_sprc,
+		dbg_w_vregs,
+		dbg_w_l1c,
+		dbg_w_l0c,
+		dbg_w_l1v,
+		dbg_w_l0v,
+		dbg_w_pal
+	}),
+	.source()
+);
+`endif  // DEBUG_ISSP
 
 ///////////////////////   VIDEO   ////////////////////////////////
 
