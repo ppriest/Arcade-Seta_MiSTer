@@ -162,7 +162,7 @@ def main():
     import build_mra
     names = sys.argv[1:]
     table = {}
-    for p in sorted((REPO / "releases").glob("*.mra")):
+    for p in sorted((REPO / "releases").rglob("*.mra")):
         setname = re.search(r"<setname>([^<]+)</setname>", p.read_text(
             encoding="utf8", errors="replace"))
         if setname:
@@ -172,8 +172,22 @@ def main():
 
     ver = subprocess.run([str(MAME_EXE), "-version"], capture_output=True,
                          text=True, cwd=str(MAME_DIR)).stdout.strip()
+    # THE TWO SIDES ARE DIFFERENT MAME VERSIONS, and that is the usual
+    # explanation for a label difference. The .mra labels come from the
+    # ../mame SOURCE by construction (scripts/extract_dips.py reads seta.cpp);
+    # the reference is whatever arcade64.exe happens to be. When they differ
+    # the source is the newer one -- checked on thunderl's Coin_A, where 0.289
+    # has 0x1 = 3C_4C and the 0.286 binary still has 4C_5C. Printing both
+    # versions on the same line means nobody has to rediscover that.
+    src = "unknown"
+    mk = REPO.parent / "mame" / "makefile"
+    if mk.exists():
+        m = re.search(r'BARE_BUILD_VERSION "([^"]+)"',
+                      mk.read_text(errors="replace"))
+        if m:
+            src = m.group(1)
     print("reference: %s -listxml, against .mra files generated from "
-          "../mame's seta.cpp\n" % (ver or MAME_EXE.name))
+          "../mame's seta.cpp (source %s)\n" % (ver or MAME_EXE.name, src))
 
     fails, skew = 0, []
     for setname, path in sorted(table.items()):

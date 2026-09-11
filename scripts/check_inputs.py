@@ -51,7 +51,7 @@ def main():
         sys.exit("no MAME at %s (set MAME_DIR / MAME_EXE)" % MAME_EXE)
 
     fails = 0
-    for path in sorted((REPO / "releases").glob("*.mra")):
+    for path in sorted((REPO / "releases").rglob("*.mra")):
         text = path.read_text(encoding="utf8", errors="replace")
         m = re.search(r"<setname>([^<]+)</setname>", text)
         b = re.search(r'<buttons names="([^"]*)"[^>]*count="(\d+)"', text)

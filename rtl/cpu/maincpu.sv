@@ -263,6 +263,8 @@ module maincpu (
 	logic [23:0] in_base, dsw_base;
 	// extdwnhl_map's watchdog, which is a READ that must return 0xFFFF.
 	logic [23:0] wdog_base;
+	// Thunder & Lightning's protection PAL. NONE on every other board.
+	logic        has_tprot;
 	// HOW BIG THE INPUT WINDOW IS, and whether COINS sits at +8 rather
 	// than +4. Both are per map: wits reads P3 at +8 and P4 at +0xa, and
 	// kamenrid_map puts COINS at +8 above its own four-byte DSW. A flat
@@ -316,6 +318,7 @@ module maincpu (
 		vregs_base   = 24'h500000;
 		in_base      = 24'h400000;  dsw_base   = 24'h600000;
 		wdog_base    = NONE;
+		has_tprot    = 1'b0;
 		in_span      = 5'd6;        coins_hi   = 1'b0;
 		has_extra    = 1'b0;        extra_base = NONE;
 		prot_base    = NONE;
@@ -490,6 +493,10 @@ module maincpu (
 			end
 
 			BOARD_THUNDERL, BOARD_WITS: begin        // thunderl_map / wits_map
+				// The protection PAL is thunderl_map's alone -- wits_map has
+				// neither the write window nor the read, and puts P3/P4 in
+				// the input span where the read would be.
+				has_tprot  = (board == BOARD_THUNDERL);
 				rom_end    = 24'h0FFFFF;
 				wram_base  = 24'hFFC000; wram_end  = 24'hFFFFFF;
 				// wits is the four-player one: P3 at +8, P4 at +0xa.
@@ -655,6 +662,36 @@ module maincpu (
 	wire is_dsw     = (q_a >= dsw_base)   && (q_a <  dsw_base + 24'h4);
 	wire is_wdog    = (wdog_base != NONE) && (q_a >= wdog_base)
 	               && (q_a <  wdog_base + 24'h2);
+
+	// -----------------------------------------------------------------
+	// Thunder & Lightning's protection PAL (thunderl_protection_w/_r).
+	//
+	//     map(0x400000, 0x41ffff).w(thunderl_protection_w)
+	//     map(0xb0000c, 0xb0000d).r(thunderl_protection_r)
+	//
+	// THE DATA WRITTEN IS DISCARDED. The register is a function of the
+	// write ADDRESS alone -- seta.cpp spells out the PAL's inputs, and the
+	// 17-bit offset into the window is what feeds them. So a 128 KB write
+	// window is not a 128 KB region: it is one 8-bit register with the
+	// address bus wired into its combinational input.
+	// -----------------------------------------------------------------
+	wire is_tprot_w = has_tprot && (q_a >= 24'h400000) && (q_a < 24'h420000);
+	wire is_tprot_r = has_tprot && (q_a >= 24'hB0000C) && (q_a < 24'hB0000E);
+
+	wire [16:0] tp  = q_a[16:0];        // 0x400000 is 17-bit aligned
+	wire tp_or6     = tp[2] | ~tp[6];
+	wire tp_or8     = tp[2] | ~tp[6] | ~tp[8];
+	wire tp_and13   = tp[6] & tp[13];
+	wire tp_or16    = tp_and13 | ~tp[16];
+	wire [7:0] tprot_next = {tp_or16 & tp_or8,              // 7
+	                         tp_or16,                        // 6
+	                         tp_and13,                       // 5
+	                         tp[3] & ~tp[11] & tp[15],       // 4
+	                         tp_or8,                         // 3
+	                         tp_or6,                         // 2
+	                         tp[2] & ~tp[3],                 // 1
+	                         tp[2]};                         // 0
+	logic [7:0] tprot_reg;
 	wire [23:0] xram_base = pal_base - 24'h400;
 	wire is_xram    = has_xram && (q_a >= xram_base) && (q_a < xram_base + 24'h4000);
 
@@ -728,7 +765,7 @@ module maincpu (
 	logic [15:0] q_wdata;
 	logic        q_we, q_uds, q_lds;
 	logic        q_wram, q_wram_wel, q_wram_weh;
-	logic        q_wdog;
+	logic        q_wdog, q_tprot;
 	logic [19:1] q_wram_addr;
 	logic [15:0] q_sel;
 
@@ -774,6 +811,7 @@ module maincpu (
 			state     <= S_IDLE;
 			acc_ready <= 1'b0;
 			rd_data   <= 16'h0000;
+			tprot_reg <= 8'h00;
 		end else begin
 			case (state)
 				S_IDLE: begin
@@ -815,6 +853,8 @@ module maincpu (
 					io_extra    <= is_extra;
 					q_wram      <= is_wram;
 					q_wdog      <= is_wdog;
+					q_tprot     <= is_tprot_r;
+					if (is_tprot_w && acc_write) tprot_reg <= tprot_next;
 					q_wram_addr <= wram_off[19:1];
 					q_wram_wel  <= is_wram && acc_write && !n_lds;
 					q_wram_weh  <= is_wram && acc_write && !n_uds;
@@ -830,8 +870,9 @@ module maincpu (
 				S_MEM4: begin
 					// The select is q_wram, a register -- not the CPU's
 					// address decoded on the way past.
-					rd_data   <= q_wdog ? 16'hFFFF
-					           : q_wram ? wram_rdata : io_rdata;
+					rd_data   <= q_wdog  ? 16'hFFFF
+					           : q_tprot ? {8'd0, tprot_reg}
+					           : q_wram  ? wram_rdata : io_rdata;
 					acc_ready <= 1'b1;
 					state     <= S_DONE;
 				end

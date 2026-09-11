@@ -3,9 +3,9 @@
 MiSTer FPGA core for [Seta](https://en.wikipedia.org/wiki/Seta_Corporation)'s X1-010 arcade
 hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for the DE10-nano.
 
-**Runs on MiSTer.** Twenty-five of the twenty-six built sets run on a DE10-nano and render with
-correct colours. Strike Gunner flickers and Gundhara halts in its own error trap; the rest are
-clean to the eye. Per-set results are in the table below.
+**Runs on MiSTer.** All twenty-five built sets run on a DE10-nano and render with correct
+colours. Strike Gunner flickers; the rest are clean to the eye. Per-set results are in the table
+below.
 
 ## Contents
 
@@ -26,7 +26,7 @@ clean to the eye. Per-set results are in the table below.
 ## Games
 
 The full scope is the X1-010 mainline of `seta.cpp` — 43 sets across 14 memory-map families.
-Twenty-six are built, in 31 `.mra` files with the clones. Every one is 68000 + X1-001A/X1-002A
+Twenty-five are built, in 31 `.mra` files with the clones. Every one is 68000 + X1-001A/X1-002A
 sprites + X1-006 palette + X1-010 sound; what separates the board groups is how many X1-012
 tilemap layers sit behind the sprites, and at what depth.
 
@@ -56,7 +56,7 @@ tilemap layers sit behind the sprites, and at what depth.
 | Mad Shark | 1993 | Allumer | M68000 @ 16 MHz | 2× 6bpp | Both tile regions `ROM_COPY`d out of one 3 MB block | Good |
 | Extreme Downhill | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp | 320 wide; a 4 MB tile region | Good |
 | Sokonuke Taisen Game | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp | Extreme Downhill's machine config; its second tile region is a 256-byte stub | Good |
-| Gundhara | 1995 | Banpresto | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, the largest in the driver | Halts in its own error trap |
+| Gundhara | 1995 | Banpresto | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, the largest in the driver; the only set with a second work-RAM block | Good |
 
 The two-layer boards also need the X1-011's full order resolution and, for five of them, a
 uPD71054C timer. The 6bpp layers add a third: their tiles are 24 bits per four pixels, and the
@@ -133,7 +133,7 @@ screenshot taken:
 | A | 0 | 7 of 7 play |
 | B | 1× 4bpp | 4 of 4 play; Strike Gunner flickers |
 | C | 2× 4bpp | 8 of 8 play |
-| D | 6bpp | 5 of 6 play; Gundhara halts |
+| D | 6bpp | 6 of 6 play |
 
 What is built and verified in simulation:
 
@@ -158,19 +158,12 @@ What is built and verified in simulation:
   (Auto from the driver's `ROT`, or forced CW/CCW) at a 4:3 physical aspect.
 * **Interrupts** — both of `seta.cpp`'s clearing rules: HOLD_LINE, cleared when the CPU
   acknowledges, and ASSERT_LINE, cleared only by the board's own write.
-* **SDRAM backend** — every runtime ROM on one chip in three layouts (4 MB, 5 MB, 12 MB), ports
+* **SDRAM backend** — every runtime ROM on one chip in five layouts (4 MB through 17 MB), ports
   assigned by deadline, with the sprite layout permutation applied on the way in.
-* **`.mra` generation** — all 20 sets, each proved byte for byte against its `ROM_START`.
+* **`.mra` generation** — all 31 files, each proved byte for byte against its `ROM_START`.
 
 Known issues:
 
-* **Gundhara halts in its own error trap.** Its ROM loads in full (17 MB, the largest in the
-  driver), its CPU boots and matches MAME's bus trace, and it runs the work-RAM, palette and
-  sound-RAM tests -- then takes an illegal-instruction exception and stops at the `bra.s *` every
-  handler in the driver ends with. It never writes tile VRAM. The other five 6bpp sets share its
-  board arm and code path and all run, so this is specific to it; what it alone has is LAYOUT_E,
-  8 MB of sprites and a 17 MB image. Probe A records the last twenty control transfers and
-  freezes at a halt loop, which is the next thing to read.
 * **Strike Gunner flickers.** Cause unknown.
 * **Sprites clip wrongly at the bottom edge** — one entering from the lowest scanline appears all
   at once. Affects every game. The sprite engine matches MAME across 90 simulation runs *inside the
@@ -207,9 +200,8 @@ Known issues:
 - [x] DIP switches checked against MAME's own `-listxml`, defaults included
 - [x] Inputs: six P1/P2 layouts, daioh's EXTRA buttons, counts checked against MAME
 - [ ] Screen flip in the tilemap, and the bottom-edge sprite clip
-- [x] Phase 4: the 6bpp families, and the 24-bit `.mra` interleave they need. Five of six run;
+- [x] Phase 4: the 6bpp families, and the 24-bit `.mra` interleave they need. Six of six run;
       both palette-remap families are pixel-identical to MAME on a whole frame in simulation
-- [ ] Gundhara's error trap
 - [ ] Phase 5: `blandia`'s palette-offset effect, `zombraid`'s light gun and battery RAM
 - [ ] `hiscore.v` support, CRT offset, savestates
 - [x] `_alternatives` for the clones that share a parent's board config (`daioha`, `rezono`,

@@ -160,6 +160,28 @@ the middle actually was.
 
 *Deliberate; matches MAME's picture. Caliber 50 would need per-line scroll.*
 
+### One read window in the supported maps is still undecoded
+
+Swept every map this core implements for ranges with a read handler and
+compared against maincpu.sv's decode. One is not covered:
+
+| map | range | MAME | status |
+|-|-|-|-|
+| `kamenrid_map` | `50000c-50000d` | `watchdog_timer_device::reset16_r` | harmless |
+
+`reset16_r` returns `space.unmap()`, so MAME's value there is the unmapped
+value too -- decoding it would change nothing.
+
+The other two in this class are now implemented. extdwnhl's watchdog read at
+0x40000c WAS load-bearing: the POST uses its value as a byte count. thunderl's
+protection PAL at 0xb0000c is implemented in maincpu.sv -- the write window
+0x400000-0x41ffff discards its data and derives an 8-bit register from the
+write address, checked against `thunderl_protection_w` over all 131072
+addresses with 0 mismatches.
+
+An undecoded read is not automatically harmless just because the game boots
+past it.
+
 ### extdwnhl's fourth work-RAM block is not decoded
 
 `extdwnhl_map` declares four 64 KB blocks of plain RAM:
