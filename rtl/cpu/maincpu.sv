@@ -53,8 +53,10 @@ package seta_board_pkg;
 		BOARD_OISIPUZL  = 5'd14,  // oisipuzl_map   -- palette and sound swap
 		BOARD_MAGSPEED  = 5'd15,  // magspeed_map   -- almost every base moves
 		BOARD_ATEHATE   = 5'd12,  // atehate_map    -- 1 MB of work RAM
-		BOARD_PAIRLOVE  = 5'd13   // pairlove_map   -- 2048 palette entries,
+		BOARD_PAIRLOVE  = 5'd13,  // pairlove_map   -- 2048 palette entries,
 		                          //                   plus a protection RAM
+		BOARD_MADSHARK  = 5'd16   // madshark_map   -- kamenrid's registers,
+		                          //                   magspeed's inputs
 	} board_t;
 endpackage
 
@@ -259,6 +261,8 @@ module maincpu (
 	logic [23:0] pit_base;
 	logic [23:0] vregs_base;
 	logic [23:0] in_base, dsw_base;
+	// extdwnhl_map's watchdog, which is a READ that must return 0xFFFF.
+	logic [23:0] wdog_base;
 	// HOW BIG THE INPUT WINDOW IS, and whether COINS sits at +8 rather
 	// than +4. Both are per map: wits reads P3 at +8 and P4 at +0xa, and
 	// kamenrid_map puts COINS at +8 above its own four-byte DSW. A flat
@@ -311,6 +315,7 @@ module maincpu (
 		pit_base     = NONE;
 		vregs_base   = 24'h500000;
 		in_base      = 24'h400000;  dsw_base   = 24'h600000;
+		wdog_base    = NONE;
 		in_span      = 5'd6;        coins_hi   = 1'b0;
 		has_extra    = 1'b0;        extra_base = NONE;
 		prot_base    = NONE;
@@ -352,6 +357,22 @@ module maincpu (
 				has_tails = 1'b1;
 				pal_base = 24'h600400; pal_end = 24'h600FFF;
 				dsw_base = 24'h400008;
+				// THE WATCHDOG READ IS LOAD-BEARING. extdwnhl_map is
+				//   map(0x40000c, 0x40000d).r(extdwnhl_watchdog_r)
+				//                          .w(watchdog reset16_w)
+				// and seta.cpp's comment on it is "MUST RETURN $FFFF".
+				// The POST at 0x3736 uses the value as a BYTE COUNT:
+				//     move.w  $40000c.l, D0
+				//     move.l  D0, D1
+				//     move.b  #$aa, (A1)+   <- 0x3740
+				//     subq.l  #1, D1
+				//     bne     $3740
+				// Undecoded, it read zero, the subtract wrapped, and the fill
+				// walked the whole address space writing 0xAA -- palette
+				// included, which put 0xAAAA in every entry and painted the
+				// screen one flat colour (82,173,82). The branch ring was
+				// twenty copies of 0x3740.
+				wdog_base = 24'h40000C;
 			end
 
 			BOARD_KAMENRID: begin                    // kamenrid_map
@@ -408,6 +429,24 @@ module maincpu (
 			// the DSW to 0x500008, the video registers to 0x500015 and both
 			// interrupt acknowledges into the same block, with the sound chip
 			// and timer swapped as on kamenrid.
+			BOARD_MADSHARK: begin                    // madshark_map
+				rom_end    = 24'h0FFFFF;
+				wram_end   = 24'h20FFFF;
+				wram2_base = NONE; has_wram2 = 1'b0;
+				// COINS at +4 and the DSW at +8 -- the opposite way round from
+				// kamenrid, whose COINS sits above its own DSW.
+				// COINS at +4 puts the window at the default six bytes;
+				// the DSW sits above it, out of the way.
+				in_base    = 24'h500000;
+				dsw_base   = 24'h500008;
+				vregs_base = 24'h600000;
+				// No RAM below the palette and no tail above either VRAM: this
+				// board's map declares neither, so has_xram and has_tails stay
+				// low and the windows are the 16 KB the chips use.
+				x1_base    = 24'hD00000;
+				pit_base   = 24'hC00000;
+			end
+
 			BOARD_MAGSPEED: begin                    // magspeed_map
 				has_xram = 1'b1; has_tails = 1'b1;
 				rom_end    = 24'h07FFFF;
@@ -614,6 +653,8 @@ module maincpu (
 	               && !(coins_hi && (q_a >= in_base + 24'h4)
 	                             && (q_a <  in_base + 24'h8));
 	wire is_dsw     = (q_a >= dsw_base)   && (q_a <  dsw_base + 24'h4);
+	wire is_wdog    = (wdog_base != NONE) && (q_a >= wdog_base)
+	               && (q_a <  wdog_base + 24'h2);
 	wire [23:0] xram_base = pal_base - 24'h400;
 	wire is_xram    = has_xram && (q_a >= xram_base) && (q_a < xram_base + 24'h4000);
 
@@ -687,6 +728,7 @@ module maincpu (
 	logic [15:0] q_wdata;
 	logic        q_we, q_uds, q_lds;
 	logic        q_wram, q_wram_wel, q_wram_weh;
+	logic        q_wdog;
 	logic [19:1] q_wram_addr;
 	logic [15:0] q_sel;
 
@@ -772,6 +814,7 @@ module maincpu (
 					q_sel       <= io_sel_comb;
 					io_extra    <= is_extra;
 					q_wram      <= is_wram;
+					q_wdog      <= is_wdog;
 					q_wram_addr <= wram_off[19:1];
 					q_wram_wel  <= is_wram && acc_write && !n_lds;
 					q_wram_weh  <= is_wram && acc_write && !n_uds;
@@ -787,7 +830,8 @@ module maincpu (
 				S_MEM4: begin
 					// The select is q_wram, a register -- not the CPU's
 					// address decoded on the way past.
-					rd_data   <= q_wram ? wram_rdata : io_rdata;
+					rd_data   <= q_wdog ? 16'hFFFF
+					           : q_wram ? wram_rdata : io_rdata;
 					acc_ready <= 1'b1;
 					state     <= S_DONE;
 				end

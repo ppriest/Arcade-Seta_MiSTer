@@ -1509,6 +1509,38 @@ accesses. Model the chip, not the window (`has_xram`, `has_tails` in
 `maincpu.sv`), and treat MAME's `.ram()` lines around a device as the size of
 the physical SRAM.
 
+### [Seta] A mirrored work-RAM block reads as a CPU that executes an illegal instruction
+
+`zingzip_map` declares two work-RAM blocks:
+
+    map(0x200000, 0x20ffff).ram();
+    map(0x210000, 0x21ffff).ram();   // "RAM (gundhara)"
+
+The core backed both with one 64 KB array and mirrored the second onto the
+first. Fifteen of the sixteen sets on that map never touch the second block,
+so the alias was invisible; gundhara loads `A6` with 0x218000 in its first ten
+instructions.
+
+The symptom was not a wrong value read back. Gundhara's power-on RAM test
+(`$8bce`: write -1 / $aaaaaaaa / $55555555 / 0, read each back) walks the
+second block a long at a time, and under the mirror it was clearing the FIRST
+block as it went -- including 0x20fffa, where the return address pushed by the
+`jsr` into the test routine was sitting. The test passed, and then its `rts`
+popped a zero. The CPU ran from 0x000000, where a 68000 vector table
+disassembles as 256 legal `ori.b #imm,D0` pairs, fell into the exception
+handler at 0x400, and halted at the `bra.s *` every handler in the driver ends
+with. Probe A froze on a jump to address 0 and that was dismissed as the ring
+reading back as zeros; it was the bug.
+
+Two things to take from it. A stack that lives inside a mirrored region turns
+an aliasing bug into a wild jump, so the fault appears nowhere near the region
+that caused it -- "illegal instruction" was a conclusion drawn from the halt
+address, never from a decoded opcode. And a self-test that PASSES is not
+evidence the region is right: this one passed precisely because the alias was
+self-consistent.
+
+Count the `.ram()` lines in the map, not the bytes the game appears to use.
+
 ### [Seta] A region whose base is not aligned to its size must be indexed by subtraction, not by masking
 
 Every region in `maincpu.sv` was indexed by the low address bits, which is

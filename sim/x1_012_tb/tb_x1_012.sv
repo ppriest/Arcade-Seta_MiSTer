@@ -23,12 +23,13 @@ module tb_x1_012;
 	always #5 clk = ~clk;              // 100 MHz, period irrelevant here
 
 	// ---- configuration, from cfg.hex ---------------------------------------
-	logic [31:0] cfgmem [0:9];
+	logic [31:0] cfgmem [0:10];
 	logic signed [8:0] xoffs, xoffs_flip;
 	logic        flipscr;
 	logic  [8:0] vis_dimy;
 	logic [LB_W-1:0] colorbase;
-	logic [15:0] code_mask;
+	logic [15:0] code_limit;
+	logic        bpp6;
 	int          vis_x0, vis_x1, vis_y0, vis_y1;
 
 	// ---- DUT ---------------------------------------------------------------
@@ -59,7 +60,8 @@ module tb_x1_012;
 		.vctrl_we(vctrl_we), .vctrl_addr(vctrl_addr), .vctrl_wdata(vctrl_wdata),
 		.vctrl_uds(1'b1), .vctrl_lds(1'b1), .vctrl_rdata(),
 		.xoffs(xoffs), .xoffs_flip(xoffs_flip), .flipscr(flipscr),
-		.vis_dimy(vis_dimy), .colorbase(colorbase), .code_mask(code_mask),
+		.vis_dimy(vis_dimy), .colorbase(colorbase), .code_limit(code_limit),
+		.bpp6(bpp6),
 		.vblank_rise(vblank_rise),
 		.line_start(line_start), .line(line), .line_budget(16'd0),
 		.line_done(line_done), .busy(busy),
@@ -184,7 +186,10 @@ module tb_x1_012;
 		flipscr    = cfgmem[2][0];
 		vis_dimy   = cfgmem[3][8:0];
 		colorbase  = cfgmem[4][LB_W-1:0];
-		code_mask  = cfgmem[5][15:0];
+		code_limit = cfgmem[5][15:0];
+		// From the fixture: prep_x1_012_tb.py knows which layout the game's
+		// GFXDECODE names, and a plusarg would let the two disagree.
+		bpp6       = cfgmem[10][0];
 		vis_x0     = cfgmem[6];
 		vis_x1     = cfgmem[7];
 		vis_y0     = cfgmem[8];

@@ -158,7 +158,7 @@ module seta_sdram_top (
 	// window to match. One bit, because the two layouts in scope differ only
 	// in that.
 	// 0 = LAYOUT_A (Group A), 1 = LAYOUT_B (Group B), 2 = LAYOUT_C (Group C).
-	input  wire  [1:0] layout,
+	input  wire  [2:0] layout,
 	// ROMREGION_INVERT on gfx1: every byte of the sprite region is inverted on
 	// the way in. A .mra ships the ROM as dumped, so this is where MAME's
 	// region flag is applied.
@@ -205,11 +205,32 @@ module seta_sdram_top (
 	localparam logic [25:0] BASE_GFX3_C    = 26'h080_0000;   // 2 MB
 	localparam logic [25:0] BASE_X1SND_C   = 26'h0a0_0000;
 
-	wire layout_b = (layout == 2'd1);
-	wire layout_c = (layout == 2'd2);
+	// LAYOUT_D -- the 6bpp sets except gundhara: zingzip, extdwnhl, sokonuke,
+	// jjsquawk, madshark. gfx2 is 4 MB because extdwnhl's is.
+	localparam logic [25:0] BASE_GFX1_D    = 26'h020_0000;   // 2 MB
+	localparam logic [25:0] BASE_GFX2_D    = 26'h040_0000;   // 4 MB
+	localparam logic [25:0] BASE_GFX3_D    = 26'h080_0000;   // 2 MB
+	localparam logic [25:0] BASE_X1SND_D   = 26'h0a0_0000;   // 1 MB
 
-	wire   [25:0] BASE_GFX1 = layout_c ? BASE_GFX1_C : BASE_GFX1_AB;
-	wire   [25:0] BASE_GFX2 = layout_c ? BASE_GFX2_C : BASE_GFX2_B;
+	// LAYOUT_E -- gundhara alone. 8 MB of sprites, the largest in the driver;
+	// sized into LAYOUT_D it would have made every other 6bpp .mra ship 11 MB
+	// of padding.
+	localparam logic [25:0] BASE_GFX1_E    = 26'h020_0000;   // 8 MB
+	localparam logic [25:0] BASE_GFX2_E    = 26'h0a0_0000;   // 2 MB
+	localparam logic [25:0] BASE_GFX3_E    = 26'h0c0_0000;   // 4 MB
+	localparam logic [25:0] BASE_X1SND_E   = 26'h100_0000;   // 1 MB
+
+	wire layout_b = (layout == 3'd1);
+	wire layout_c = (layout == 3'd2);
+	wire layout_d = (layout == 3'd3);
+	wire layout_e = (layout == 3'd4);
+
+	wire   [25:0] BASE_GFX1 = layout_e ? BASE_GFX1_E :
+	                          layout_d ? BASE_GFX1_D :
+	                          layout_c ? BASE_GFX1_C : BASE_GFX1_AB;
+	wire   [25:0] BASE_GFX2 = layout_e ? BASE_GFX2_E :
+	                          layout_d ? BASE_GFX2_D :
+	                          layout_c ? BASE_GFX2_C : BASE_GFX2_B;
 	// x1snd sits above gfx2, which is only present in LAYOUT_B. BOTH VALUES
 	// ARE localparams so scripts/build_mra.py can still read the map out of
 	// this file -- it parses localparam declarations, and a bare wire would
@@ -217,13 +238,20 @@ module seta_sdram_top (
 	// that must agree with it exactly.
 	localparam logic [25:0] BASE_X1SND_A = 26'h030_0000;
 	localparam logic [25:0] BASE_X1SND_B = 26'h040_0000;
-	wire   [25:0] BASE_X1SND = layout_c ? BASE_X1SND_C :
+	wire   [25:0] BASE_X1SND = layout_e ? BASE_X1SND_E :
+	                           layout_d ? BASE_X1SND_D :
+	                           layout_c ? BASE_X1SND_C :
 	                           layout_b ? BASE_X1SND_B : BASE_X1SND_A;
 	// The swizzle window. In LAYOUT_B gfx1 is only 1 MB, but permuting a 2 MB
 	// window there would reach into gfx2 -- which must NOT be swizzled, because
 	// layout_tilemap is RGN_FRAC(1,1) and its rows are already four chunks in
 	// one region rather than two halves. So the window follows the layout.
-	wire   [25:0] SIZE_GFX1 = layout_c ? 26'h040_0000 :
+	wire   [25:0] BASE_GFX3 = layout_e ? BASE_GFX3_E :
+	                          layout_d ? BASE_GFX3_D : BASE_GFX3_C;
+
+	wire   [25:0] SIZE_GFX1 = layout_e ? 26'h080_0000 :
+	                          layout_d ? 26'h020_0000 :
+	                          layout_c ? 26'h040_0000 :
 	                          layout_b ? 26'h010_0000 : 26'h020_0000;
 
 	// =====================================================================
@@ -243,23 +271,45 @@ module seta_sdram_top (
 
 	// Bit 0 -- the bit plane within the byte pair -- is carried through
 	// untouched, which is what lets sdram_download keep coalescing pairs.
-	wire [26:0] ioctl_addr_swz =
+	wire [26:0] ioctl_addr_swz_c =
 		in_gfx1 ? {1'b0, BASE_GFX1 + {2'd0, swz_out, 1'b0} + {25'd0, ioctl_addr[0]}}
 		        : ioctl_addr;
 
+	// REGISTERED, because this is the critical path of the whole design: a
+	// subtract, the swizzle's own compare and subtract, a permutation and two
+	// adds, from an hps_io register to sdram_download's. The download is the
+	// one place a cycle of latency is free -- ioctl delivers a byte every few
+	// hundred clocks -- so the address, the data and the strobe are delayed
+	// together and the module downstream sees exactly what it saw before.
+	logic [26:0] ioctl_addr_swz;
+	logic        ioctl_wr_q;
+	logic  [7:0] ioctl_dout_q;
+	always_ff @(posedge clk) begin
+		ioctl_addr_swz <= ioctl_addr_swz_c;
+		ioctl_wr_q     <= ioctl_wr;
+		ioctl_dout_q   <= (gfx1_invert && in_gfx1) ? ~ioctl_dout : ioctl_dout;
+	end
+
 	wire        dl_req, dl_we16, dl_busy;
+	// THE WAIT COVERS THE PIPELINED WRITE TOO. sdram_download raises it
+	// when it is busy, but it cannot see a write that is still one cycle
+	// away, so hps_io is also held for the cycle a write is in flight.
+	// Without that a second write could arrive before the module saw the
+	// first, and one byte of the ROM would simply not be there.
+	wire        dl_ioctl_wait;
+	assign ioctl_wait = dl_ioctl_wait | ioctl_wr;
 	wire [25:0] dl_addr;
 	wire [15:0] dl_data;
 
 	sdram_download u_dl (
 		.clk(clk), .reset(reset),
 		.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
-		.ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr_swz),
+		.ioctl_wr(ioctl_wr_q), .ioctl_addr(ioctl_addr_swz),
 		// Inverted for gfx1 when the region says so, at the same point the
 		// swizzle is applied -- both are properties of how the region is laid
-		// out, not of the file the .mra ships.
-		.ioctl_dout(gfx1_invert && in_gfx1 ? ~ioctl_dout : ioctl_dout),
-		.ioctl_wait(ioctl_wait),
+		// out, not of the file the .mra ships. Registered with the address.
+		.ioctl_dout(ioctl_dout_q),
+		.ioctl_wait(dl_ioctl_wait),
 		.dl_req(dl_req), .dl_addr(dl_addr), .dl_data(dl_data),
 		.dl_we16(dl_we16), .dl_busy(dl_busy)
 	);
@@ -357,7 +407,7 @@ module seta_sdram_top (
 		.phy_addr(phy_addr[0]), .phy_wdata(phy_wdata[0]),
 		.phy_busy(phy_busy[0]), .phy_valid(phy_valid[0]), .phy_rdata(phy_rdata[0]),
 		.c_req({tile1_req_l, tile_req_l, spr_req_l}),
-		.c_addr({{2'd0, tile1_addr, 3'd0} + BASE_GFX3_C,
+		.c_addr({{2'd0, tile1_addr, 3'd0} + BASE_GFX3,
 		         {2'd0, tile_addr,  3'd0} + BASE_GFX2,
 		         {2'd0, spr_addr,   3'd0} + BASE_GFX1}),
 		.c_valid(arb0_valid), .c_rdata(arb0_rdata),

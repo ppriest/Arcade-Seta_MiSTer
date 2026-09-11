@@ -880,9 +880,14 @@ engine, tile fetch, scroll, the two-tilemap bank select, and sprite buffering.
 `oisipuzl`, `wrofaero`, `magspeed`. Adds the second layer, the full X1-011 order resolution, the PIT,
 and X1-010 sample banking.
 
-**Phase 4 — Group D, 6bpp.** `zingzip`, `extdwnhl`, `sokonuke`, `gundhara`, `jjsquawk`, `madshark`.
-Adds the 3-bytes-per-4-pixels fetch path, the per-family palette index remaps, and — the real risk —
-the 24-bit `.mra` interleave.
+**Phase 4 — Group D, 6bpp. DONE except gundhara.** `zingzip`, `extdwnhl`, `sokonuke`, `gundhara`,
+`jjsquawk`, `madshark`. Five run on hardware; gundhara halts in its own error trap. The
+3-bytes-per-4-pixels fetch is pixel-identical to MAME, and so is the whole video path on a frame
+of gundhara (masked remap) and one of jjsquawk (plain) -- which is what checks
+`rtl/video/x1_011_index.sv`, the adder the per-family index remaps turn out to be. The 24-bit
+`.mra` interleave was the real risk and it landed: the format needed no guessing, but each set
+arranges the loads differently -- a shared byte ROM, a distant ROM_CONTINUE, a ROM_COPY out of a
+24-bit block, three lanes in three chips, an erased region.
 
 **Phase 5 — the two remaining specials.** `blandia` (second palette bank, palette-offset effect,
 colour mode 0) and `zombraid` (ADC0834 light gun, battery-backed RAM).
@@ -1039,7 +1044,10 @@ behind each; this is the summary.
   `set_xoffsets` are per-game kludges in MAME, and the driver's own TODO says the right fix is a
   proper table covering flipped and non-flipped cases. Several games are known misaligned when
   flipped (`krzybowl`, `zombraid`, `eightfrc`, `oisipuzl`). Carry MAME's values, do not try to
-  derive them.
+  derive them. Every value, and MAME's own comment on it -- nine are "unknown" or "correct?" --
+  is tabulated in docs/MAME_DIVERGENCE.md along with why they exist at all. Phase 4 lost time to
+  two of them: a wrong offset is not a broken picture but the right picture a pixel across, which
+  reads as an engine bug until a whole frame is diffed against MAME.
 - **Sprite limits are not understood.** `m_spritelimit` is 0x1ff by default, the chip comment says
   "understand sprite limits / how sprite 0 sometimes must be skipped", and `jjsquawk` renders a
   garbage tile from never-initialised sprite entry 0. Whatever we do here should be recorded as a

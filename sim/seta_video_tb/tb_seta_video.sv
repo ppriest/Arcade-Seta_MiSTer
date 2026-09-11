@@ -31,7 +31,8 @@ module tb_seta_video;
 	localparam int CE_DIV    = 12;              // -> 8 MHz dot clock
 	localparam int LB_W      = 11;
 	localparam int PAL_MAX   = 2048;
-	localparam int GFX_WORDS = 1 << 21;         // msgundam's 4 MB region
+	localparam int GFX_WORDS = 1 << 22;         // gundhara's 8 MB region,
+	                                            // the largest in the driver
 	localparam int MAX_PIX   = 384 * 256;
 
 	logic clk = 0;
@@ -53,7 +54,11 @@ module tb_seta_video;
 	localparam int C_VTOTAL = 25, C_VSS = 26, C_VSE = 27, C_VAS = 28, C_VAE = 29;
 	localparam int C_HAS_L0 = 31, C_L0X = 32, C_L0XF = 33, C_L0CB = 34,
 	               C_L0MASK = 35, C_HAS_L1 = 36, C_L1X = 37, C_L1XF = 38,
-	               C_L1CB = 39, C_L1MASK = 40, C_VREGS = 41;
+	               C_L1CB = 39, C_L1MASK = 40, C_VREGS = 41,
+	               // Phase 4: the 6bpp layers and their palette formation.
+	               C_L0BPP6 = 42, C_L1BPP6 = 43,
+	               C_L0PMODE = 44, C_L1PMODE = 45,
+	               C_L0PBANK = 46, C_L1PBANK = 47;
 	localparam int C_PALENT = 30;
 
 	// ---- DUT ----------------------------------------------------------------
@@ -163,6 +168,10 @@ module tb_seta_video;
 		.code_mask(cfgv[C_CODEMASK][15:0]),
 		.line_budget(cfgv[C_BUDGET][15:0]),
 		.en_l0(1'b1), .en_l1(1'b1),
+		.l0_bpp6(cfgv[C_L0BPP6][0]), .l1_bpp6(cfgv[C_L1BPP6][0]),
+		.l0_pal_mode(cfgv[C_L0PMODE][1:0]), .l1_pal_mode(cfgv[C_L1PMODE][1:0]),
+		.l0_pal_bank(cfgv[C_L0PBANK][LB_W-1:0]),
+		.l1_pal_bank(cfgv[C_L1PBANK][LB_W-1:0]),
 		.code_we(code_we), .code_addr(code_addr), .code_wdata(code_wdata),
 		.code_uds(code_uds), .code_lds(code_lds), .code_rdata(),
 		.ylow_we(ylow_we), .ylow_addr(ylow_addr), .ylow_wdata(ylow_wdata),
@@ -184,7 +193,7 @@ module tb_seta_video;
 		.l0_ctrl_rdata(),
 		.l0_xoffs(cfgv[C_L0X][8:0]), .l0_xoffs_flip(cfgv[C_L0XF][8:0]),
 		.l0_colorbase(cfgv[C_L0CB][LB_W-1:0]),
-		.l0_code_mask(cfgv[C_L0MASK][15:0]),
+		.l0_code_limit(cfgv[C_L0MASK][15:0]),
 		.tile_req(tile_req), .tile_addr(tile_addr),
 		.tile_valid(tile_valid), .tile_data(tile_data),
 
@@ -197,7 +206,7 @@ module tb_seta_video;
 		.l1_ctrl_rdata(),
 		.l1_xoffs(cfgv[C_L1X][8:0]), .l1_xoffs_flip(cfgv[C_L1XF][8:0]),
 		.l1_colorbase(cfgv[C_L1CB][LB_W-1:0]),
-		.l1_code_mask(cfgv[C_L1MASK][15:0]),
+		.l1_code_limit(cfgv[C_L1MASK][15:0]),
 		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.vregs(cfgv[C_VREGS][7:0]),
@@ -231,10 +240,10 @@ module tb_seta_video;
 			rom_busy <= 1'b1; rom_hold_a <= rom_addr; rom_cnt <= rom_latency;
 		end else if (rom_busy) begin
 			if (rom_cnt <= 1) begin
-				rom_data  <= { gfxrom[{rom_hold_a[21:3], 2'd3}],
-				               gfxrom[{rom_hold_a[21:3], 2'd2}],
-				               gfxrom[{rom_hold_a[21:3], 2'd1}],
-				               gfxrom[{rom_hold_a[21:3], 2'd0}] };
+				rom_data  <= { gfxrom[{rom_hold_a[22:3], 2'd3}],
+				               gfxrom[{rom_hold_a[22:3], 2'd2}],
+				               gfxrom[{rom_hold_a[22:3], 2'd1}],
+				               gfxrom[{rom_hold_a[22:3], 2'd0}] };
 				rom_valid <= 1'b1;
 				rom_busy  <= 1'b0;
 				rom_reads <= rom_reads + 1;
@@ -380,7 +389,7 @@ module tb_seta_video;
 		swz_half_words = cfgv[C_GFXHALF][23:1];
 		for (i = 0; i < 2 * int'(swz_half_words); i++) begin
 			swz_in = i[22:0];
-			#1 gfxrom[swz_out[20:0]] = gfxnat[i];
+			#1 gfxrom[swz_out[21:0]] = gfxnat[i];
 		end
 
 		void'($value$plusargs("ROMLAT=%d", rom_latency));

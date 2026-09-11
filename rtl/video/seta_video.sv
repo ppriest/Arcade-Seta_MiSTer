@@ -53,6 +53,13 @@ module seta_video #(
 	input  wire [15:0] code_mask,
 	input  wire [15:0] line_budget,
 
+	// layout_tilemap_6bpp, PER LAYER: zingzip and extdwnhl have a 6bpp layer 1
+	// and a 4bpp layer 2, gundhara and jjsquawk have both 6bpp.
+	input  wire        l0_bpp6, l1_bpp6,
+	// The palette address formation each layer needs; see x1_011_index.sv.
+	input  wire  [1:0] l0_pal_mode, l1_pal_mode,
+	input  wire [LB_W-1:0] l0_pal_bank, l1_pal_bank,
+
 	// DEBUG SWITCHES, from the OSD's Debug page. Each blanks one layer AT THE
 	// MIXER, not at its engine: the engines keep running, keep their counters
 	// and keep their SDRAM traffic, so turning a layer off does not change the
@@ -80,7 +87,7 @@ module seta_video #(
 	output wire [15:0] l0_ctrl_rdata,
 	input  wire signed [8:0] l0_xoffs, l0_xoffs_flip,
 	input  wire [LB_W-1:0]   l0_colorbase,
-	input  wire [15:0] l0_code_mask,
+	input  wire [15:0] l0_code_limit,
 	output wire        tile_req,
 	output wire [23:3] tile_addr,
 	input  wire        tile_valid,
@@ -100,7 +107,7 @@ module seta_video #(
 	output wire [15:0] l1_ctrl_rdata,
 	input  wire signed [8:0] l1_xoffs, l1_xoffs_flip,
 	input  wire [LB_W-1:0]   l1_colorbase,
-	input  wire [15:0] l1_code_mask,
+	input  wire [15:0] l1_code_limit,
 	output wire        tile1_req,
 	output wire [23:3] tile1_addr,
 	input  wire        tile1_valid,
@@ -276,7 +283,8 @@ module seta_video #(
 		.vctrl_lds(l0_ctrl_lds), .vctrl_rdata(l0_ctrl_rdata),
 		.xoffs(l0_xoffs), .xoffs_flip(l0_xoffs_flip),
 		.flipscr(flipscr_l0),
-		.vis_dimy(vis_dimy), .colorbase(l0_colorbase), .code_mask(l0_code_mask),
+		.vis_dimy(vis_dimy), .colorbase(l0_colorbase), .code_limit(l0_code_limit),
+		.bpp6(l0_bpp6),
 		.vblank_rise(vblank_rise),
 		.line_start(line_start & has_l0), .line(line),
 		.line_budget(line_budget), .line_done(), .busy(),
@@ -300,7 +308,8 @@ module seta_video #(
 		.vctrl_lds(l1_ctrl_lds), .vctrl_rdata(l1_ctrl_rdata),
 		.xoffs(l1_xoffs), .xoffs_flip(l1_xoffs_flip),
 		.flipscr(flipscr_l0),
-		.vis_dimy(vis_dimy), .colorbase(l1_colorbase), .code_mask(l1_code_mask),
+		.vis_dimy(vis_dimy), .colorbase(l1_colorbase), .code_limit(l1_code_limit),
+		.bpp6(l1_bpp6),
 		.vblank_rise(vblank_rise),
 		.line_start(line_start & has_l1), .line(line),
 		.line_budget(line_budget), .line_done(), .busy(),
@@ -327,8 +336,24 @@ module seta_video #(
 	// Zero is what seta_layers_update's bitmap.fill(0) leaves behind, so a
 	// disabled layer reads as pen 0: transparent where the mixer tests the low
 	// four bits, and palette entry 0 where it does not.
-	wire [LB_W-1:0] l0_px_d = en_l0 ? l0_lb_data : '0;
-	wire [LB_W-1:0] l1_px_d = en_l1 ? l1_lb_data : '0;
+	wire [LB_W-1:0] l0_raw = en_l0 ? l0_lb_data : '0;
+	wire [LB_W-1:0] l1_raw = en_l1 ? l1_lb_data : '0;
+
+	// PALETTE ADDRESS FORMATION, per layer. Pass-through for every 4bpp game;
+	// for the 6bpp ones it is the adder rtl/video/x1_011_index.sv describes,
+	// and the engine hands it {color, pen} with no base.
+	wire [LB_W-1:0] l0_px_d, l1_px_d;
+	x1_011_index #(.LB_W(LB_W)) u_l0_pal (
+		.mode(l0_pal_mode), .bank(l0_pal_bank), .idx(l0_raw), .entry(l0_px_d));
+	x1_011_index #(.LB_W(LB_W)) u_l1_pal (
+		.mode(l1_pal_mode), .bank(l1_pal_bank), .idx(l1_raw), .entry(l1_px_d));
+
+	// TRANSPARENCY IS THE TILE'S PEN, and a 6bpp pen is six bits wide. Tested
+	// on the index before the remap, which is where the pen still is: after
+	// it, a transparent pixel of colour 1 is bank + 0x10, whose low bits are
+	// not zero at all.
+	wire l0_op = l0_bpp6 ? |l0_raw[5:0] : |l0_raw[3:0];
+	wire l1_op = l1_bpp6 ? |l1_raw[5:0] : |l1_raw[3:0];
 
 	wire [LB_W-1:0] mixed_1l = (has_l0 && !lb_hit) ? l0_px_d : lb_data;
 
@@ -349,7 +374,7 @@ module seta_video #(
 	wire            swap    = vregs_lat[0];
 	wire [LB_W-1:0] bot_px  = swap ? l1_px_d : l0_px_d;
 	wire [LB_W-1:0] top_px  = swap ? l0_px_d : l1_px_d;
-	wire            top_op  = |top_px[3:0];
+	wire            top_op  = swap ? l0_op   : l1_op;
 
 	// Sprites above the frontmost layer, or between the two.
 	wire [LB_W-1:0] under_spr = top_op ? top_px : bot_px;

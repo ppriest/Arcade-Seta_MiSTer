@@ -37,7 +37,8 @@ module tb_x1_001;
 	// Sized to the phase rather than to seta.cpp's largest (gundhara's 8 MB):
 	// ModelSim ASE allocates the whole array, and three quarters of it would
 	// be zeroes slowing every run down.
-	localparam int GFX_WORDS = 1 << 21;         // msgundam's 4 MB region
+	localparam int GFX_WORDS = 1 << 22;         // gundhara's 8 MB region,
+	                                            // the largest in the driver
 
 	logic clk = 0;
 	always #(CLK_PERIOD / 2.0) clk = ~clk;
@@ -157,10 +158,10 @@ module tb_x1_001;
 				// failed as wrong pen values on exactly one game. Same shape as
 				// the bridge width bug in LESSONS_LEARNED: harmless at 64 KB,
 				// not at 2 MB.
-				rom_data  <= { gfxrom[{rom_hold_a[21:3], 2'd3}],
-				               gfxrom[{rom_hold_a[21:3], 2'd2}],
-				               gfxrom[{rom_hold_a[21:3], 2'd1}],
-				               gfxrom[{rom_hold_a[21:3], 2'd0}] };
+				rom_data  <= { gfxrom[{rom_hold_a[22:3], 2'd3}],
+				               gfxrom[{rom_hold_a[22:3], 2'd2}],
+				               gfxrom[{rom_hold_a[22:3], 2'd1}],
+				               gfxrom[{rom_hold_a[22:3], 2'd0}] };
 				rom_valid <= 1'b1;
 				rom_busy  <= 1'b0;
 				rom_reads <= rom_reads + 1;
@@ -287,7 +288,7 @@ module tb_x1_001;
 		swz_half_words = cfgv[C_GFXHALF][23:1];
 		for (i = 0; i < 2 * int'(swz_half_words); i++) begin
 			swz_in = i[22:0];
-			#1 gfxrom[swz_out[20:0]] = gfxnat[i];
+			#1 gfxrom[swz_out[21:0]] = gfxnat[i];
 		end
 		$display("  gfx swizzled: %0d words, half %0d",
 		         2 * int'(swz_half_words), swz_half_words);

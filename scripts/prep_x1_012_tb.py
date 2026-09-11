@@ -30,14 +30,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from build_region import region_image
-from x1_012_model import LAYER_GAMES, Layer, decode_tiles, render
+from x1_012_model import (LAYER_GAMES, SIXBPP_GAMES, Layer, decode_tiles,
+                          render)
 from x1_001_model import load_capture, _be16
 
 OUT = Path(__file__).resolve().parent.parent / "sim" / "x1_012_tb"
 
 # The order rtl/video/x1_012.sv's bench reads them back in. Keep in step.
-CFG = ["xoffs", "xoffs_flip", "flipscr", "vis_dimy", "colorbase", "code_mask",
-       "vis_x0", "vis_x1", "vis_y0", "vis_y1"]
+CFG = ["xoffs", "xoffs_flip", "flipscr", "vis_dimy", "colorbase", "code_limit",
+       "vis_x0", "vis_x1", "vis_y0", "vis_y1", "bpp6"]
 
 
 def s9(v):
@@ -52,10 +53,13 @@ def main():
     ap.add_argument("--tag")
     a = ap.parse_args()
 
-    if a.game not in LAYER_GAMES:
+    games = dict(LAYER_GAMES)
+    games.update(SIXBPP_GAMES)
+    if a.game not in games:
         sys.exit(f"no layer config for '{a.game}'. Known: "
-                 f"{', '.join(sorted(LAYER_GAMES))}")
-    cfg = LAYER_GAMES[a.game]
+                 f"{', '.join(sorted(games))}")
+    cfg = games[a.game]
+    bpp = cfg.get("l0_bpp", 4)
     cap = Path(a.capdir)
     tag = a.tag or a.game
 
@@ -64,14 +68,14 @@ def main():
     gfx2 = region_image(a.game, "gfx2")[0]
     code, ylow, ctrl, pal, _ = load_capture(cfg, cap, tag)
 
-    tiles = decode_tiles(gfx2)
+    tiles = decode_tiles(gfx2, bpp)
     vis = cfg["visarea"]
     x0, x1, y0, y1 = vis
     dimy = y1 - y0 + 1
     flip = bool(ctrl[0] & 0x40)
 
     # The LAYER ALONE -- no sprite pass.
-    bmp = render(cfg, vram, vctrl, tiles, None, dimy, flip)
+    bmp = render(cfg, vram, vctrl, tiles, None, dimy, flip, bpp=bpp)
 
     OUT.mkdir(parents=True, exist_ok=True)
 
@@ -99,10 +103,11 @@ def main():
         "flipscr":    1 if flip else 0,
         "vis_dimy":   dimy,
         "colorbase":  cfg["gfx_colorbase"],
-        # gfx_element wraps a code past the end of the region. layout_tilemap is
-        # RGN_FRAC(1,1) and 128 bytes per tile, so elements = region / 128, and
-        # every in-scope region is a power of two -- the wrap is a mask.
-        "code_mask":  (len(gfx2) // 128) - 1,
+        "bpp6":       1 if bpp == 6 else 0,
+        # drawgfx.cpp reduces a code with `code %= elements()`, so what the
+        # engine needs is the ELEMENT COUNT, not a mask: zingzip's 6bpp layer
+        # has 10922 of them and a mask would read past the region.
+        "code_limit": len(gfx2) // (192 if bpp == 6 else 128),
         "vis_x0": x0, "vis_x1": x1, "vis_y0": y0, "vis_y1": y1,
     }
     (OUT / "cfg.hex").write_text("".join(f"{vals[k]:08x}\n" for k in CFG))
@@ -113,13 +118,14 @@ def main():
         f"vctrl    {' '.join(f'{v:04x}' for v in vctrl[:3])}\n"
         f"bank     {1 if vctrl[2] & 8 else 0}\n"
         f"flipscr  {flip}\n"
+        f"bpp      {bpp}\n"
         f"tiles    {len(tiles)}\n"
         f"expect   {(x1 - x0 + 1) * (y1 - y0 + 1)} pixels\n")
 
     print(f"{a.game}: vctrl {' '.join(f'{v:04x}' for v in vctrl[:3])}  "
           f"bank {1 if vctrl[2] & 8 else 0}  flip {flip}")
     print(f"  gfx2 {len(gfx2)} bytes, {len(tiles)} tiles, "
-          f"code_mask {vals['code_mask']:#x}")
+          f"code_limit {vals['code_limit']:#x}")
     print(f"  expect {(x1 - x0 + 1) * (y1 - y0 + 1)} pixels -> {OUT}")
 
 

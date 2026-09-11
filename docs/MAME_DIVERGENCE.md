@@ -160,6 +160,84 @@ the middle actually was.
 
 *Deliberate; matches MAME's picture. Caliber 50 would need per-line scroll.*
 
+### extdwnhl's fourth work-RAM block is not decoded
+
+`extdwnhl_map` declares four 64 KB blocks of plain RAM:
+
+    map(0x200000, 0x20ffff).ram();
+    map(0x210000, 0x21ffff).ram();
+    map(0x220000, 0x23ffff).ram();   // "RAM (sokonuke)"
+
+256 KB in all. This core decodes 128 KB (0x200000-0x21ffff) and leaves
+0x220000-0x23ffff undecoded, because the work RAM is M10K and 128 KB of it is
+already ~128 of the device's 553 blocks against 419 used by everything else.
+
+Measured before deciding: a write tap over 0x220000-0x23ffff across 1440
+frames of sokonuke's attract mode records zero accesses, and the set runs on
+hardware. Both sets on this map are 6bpp and both were checked. If a mode
+nobody has reached does use the block, the symptom is the one an unbacked
+region always gives -- a failed power-on memory test, not corruption.
+
+The two blocks that ARE decoded are backed separately rather than mirrored;
+see the work-RAM comment in rtl/seta_core.sv for what mirroring them cost.
+
+### The per-game position offsets are kludges, and they are carried verbatim
+
+Every machine_config in `seta.cpp` calls some of
+
+    m_spritegen->set_fg_xoffsets(flip, noflip)    the sprite chip's foreground
+    m_spritegen->set_fg_yoffsets(flip, noflip)
+    m_spritegen->set_bg_yoffsets(flip, noflip)    its floating tilemap
+    X1_012(...).set_xoffsets(flip, noflip)        each tile layer
+
+and the values differ per game on boards that are otherwise identical. The
+driver's own comments say what they are: guesses checked against whatever
+reference the author had.
+
+| set | fg_xoffs | layer xoffs | what seta.cpp says |
+|-|-|-|-|
+| thunderl, wits, blockcar, pairlove | 0,0 | -- | "unknown" |
+| umanclub, atehate | 0,0 | -- | "correct (test grid)" |
+| drgnunit | 2,2 | -2,-2 | "correct (test grid and I/O test)" |
+| stg | 0,0 | inherited | "sprites correct? (panel), tilemap correct" |
+| qzkklogy | 1,1 | -1,-1 | "correct (timer, test grid)" |
+| qzkklgy2 | 0,0 | -3,-1 | "sprites unknown, tilemaps correct (test grid)" |
+| daioh, rezon, msgundam, kamenrid | 0,0 | -2,-2 | "correct (test grid, ...)" |
+| wrofaero, gundhara | 0,0 | default (0,0) | "correct (test mode)" |
+| eightfrc | 4,3 | default | "correct (test mode)" |
+| oisipuzl | 1,1 | -1,-1 | "correct (test mode)", flip unsupported |
+| magspeed | 0,0 | 0,-2 | "floating tilemap maybe 1px off in test grid" |
+| zingzip | 0,0 | -2,-1 | "sprites unknown, tilemaps correct (test grid)" |
+| extdwnhl, sokonuke | 0,0 | -2,-2 | "correct (test grid, background images)" |
+| jjsquawk | 1,1 | -1,-1 | "correct (test mode)" |
+| madshark | 0,0 | default | "unknown (wrong when flipped, but along y)" |
+
+WHY THEY EXIST. Neither MAME nor this core models where a chip's output
+actually lands relative to the raster. The X1-001 and the X1-012 each drive
+pixels with their own notion of the screen's left edge, set by how the board
+wires their sync inputs and by delays through the X1-011 on the way to the
+palette; a game's data is then drawn wherever the PCB puts it. Rather than
+model that, MAME adds a constant per game and per chip, tuned by eye until a
+test grid lines up. That is why boards running the same map need different
+values, why nine of them are marked "unknown" or "correct?", and why the driver
+carries a TODO asking for a proper table covering flipped and non-flipped
+cases.
+
+WHAT THIS CORE DOES. Carries them verbatim from each machine_config, in
+seta_board_cfg.sv. Deriving them instead would mean inventing a model of the
+video seam that nothing can check, and matching MAME is at least reproducible.
+They are a real divergence from hardware all the same: a PCB does not add a
+constant, and the offsets marked "unknown" are as likely to be wrong as right.
+
+They also cost real time when they are wrong, because a wrong offset is not a
+broken picture -- it is the right picture one or two pixels across, which reads
+as an engine bug. Two of them were caught by the full-frame fixtures during
+Phase 4: jjsquawk's `set_xoffsets(-1, -1)`, which put 13836 pixels wrong while
+looking correct, and gundhara's `set_fg_xoffsets(0, 0)`, which disagreed only
+around the edge of every glyph. Both were the model's config, not the RTL --
+which is the point of comparing whole frames against MAME rather than eyes
+against a screenshot.
+
 ### Sprites drawn front to back, with a per-line budget
 
 MAME draws back to front and overwrites. This core draws front to back into a

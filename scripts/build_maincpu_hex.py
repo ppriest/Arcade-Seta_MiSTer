@@ -262,24 +262,32 @@ def build(zippath, records, setname):
 
     blob = None       # the file the last real load came from
     consumed = 0      # how much of it a previous record already took
+    prev_kind = None  # and HOW it was loaded
     for rec in records:
         kind, fname, dest, length, crc = rec
         if kind == "continue":
             if blob is None:
                 sys.exit("ROM_CONTINUE with no preceding load")
+            # A CONTINUE INHERITS ITS LOAD'S KIND. Treating every one as a
+            # byte-lane write is right for ROM_LOAD16_BYTE + ROM_CONTINUE,
+            # which is what maincpu uses, and wrong for gundhara's samples:
+            # a plain ROM_LOAD whose second half belongs at 0, where lane
+            # interleaving would spread it over twice the region.
+            kind = prev_kind
         else:
             try:
                 blob = rs.read(fname, crc)
             except KeyError as e:
                 sys.exit(str(e))
             consumed = 0
+            prev_kind = kind
         chunk = blob[consumed:consumed + length]
         if len(chunk) != length:
             sys.exit(f"{fname or 'continuation'}: wanted {length:#x} bytes at "
                      f"{consumed:#x}, got {len(chunk):#x}")
         consumed += length
 
-        if kind in ("load16_byte", "continue"):
+        if kind == "load16_byte":
             # dest & 1 selects even or odd byte lane; dest & ~1 is the base.
             base, lane = dest & ~1, dest & 1
             ensure(base + length * 2)
@@ -290,6 +298,21 @@ def build(zippath, records, setname):
             # produces that build() cannot consume is a latent trap.
             ensure(dest + length)
             out[dest:dest + length] = chunk
+        elif kind == "load24_byte":
+            # ROM_SKIP(2): one source byte, then two untouched. The pair's
+            # other half fills those two, and the region is only complete
+            # when both records have run -- which is why the length check
+            # below is against 3x, not 1x.
+            # The LAST byte this record writes is dest + 3*(length-1).
+            ensure(dest + length * 3 - 2)
+            out[dest: dest + length * 3: 3] = chunk
+        elif kind == "load24_wswap":
+            # GROUPWORD|REVERSE|SKIP(1): each source WORD lands byte-swapped
+            # in two of every three bytes. Loaded at dest 1, so it fills the
+            # gaps load24_byte left.
+            ensure(dest + (length // 2) * 3 - 1)
+            out[dest: dest + (length // 2) * 3: 3] = chunk[1::2]
+            out[dest + 1: dest + 1 + (length // 2) * 3: 3] = chunk[0::2]
         elif kind == "load16_wswap":
             ensure(dest + length)
             swapped = bytearray(chunk)

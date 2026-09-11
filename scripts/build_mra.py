@@ -87,6 +87,16 @@ LAYOUTS = {
           {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1_C",
            "gfx2": "BASE_GFX2_C", "gfx3": "BASE_GFX3_C",
            "x1snd": "BASE_X1SND_C"}),
+    # The 6bpp sets. D covers five of them; gundhara's 8 MB of sprites gets E
+    # of its own rather than making every other 6bpp .mra ship the padding.
+    "D": (["maincpu", "gfx1", "gfx2", "gfx3", "x1snd"],
+          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1_D",
+           "gfx2": "BASE_GFX2_D", "gfx3": "BASE_GFX3_D",
+           "x1snd": "BASE_X1SND_D"}),
+    "E": (["maincpu", "gfx1", "gfx2", "gfx3", "x1snd"],
+          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1_E",
+           "gfx2": "BASE_GFX2_E", "gfx3": "BASE_GFX3_E",
+           "x1snd": "BASE_X1SND_E"}),
 }
 
 # Which layout a set uses is decided by the RTL's own game numbering: the Group
@@ -96,9 +106,16 @@ LAYOUT_B_SETS = {"drgnunit", "stg", "qzkklogy", "qzkklgy2"}
 LAYOUT_C_SETS = {"daioh", "daioha", "rezon", "rezono", "wrofaero",
                  "msgundam", "msgundam1", "eightfrc", "oisipuzl",
                  "kamenrid", "magspeed"}
+LAYOUT_D_SETS = {"zingzip", "extdwnhl", "sokonuke", "jjsquawk", "jjsquawko",
+                 "madshark"}
+LAYOUT_E_SETS = {"gundhara", "gundharac"}
 
 
 def layout_of(setname):
+    if setname in LAYOUT_E_SETS:
+        return "E"
+    if setname in LAYOUT_D_SETS:
+        return "D"
     if setname in LAYOUT_C_SETS:
         return "C"
     return "B" if setname in LAYOUT_B_SETS else "A"
@@ -146,6 +163,11 @@ CLONE_OF = {
     "daioha":    "daioh",
     "rezono":    "rezon",
     "msgundam1": "msgundam",
+    # Phase 4. gundharac is the Chinese set on gundhara's machine config and
+    # jjsquawko the older revision on jjsquawk's; the size check below is what
+    # says their regions really are identical to their parents'.
+    "gundharac": "gundhara",
+    "jjsquawko": "jjsquawk",
 }
 
 
@@ -157,7 +179,13 @@ def clone_regions_match(child, parent, all_blocks):
             sys.exit(f"{g}: no ROM_START in the driver")
         return {n: int(sz, 16) for sz, n in re.findall(
             r'ROM_REGION\w*\(\s*(0x[0-9a-fA-F]+)\s*,\s*"([^"]+)"', body)}
-    a, b = sizes(child), sizes(parent)
+    # ONLY THE REGIONS THE CORE LOADS. gundhara declares a `plds` region for
+    # its undumped PLDs and gundharac does not; nothing in the board config
+    # can depend on that, and refusing over it would hold up a clone whose
+    # graphics and program are identical.
+    want = set(LAYOUTS[layout_of(parent)][0])
+    a = {k: v for k, v in sizes(child).items() if k in want}
+    b = {k: v for k, v in sizes(parent).items() if k in want}
     return a == b, a, b
 
 
@@ -203,14 +231,26 @@ CANDIDATES = {
     "load":        [None],
     "swap16":      [("12",), ("21",)],
     "load16_byte": [("01", "10"), ("10", "01")],
+    # The 6bpp pair. Every arrangement of "one byte here, a swapped word
+    # there" over three output bytes is offered; the search picks the one
+    # that reproduces the region.
+    "load24":      [("001", "120"), ("001", "210"), ("100", "021"),
+                    ("100", "012"), ("010", "102"), ("010", "201")],
+    # gundharac's three-ROM form: one lane each, in dest order.
+    "load24x3":    [("001", "010", "100"), ("100", "010", "001")],
 }
-OUTPUT_BITS = {"swap16": 16, "load16_byte": 16}
+OUTPUT_BITS = {"swap16": 16, "load16_byte": 16, "load24": 24,
+               "load24x3": 24}
 
 
 def pick_map(rs, g, truth):
     if g["kind"] == "load":
         return None
-    datas = [sliced(rs, g, i) for i in range(len(g["files"]))]
+    # THE SAME SLICING THE GROUND TRUTH USES. A sliced pair takes half the
+    # group's length out of each file, and a 24-bit group carries a per-part
+    # offset; feeding pick_map the whole file instead makes every candidate
+    # miss and reads as "no map reproduces this".
+    datas = [group_part(rs, g, i) for i in range(len(g["files"]))]
     bits = OUTPUT_BITS[g["kind"]]
     for maps in CANDIDATES[g["kind"]]:
         if mra_lib.interleave(list(zip(datas, maps)), bits) == bytes(truth):
@@ -250,6 +290,21 @@ def copy_group(rec, region, setname, body):
     g = dict(hit[0])
     off = src_ofs - g["dest"]
 
+    # A 24-BIT GROUP SLICES BOTH WAYS AT ONCE. madshark builds a 3 MB "user1"
+    # from one 24-bit pair and then ROM_COPYs its two halves into gfx2 and
+    # gfx3, so each copy takes a window of the byte ROM and twice as much of
+    # the word ROM: every three destination bytes consume one and two.
+    if g["kind"] == "load24":
+        if off % 3:
+            sys.exit(f"{setname}/{region}: a ROM_COPY from a 24-bit group must "
+                     f"start on a 3-byte group boundary, not {off:#x}")
+        units = off // 3
+        g["offs"] = [g["offs"][0] + units, g["offs"][1] + units * 2]
+        g["sizes"] = [length // 3, (length // 3) * 2]
+        g["dest"] = dest
+        g["size"] = length
+        return g
+
     # A group's byte offset is a FILE offset only when one file feeds it. A
     # load16_byte pair interleaves two, so a slice of the group is a slice of
     # each at half the offset -- correct but untested, so refused until a set
@@ -278,30 +333,131 @@ def groups_for(records, region, setname, body):
     reads best.
     """
     copies = [r for r in records if r[0] == "copy"]
-    recs = sorted((r for r in records if r[0] != "copy"),
-                  key=lambda r: (r[2] & ~1, r[2] & 1))
+
+    # RESOLVE ROM_CONTINUE FIRST, in the driver's own order -- it binds to the
+    # load ABOVE it, and the sort by dest below would break that pairing.
+    # gundhara's samples are the only case in scope: one 1 MB ROM whose second
+    # half belongs at 0 ("swapped halves"), written as a load at 0x80000 plus a
+    # ROM_CONTINUE at 0. Each piece becomes a SLICE of the same file, which is
+    # what a .mra offset/length pair says.
+    resolved = []
+    prev, prev_used = None, 0
+    for r in records:
+        if r[0] == "copy":
+            continue
+        kind, name, dest, ln, crc = r[:5]
+        if kind == "continue":
+            if prev is None:
+                sys.exit(f"{setname}/{region}: ROM_CONTINUE with no load "
+                         f"before it")
+            # WITH ITS LOAD'S KIND. jjsquawk's program is two ROM_LOAD16_BYTE
+            # halves each continued at 0x100000, so the continuations pair into
+            # a second interleave; calling them plain loads would emit one file
+            # twice at full length and fail the ground-truth check.
+            resolved.append((prev[2], prev[0], dest, ln, prev[1], prev_used))
+            prev_used += ln
+        else:
+            # A load that a ROM_CONTINUE follows is itself a slice: it takes
+            # the FIRST `ln` bytes of the file and the continue takes the rest.
+            # Without the explicit offset the part would claim the whole file.
+            chained = any(x[0] == "continue" for x in records[records.index(r) + 1:
+                                                             records.index(r) + 2])
+            resolved.append((kind, name, dest, ln, crc, 0 if chained else None))
+            prev, prev_used = (name, crc, kind), ln
+
+    recs = sorted(resolved, key=lambda r: (r[2] & ~1, r[2] & 1))
     out = []
     i = 0
     while i < len(recs):
         kind, name, dest, ln, crc = recs[i][:5]
-        if kind == "continue":
-            sys.exit(f"{setname}/{region}: ROM_CONTINUE is not yet handled here "
-                     f"(no Group A set uses one)")
         if kind == "load16_byte":
             if i + 1 >= len(recs):
                 sys.exit(f"{setname}/{region}: an unpaired ROM_LOAD16_BYTE at "
                          f"{dest:#x}")
-            k2, n2, d2, l2, c2 = recs[i + 1]
+            k2, n2, d2, l2, c2 = recs[i + 1][:5]
             if k2 != "load16_byte" or d2 != dest + 1 or l2 != ln:
                 sys.exit(f"{setname}/{region}: {name} at {dest:#x} has no matching "
                          f"odd half")
-            out.append({"kind": "load16_byte", "parts": [name, n2],
-                        "crcs": [crc, c2], "size": ln * 2, "dest": dest})
+            g = {"kind": "load16_byte", "parts": [name, n2],
+                 "crcs": [crc, c2], "size": ln * 2, "dest": dest}
+            # Both halves are sliced the same way when the pair came from a
+            # ROM_CONTINUE -- jjsquawk's program is two 0x80000 files each
+            # loaded as 0x40000 at 0 and 0x40000 more at 0x100000.
+            if recs[i][5] is not None:
+                if recs[i + 1][5] != recs[i][5]:
+                    sys.exit(f"{setname}/{region}: {name} and {n2} are sliced "
+                             f"differently ({recs[i][5]:#x} vs "
+                             f"{recs[i + 1][5]:#x})")
+                g["off"] = recs[i][5]
+            out.append(g)
             i += 2
             continue
+        if kind in ("load24_byte", "load24_wswap"):
+            # ONE GROUP PER WORD RECORD. The byte half carries one byte of each
+            # 3-byte unit and the word half two, so a word ROM of L bytes
+            # covers 3*L/2 of the region -- and where two word ROMs share one
+            # byte ROM, as jjsquawk's do, the byte ROM is SLICED between them.
+            # THREE BYTE ROMS, ONE PER LANE -- gundharac. No word half at
+            # all, so the pair logic below does not apply.
+            lanes = sorted((r for r in recs if r[0] == "load24_byte"),
+                           key=lambda r: r[2])
+            if not any(r[0] == "load24_wswap" for r in recs):
+                # ONE TRIPLE PER DESTINATION. gundharac's gfx3 is two of them,
+                # at 0x000000 and 0x180000, each three ROMs at +0, +1 and +2.
+                if len(lanes) % 3:
+                    sys.exit(f"{setname}/{region}: {len(lanes)} ROM_LOAD24_BYTE "
+                             f"records with no word half; they come in threes")
+                for t in range(0, len(lanes), 3):
+                    tri = lanes[t:t + 3]
+                    if [r[2] - tri[0][2] for r in tri] != [0, 1, 2]:
+                        sys.exit(f"{setname}/{region}: the 24-bit lanes at "
+                                 f"{tri[0][2]:#x} are not at consecutive "
+                                 f"destinations")
+                    if len({r[3] for r in tri}) != 1:
+                        sys.exit(f"{setname}/{region}: the 24-bit lanes at "
+                                 f"{tri[0][2]:#x} are not the same length")
+                    out.append({"kind": "load24x3",
+                                "parts": [r[1] for r in tri],
+                                "crcs":  [r[4] for r in tri],
+                                "size": tri[0][3] * 3, "dest": tri[0][2]})
+                i = len(recs)
+                continue
+            if kind == "load24_byte":
+                bn, bc, bl, bdest = name, crc, ln, dest
+                j, words = i + 1, []
+            else:
+                # The driver writes the word half first on jjsquawk.
+                bytes_rec = next((r for r in recs if r[0] == "load24_byte"),
+                                 None)
+                if bytes_rec is None:
+                    sys.exit(f"{setname}/{region}: a 24-bit word load with no "
+                             f"byte half")
+                bn, bc, bl, bdest = (bytes_rec[1], bytes_rec[4], bytes_rec[3],
+                                     bytes_rec[2])
+                j, words = i, []
+            for r in recs:
+                if r[0] == "load24_wswap":
+                    words.append(r)
+            if sum(w[3] for w in words) != bl * 2:
+                sys.exit(f"{setname}/{region}: the 24-bit word halves total "
+                         f"{sum(w[3] for w in words):#x} against a byte half "
+                         f"of {bl:#x}; they must be twice it")
+            for wk, wn, wdest, wl, wc, _woff in words:
+                # Every three destination bytes take one from the byte ROM.
+                boff = (wdest - 1 - bdest) // 3
+                out.append({"kind": "load24", "parts": [bn, wn],
+                            "crcs": [bc, wc], "size": (wl // 2) * 3,
+                            "dest": wdest - 1,
+                            "offs": [boff, 0], "sizes": [wl // 2, wl]})
+            # Both kinds of record for this region are consumed together.
+            i = len(recs)
+            continue
         if kind == "load":
-            out.append({"kind": "load", "parts": [name], "crcs": [crc],
-                        "size": ln, "dest": dest})
+            g = {"kind": "load", "parts": [name], "crcs": [crc],
+                 "size": ln, "dest": dest}
+            if recs[i][5] is not None:
+                g["off"] = recs[i][5]
+            out.append(g)
         elif kind == "load16_wswap":
             out.append({"kind": "swap16", "parts": [name], "crcs": [crc],
                         "size": ln, "dest": dest})
@@ -457,6 +613,12 @@ def input_layout(setname, block, all_blocks, depth=0):
             return got
     if 'PORT_NAME("P1 Card 1")' in p1:
         return 5
+    # extdwnhl and sokonuke write JOY_TYPE1_1BUTTON's shape out by hand, with
+    # a PORT_2WAY stick and IPT_UNKNOWN where up and down would be. The core
+    # drives those two bits from the pad's up and down; the games read them as
+    # unknown, which is what they read when nothing is pressed.
+    if "IPT_BUTTON1" in p1 and "IPT_BUTTON2" not in p1:
+        return 1
     if "IPT_BUTTON5" in p1:
         return 4
     if "IPT_BUTTON4" in p1:
@@ -538,7 +700,7 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         recs, unknown = region_records(body, region)
         if unknown:
             sys.exit(f"{setname}/{region}: unrecognised load line(s): {unknown[:2]}")
-        if not recs:
+        if not recs and region_size(body, region) is None:
             sys.exit(f"{setname}: no {region} region")
         gs = groups_for(recs, region, setname, body)
         blob = bytearray()
@@ -653,8 +815,16 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
             maps = pick_map(rs, g, group_truth_from(rs, g))
             # A slice carries offset/length; mra.py applies them to the file
             # before the map, which is what mra-tools-c does.
-            cut = (f' offset="{g["off"]:#x}" length="{g["size"]:#x}"'
+            # A PART'S length is its own, not the group's: an interleaved
+            # pair contributes half the group's bytes from each file.
+            cut = (f' offset="{g["off"]:#x}" '
+                   f'length="{g["size"] // len(g["parts"]):#x}"'
                    if "off" in g else "")
+            # Per-part offsets, for a 24-bit group whose byte half is shared
+            # between two word ROMs.
+            cuts = ([f' offset="{o:#x}" length="{n:#x}"'
+                     for o, n in zip(g["offs"], g["sizes"])]
+                    if "offs" in g else None)
             # crc: the driver's CRC32 of the whole file, as the shipped .mra
             # files carry it (Arcade-Psikyo_MiSTer, MRA-Alternatives). It is
             # the FILE's CRC even on a sliced part -- mra.py checks it
@@ -664,14 +834,16 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
                              f'crc="{g["crcs"][0]:08x}"{cut}/>')
             else:
                 lines.append(f'        <interleave output="{OUTPUT_BITS[g["kind"]]}">')
-                for fn, c, mp in zip(g["names"], g["crcs"], maps):
+                for k, (fn, c, mp) in enumerate(
+                        zip(g["names"], g["crcs"], maps)):
                     lines.append(f'            <part name="{esc(fn)}" '
-                                 f'crc="{c:08x}"{cut} map="{mp}"/>')
+                                 f'crc="{c:08x}"'
+                                 f'{cuts[k] if cuts else cut} map="{mp}"/>')
                 lines.append('        </interleave>')
             pos += g["size"]
         declared = region_size(body, region)
-        last = all_groups[region][-1]
-        got = last["dest"] + last["size"] if all_groups[region] else 0
+        gs = all_groups[region]
+        got = (gs[-1]["dest"] + gs[-1]["size"]) if gs else 0
         if got < declared:
             lines.append(f'        <part repeat="{declared - got}">00</part>')
             pos += declared - got
@@ -759,6 +931,27 @@ def sliced(rs, g, ix=0):
     return d[g["off"]:g["off"] + g["size"]]
 
 
+def group_part(rs, g, ix):
+    """One part's bytes, however the group is cut up."""
+    if "offs" in g:
+        return part_slice(rs, g, ix)
+    if "off" in g and len(g["files"]) > 1:
+        return sliced_n(rs, g, ix, g["size"] // len(g["files"]))
+    return sliced(rs, g, ix)
+
+
+def part_slice(rs, g, ix):
+    """One part of a group that carries a per-PART offset and length."""
+    d = bytearray(rs.zip.read(g["files"][ix]))
+    off, n = g["offs"][ix], g["sizes"][ix]
+    return d[off:off + n]
+
+
+def sliced_n(rs, g, ix, n):
+    d = bytearray(rs.zip.read(g["files"][ix]))
+    return d[g["off"]:g["off"] + n]
+
+
 def group_truth_from(rs, g):
     if g["kind"] == "load":
         return sliced(rs, g)
@@ -766,10 +959,27 @@ def group_truth_from(rs, g):
         d = sliced(rs, g)
         d[0::2], d[1::2] = d[1::2], d[0::2]
         return d
-    if "off" in g:
-        sys.exit(f"a sliced {g['kind']} group is not supported")
-    a = rs.zip.read(g["files"][0])
-    b = rs.zip.read(g["files"][1])
+    # A sliced pair takes the same window out of each file; `size` is the
+    # INTERLEAVED length, so each side contributes half of it.
+    a = group_part(rs, g, 0)
+    b = group_part(rs, g, 1)
+    if g["kind"] == "load24x3":
+        # One lane per ROM, in destination order: files[0] at dest+0.
+        c = group_part(rs, g, 2)
+        out = bytearray(len(a) * 3)
+        out[0::3] = a
+        out[1::3] = b
+        out[2::3] = c
+        return out
+    if g["kind"] == "load24":
+        # files[0] is the byte half, files[1] the word half -- groups_for puts
+        # them in that order whichever way round the driver writes them -- and
+        # each carries its own offset and length.
+        out = bytearray(len(a) * 3)
+        out[0::3] = a
+        out[1::3] = b[1::2]
+        out[2::3] = b[0::2]
+        return out
 
     out = bytearray(len(a) * 2)
     out[0::2] = a

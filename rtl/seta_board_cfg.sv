@@ -62,7 +62,14 @@ package seta_game_pkg;
 		GAME_EIGHTFRC  = 5'd16,
 		GAME_OISIPUZL  = 5'd17,
 		GAME_KAMENRID  = 5'd18,
-		GAME_MAGSPEED  = 5'd19
+		GAME_MAGSPEED  = 5'd19,
+		// ---- Group D, 6bpp tile layers ----
+		GAME_GUNDHARA  = 5'd20,
+		GAME_ZINGZIP   = 5'd21,
+		GAME_JJSQUAWK  = 5'd22,
+		GAME_EXTDWNHL  = 5'd23,
+		GAME_SOKONUKE  = 5'd24,
+		GAME_MADSHARK  = 5'd25
 	} game_t;
 endpackage
 
@@ -124,13 +131,25 @@ module seta_board_cfg (
 	// region in it.
 	output logic        has_l0, has_l1,
 	// 0 = LAYOUT_A, 1 = LAYOUT_B, 2 = LAYOUT_C.
-	output logic  [1:0] layout,
+	// 0 = LAYOUT_A ... 4 = LAYOUT_E. THREE bits: the 6bpp sets added two
+	// more maps, and gundhara's 8 MB of sprites needs one of its own.
+	output logic  [2:0] layout,
 	output logic signed [8:0] l0_xoffs, l0_xoffs_flip,
 	output logic [10:0] l0_colorbase,
-	output logic [15:0] l0_code_mask,
+	output logic [15:0] l0_code_limit,
 	output logic signed [8:0] l1_xoffs, l1_xoffs_flip,
 	output logic [10:0] l1_colorbase,
-	output logic [15:0] l1_code_mask,
+	output logic [15:0] l1_code_limit,
+	// layout_tilemap_6bpp per layer. zingzip and extdwnhl decode layer 1 at
+	// 6bpp and layer 2 at 4bpp; gundhara, jjsquawk and madshark use 6bpp for
+	// both. Phase 4.
+	output logic        l0_bpp6, l1_bpp6,
+	// Palette address formation per layer -- rtl/video/x1_011_index.sv.
+	// 0 direct (every 4bpp game), 1 masked (gundhara, zingzip), 2 plain
+	// (jjsquawk, madshark). The bank is the 512-entry block the layer lands
+	// in, which is NOT the GFXDECODE base the engine would have added.
+	output logic  [1:0] l0_pal_mode, l1_pal_mode,
+	output logic [10:0] l0_pal_bank, l1_pal_bank,
 	// screen_vblank_seta_buffer_sprites -> x1_001_device::setac_eof. NO GROUP A
 	// GAME WIRES IT; every Group B set does, and qzkklogy and qzkklgy2 have
 	// spritectrl bit 5 clear, so the copy actually runs on them every frame.
@@ -303,15 +322,18 @@ module seta_board_cfg (
 		game_rot        = 2'd2;   // thunderl's ROT270, with the other defaults
 		has_l0          = 1'b0;
 		has_l1          = 1'b0;
-		layout          = 2'd0;
+		layout          = 3'd0;
+		l0_bpp6         = 1'b0;   l1_bpp6 = 1'b0;
+		l0_pal_mode     = 2'd0;   l1_pal_mode = 2'd0;
+		l0_pal_bank     = 11'd0;  l1_pal_bank = 11'd0;
 		l1_xoffs        = 9'sd0;
 		l1_xoffs_flip   = 9'sd0;
 		l1_colorbase    = 11'd0;
-		l1_code_mask    = 16'h1fff;
+		l1_code_limit     = 16'h2000;
 		l0_xoffs        = 9'sd0;
 		l0_xoffs_flip   = 9'sd0;
 		l0_colorbase    = 11'd0;
-		l0_code_mask    = 16'h1fff;
+		l0_code_limit     = 16'h2000;
 		ack_level       = 3'd0;
 		has_prot        = 1'b0;
 		has_tl_prot     = 1'b0;
@@ -402,9 +424,9 @@ module seta_board_cfg (
 			map_board = 5'd7; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; layout = 2'd1;
+			has_l0 = 1'b1; layout = 3'd1;
 			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
-			l0_code_mask = 16'h1fff;
+			l0_code_limit  = 16'h2000;
 			fg_xoffs = 9'sd2;  fg_xoffs_flip = 9'sd2;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
 			buffer_sprites = 1'b1;
@@ -415,9 +437,9 @@ module seta_board_cfg (
 			map_board = 5'd7; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd2;
-			has_l0 = 1'b1; layout = 2'd1;
+			has_l0 = 1'b1; layout = 3'd1;
 			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
-			l0_code_mask = 16'h1fff;
+			l0_code_limit  = 16'h2000;
 			fg_xoffs = 9'sd0;  fg_xoffs_flip = 9'sd0;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
 			buffer_sprites = 1'b1;
@@ -428,9 +450,9 @@ module seta_board_cfg (
 			map_board = 5'd7; cpu_div = 5'd12;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; layout = 2'd1;
+			has_l0 = 1'b1; layout = 3'd1;
 			l0_xoffs = -9'sd1; l0_xoffs_flip = -9'sd1;
-			l0_code_mask = 16'h1fff;
+			l0_code_limit  = 16'h2000;
 			fg_xoffs = 9'sd1;  fg_xoffs_flip = 9'sd1;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
 			buffer_sprites = 1'b1;
@@ -444,9 +466,9 @@ module seta_board_cfg (
 			map_board = 5'd7; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; layout = 2'd1;
+			has_l0 = 1'b1; layout = 3'd1;
 			l0_xoffs = -9'sd3; l0_xoffs_flip = -9'sd1;
-			l0_code_mask = 16'h3fff;
+			l0_code_limit  = 16'h4000;
 			fg_xoffs = 9'sd0;  fg_xoffs_flip = 9'sd0;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
 			buffer_sprites = 1'b1;
@@ -463,11 +485,11 @@ module seta_board_cfg (
 			map_board = 5'd1; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			game_rot = 2'd2;
-			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd2;
 			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
 			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
 			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
-			l0_code_mask = 16'h3fff; l1_code_mask = 16'h3fff;
+			l0_code_limit  = 16'h4000; l1_code_limit  = 16'h4000;
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
@@ -479,11 +501,11 @@ module seta_board_cfg (
 			map_board = 5'd0; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd2;
 			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
 			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
 			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
-			l0_code_mask = 16'h0fff; l1_code_mask = 16'h0fff;
+			l0_code_limit  = 16'h1000; l1_code_limit  = 16'h1000;
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
@@ -494,17 +516,135 @@ module seta_board_cfg (
 		// model before it was checked.
 		// wrofaero: the PIT drives IPL 4 and ipl2_ack_w at 0xf00000 clears it.
 		// Byte 0xf00000 is word 0xf00000, so 23'h780000 on a [23:1] bus.
+		// =================================================================
+		// GROUP D -- 6bpp tile layers.
+		// =================================================================
+		GAME_GUNDHARA: begin
+			input_layout = 3'd2;     // JOY_TYPE1_3BUTTONS
+			has_ack = 1'b1; ack_addr = 23'h780000; ack_level = 3'd4;
+			map_board = 5'd0; cpu_div = 5'd6;       // wrofaero_map, 16 MHz
+			// 8 MB of sprites, the largest in the driver: LAYOUT_E exists for
+			// this one set.
+			gfx_half_words = 23'h200000;  code_mask = 16'hffff;
+			game_rot = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd4;
+			l0_bpp6 = 1'b1; l1_bpp6 = 1'b1;
+			l0_xoffs = 9'sd0; l0_xoffs_flip = 9'sd0;
+			l1_xoffs = 9'sd0; l1_xoffs_flip = 9'sd0;
+			// No base: a 6bpp layer's pixel leaves the engine as {color, pen}
+			// and x1_011_index forms the palette address.
+			l0_colorbase = 11'd0; l1_colorbase = 11'd0;
+			l0_pal_mode = 2'd1; l1_pal_mode = 2'd1;     // masked
+			l0_pal_bank = 11'h400; l1_pal_bank = 11'h200;
+			// 192 bytes a tile: gfx2 is 0x2000 of them, gfx3 0x4000.
+			l0_code_limit  = 16'h2000; l1_code_limit  = 16'h4000;
+			pal_entries = 12'd1536;    // 0x600 of palette RAM
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// zingzip_map, 16 MHz, and the only Phase 4 set whose interrupt is a
+		// vblank rather than the scanline timer: screen_vblank -> level 3,
+		// HOLD_LINE. Layer 1 is 6bpp and layer 2 is 4bpp.
+		GAME_ZINGZIP: begin
+			input_layout = 3'd0;
+			map_board = 5'd0; cpu_div = 5'd6;
+			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
+			game_rot = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd3;
+			l0_bpp6 = 1'b1;                 // layer 2 stays 4bpp
+			// set_xoffsets(-2, -1) on both: (flip, noflip).
+			l0_xoffs = -9'sd1; l0_xoffs_flip = -9'sd2;
+			l1_xoffs = -9'sd1; l1_xoffs_flip = -9'sd2;
+			l0_colorbase = 11'd0;      l0_pal_mode = 2'd1; l0_pal_bank = 11'h400;
+			l1_colorbase = 11'h200;    l1_pal_mode = 2'd0;
+			// 0x200000 / 192 = 10922 elements, NOT a power of two -- the one
+			// layer in the driver where the wrap has to be a real modulo.
+			l0_code_limit = 16'd10922; l1_code_limit = 16'h4000;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			irq_vbl_level = 3'd3; irq_vbl_hold = 1'b1;
+		end
+
+		// zingzip_map, both layers 6bpp, and the palette remap that does not
+		// mask the colour code.
+		GAME_JJSQUAWK: begin
+			input_layout = 3'd0;
+			map_board = 5'd0; cpu_div = 5'd6;
+			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd3;
+			l0_bpp6 = 1'b1; l1_bpp6 = 1'b1;
+			l0_xoffs = -9'sd1; l0_xoffs_flip = -9'sd1;
+			l1_xoffs = -9'sd1; l1_xoffs_flip = -9'sd1;
+			l0_colorbase = 11'd0; l1_colorbase = 11'd0;
+			l0_pal_mode = 2'd2; l1_pal_mode = 2'd2;      // plain
+			l0_pal_bank = 11'h400; l1_pal_bank = 11'h200;
+			l0_code_limit = 16'h2000; l1_code_limit = 16'h2000;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd1; fg_xoffs_flip = 9'sd1;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// extdwnhl_map: palette at 0x600400, sound at 0xe00000, 320 wide.
+		GAME_EXTDWNHL, GAME_SOKONUKE: begin
+			input_layout = 3'd0;
+			map_board = 5'd2; cpu_div = 5'd6;
+			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
+			game_rot = 2'd0;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd3;
+			l0_bpp6 = 1'b1;                 // layer 2 is 4bpp on both
+			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
+			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
+			l0_colorbase = 11'd0;   l0_pal_mode = 2'd1; l0_pal_bank = 11'h400;
+			l1_colorbase = 11'h200; l1_pal_mode = 2'd0;
+			// extdwnhl's gfx2 is 4 MB -- 21845 elements, more than a 14-bit
+			// code can reach. sokonuke's is 1.5 MB, and its gfx3 is a 256-byte
+			// stub that MAME still hangs a layer on.
+			l0_code_limit = (game == GAME_SOKONUKE) ? 16'h2000 : 16'd21845;
+			l1_code_limit = (game == GAME_SOKONUKE) ? 16'd2    : 16'h4000;
+			narrow_320 = 1'b1;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
+		end
+
+		// madshark_map, both layers 6bpp with jjsquawk's plain remap, and a
+		// third kind of interrupt again: screen_vblank -> level 2, ASSERT_LINE,
+		// which stays asserted until the board's own ipl1_ack_w write.
+		GAME_MADSHARK: begin
+			input_layout = 3'd0;
+			map_board = 5'd16; cpu_div = 5'd6;
+			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
+			game_rot = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd3;
+			l0_bpp6 = 1'b1; l1_bpp6 = 1'b1;
+			// No set_xoffsets at all: both layers keep the device default.
+			l0_xoffs = 9'sd0; l0_xoffs_flip = 9'sd0;
+			l1_xoffs = 9'sd0; l1_xoffs_flip = 9'sd0;
+			l0_colorbase = 11'd0; l1_colorbase = 11'd0;
+			l0_pal_mode = 2'd2; l1_pal_mode = 2'd2;      // plain
+			l0_pal_bank = 11'h400; l1_pal_bank = 11'h200;
+			l0_code_limit = 16'h2000; l1_code_limit = 16'h2000;
+			pal_entries = 12'd1536;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			short_224 = 1'b1;
+			irq_vbl_level = 3'd2; irq_vbl_hold = 1'b0;
+			has_ack  = 1'b1; ack_addr  = 23'h300002; ack_level  = 3'd2;
+			has_ack2 = 1'b1; ack2_addr = 23'h300003; ack2_level = 3'd4;
+		end
+
 		GAME_WROFAERO: begin
 			input_layout = 3'd2;
 			has_ack = 1'b1; ack_addr = 23'h780000; ack_level = 3'd4;
 			map_board = 5'd0; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd2;
-			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd2;
 			l0_xoffs = 9'sd0; l0_xoffs_flip = 9'sd0;
 			l1_xoffs = 9'sd0; l1_xoffs_flip = 9'sd0;
 			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
-			l0_code_mask = 16'h0fff; l1_code_mask = 16'h0fff;
+			l0_code_limit  = 16'h1000; l1_code_limit  = 16'h1000;
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
@@ -518,11 +658,11 @@ module seta_board_cfg (
 			buffer_sprites = 1'b1;
 			gfx_half_words = 23'h100000;  code_mask = 16'h7fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd2;
 			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
 			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
 			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
-			l0_code_mask = 16'h1fff; l1_code_mask = 16'h0fff;
+			l0_code_limit  = 16'h2000; l1_code_limit  = 16'h1000;
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
 			vregs_ofs = 3'd5;
@@ -536,11 +676,11 @@ module seta_board_cfg (
 			map_board = 5'd0; cpu_div = 5'd6;
 			gfx_half_words = 23'h40000;  code_mask = 16'h1fff;
 			game_rot = 2'd1;
-			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd2;
 			l0_xoffs = 9'sd0; l0_xoffs_flip = 9'sd0;
 			l1_xoffs = 9'sd0; l1_xoffs_flip = 9'sd0;
 			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
-			l0_code_mask = 16'h1fff; l1_code_mask = 16'h1fff;
+			l0_code_limit  = 16'h2000; l1_code_limit  = 16'h2000;
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd3; fg_xoffs_flip = 9'sd4;
 			short_224 = 1'b1;
@@ -554,11 +694,11 @@ module seta_board_cfg (
 			map_board = 5'd14; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd2;
 			l0_xoffs = -9'sd1; l0_xoffs_flip = -9'sd1;
 			l1_xoffs = -9'sd1; l1_xoffs_flip = -9'sd1;
 			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
-			l0_code_mask = 16'h1fff; l1_code_mask = 16'h0fff;
+			l0_code_limit  = 16'h2000; l1_code_limit  = 16'h1000;
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd1; fg_xoffs_flip = 9'sd1;
 			tilemaps_flip = 1'b1;
@@ -573,11 +713,11 @@ module seta_board_cfg (
 			map_board = 5'd3; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd2;
 			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
 			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
 			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
-			l0_code_mask = 16'h07ff; l1_code_mask = 16'h07ff;
+			l0_code_limit  = 16'h0800; l1_code_limit  = 16'h0800;
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
@@ -596,11 +736,11 @@ module seta_board_cfg (
 			map_board = 5'd15; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			game_rot = 2'd0;
-			has_l0 = 1'b1; has_l1 = 1'b1; layout = 2'd2;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd2;
 			l0_xoffs = -9'sd2; l0_xoffs_flip = 9'sd0;
 			l1_xoffs = -9'sd2; l1_xoffs_flip = 9'sd0;
 			l0_colorbase = 11'h400; l1_colorbase = 11'h200;
-			l0_code_mask = 16'h0fff; l1_code_mask = 16'h0fff;
+			l0_code_limit  = 16'h1000; l1_code_limit  = 16'h1000;
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;

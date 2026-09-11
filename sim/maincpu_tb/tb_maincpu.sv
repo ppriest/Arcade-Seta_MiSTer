@@ -39,6 +39,7 @@ module tb_maincpu;
 	// for a granule hit and more under contention; sweep it with +ROMLAT=n to
 	// check the FSM does not depend on a particular value.
 	int rom_latency = 6;
+	int run_ms = 4;
 
 	logic clk = 0;
 	always #(CLK_PERIOD / 2.0) clk = ~clk;
@@ -224,7 +225,12 @@ module tb_maincpu;
 		repeat (20) @(posedge clk);
 		reset <= 0;
 
-		do @(posedge clk); while (exp_i < n_exp && !have_bad && $time < 4ms);
+		// 4 ms is the whole boot for most sets. A game that boots and stops
+		// LATER -- where every early access matches -- needs a deeper trace and
+		// more time for it, so the limit is a plusarg rather than a recompile.
+		void'($value$plusargs("MS=%d", run_ms));
+		do @(posedge clk);
+		while (exp_i < n_exp && !have_bad && $time < run_ms * 1ms);
 
 		$display("");
 		$display("  reads compared   %0d of %0d", exp_i, n_exp);

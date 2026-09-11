@@ -110,7 +110,11 @@ def region_image(setname, region, all_blocks=None):
     if unknown:
         sys.exit(f"{setname}/{region}: unrecognised load line(s): {unknown[:2]}")
     if not recs:
-        sys.exit(f"{setname}/{region}: ROM_REGION is declared but nothing loads into it")
+        # DECLARED AND NEVER LOADED. sokonuke's gfx3 is
+        # ROM_REGION(0x100, "gfx3", ROMREGION_ERASE) with "Unused" written
+        # beside it, and MAME still instantiates a second tile layer over it.
+        # An erased region is zeros, which is what the padding below writes.
+        return bytes(size), size, str(zip_for(setname, all_blocks)[0])
     zippath, key = zip_for(setname, all_blocks)
 
     # ROM_COPY takes its bytes from ANOTHER region of the same set, so that

@@ -174,10 +174,13 @@ module seta_core (
 	wire        tilemaps_flip;
 	wire        gfx1_invert;
 	wire        has_l0, has_l1;
-	wire  [1:0] layout;
+	wire  [2:0] layout;
+	wire        l0_bpp6, l1_bpp6;
+	wire  [1:0] l0_pal_mode, l1_pal_mode;
+	wire [10:0] l0_pal_bank, l1_pal_bank;
 	wire signed [8:0] l0_xoffs, l0_xoffs_flip, l1_xoffs, l1_xoffs_flip;
 	wire [10:0] l0_colorbase, l1_colorbase;
-	wire [15:0] l0_code_mask, l1_code_mask;
+	wire [15:0] l0_code_limit, l1_code_limit;
 
 	seta_board_cfg u_cfg (
 		.game(game),
@@ -192,6 +195,9 @@ module seta_core (
 		.ack_d0_low(ack_d0_low),
 		.has_ack2(has_ack2), .ack2_addr(ack2_addr), .ack2_level(ack2_level),
 		.has_l0(has_l0), .has_l1(has_l1), .layout(layout),
+		.l0_bpp6(l0_bpp6), .l1_bpp6(l1_bpp6),
+		.l0_pal_mode(l0_pal_mode), .l1_pal_mode(l1_pal_mode),
+		.l0_pal_bank(l0_pal_bank), .l1_pal_bank(l1_pal_bank),
 		.has_x1_bank(has_x1_bank),
 		.vregs_ofs(vregs_ofs),
 		.tilemaps_flip(tilemaps_flip),
@@ -199,9 +205,9 @@ module seta_core (
 		.gfx1_invert(gfx1_invert),
 		.buffer_sprites(buffer_sprites),
 		.l0_xoffs(l0_xoffs), .l0_xoffs_flip(l0_xoffs_flip),
-		.l0_colorbase(l0_colorbase), .l0_code_mask(l0_code_mask),
+		.l0_colorbase(l0_colorbase), .l0_code_limit(l0_code_limit),
 		.l1_xoffs(l1_xoffs), .l1_xoffs_flip(l1_xoffs_flip),
-		.l1_colorbase(l1_colorbase), .l1_code_mask(l1_code_mask),
+		.l1_colorbase(l1_colorbase), .l1_code_limit(l1_code_limit),
 		.has_prot(has_prot),
 		.has_tl_prot(has_tl_prot), .tl_prot_base(tl_prot_base),
 		.tl_prot_size(tl_prot_size), .tl_prot_rd(tl_prot_rd),
@@ -307,10 +313,35 @@ module seta_core (
 				if ({rom_addr, 1'b0} < 24'h000400 && {rom_addr, 1'b0} >= 24'h000008)
 					dbg_last_vec <= {rom_addr, 1'b0};
 				if (~&dbg_rom_fetches) dbg_rom_fetches <= dbg_rom_fetches + 16'd1;
-				if (!dbg_pc_frozen) begin
+				// A BRANCH TRACE, not every fetch. Twenty sequential words
+				// is a quarter of a routine and says nothing about how the CPU
+				// got there; twenty DISCONTINUITIES is twenty branches, jumps
+				// and returns. gundhara halts in its own illegal-instruction
+				// handler after executing from address 0, and by the time the
+				// ring froze it held nothing but the walk up the vector table
+				// -- the jump that started it had already been pushed out.
+				if (!dbg_pc_frozen && rom_addr != dbg_last_rom[23:1] + 23'd1) begin
 					dbg_pc_ring <= {dbg_pc_ring[455:0], rom_addr, 1'b0};
-					// From 0x10, not 0x8: the reset sequence prefetches 0x8 and
-					// froze the ring before the first instruction.
+					// STOP AT A HALT LOOP. `bra.s *` is a discontinuity every
+					// time round, so a stopped game fills the ring with one
+					// address and erases the history that explains it -- which
+					// is what gundhara did. Freezing on the second consecutive
+					// identical entry keeps the nineteen branches before the
+					// halt, and it needs no per-game address: every seta.cpp
+					// error handler ends in `move #$2700,sr; bra.s *`.
+					// FREEZE ON THE EXCEPTION ITSELF. Taking one reads the
+					// vector's four bytes, and vectors 4..11 are the faults a
+					// game does not expect -- illegal instruction, divide by
+					// zero, CHK, TRAPV, privilege, trace. The reset sequence
+					// reads 0..8 before the first instruction, so the window
+					// starts above it.
+					//
+					// NOT on a repeated address: with a branch trace every
+					// `dbra` looks like `bra.s *`, and gundhara froze the ring
+					// on the first tight loop it entered, seventeen branches
+					// after reset. What the ring holds at a vector fetch is the
+					// last nineteen control transfers before the fault, which
+					// is the thing worth having.
 					if ({rom_addr, 1'b0} >= 24'h000010 && {rom_addr, 1'b0} < 24'h000030)
 						dbg_pc_frozen <= 1'b1;
 				end
@@ -349,14 +380,27 @@ module seta_core (
 	// =====================================================================
 	// Work RAM
 	//
-	// 64 KB, and MIRRORED where the map declares more. atehate_map declares a
+	// 128 KB, and MIRRORED where the map declares more. atehate_map declares a
 	// megabyte at 0x900000-0x9fffff, which is MAME allocating the decoded
 	// window; measured from a capture of that whole window during play, the
 	// game touches 0x900061-0x909a19 and 0x9fff7b-0x9ffffb and nothing else,
 	// and under a 64 KB mirror those land at 0x0061-0x9a19 and 0xff7b-0xfffb
 	// with zero collisions. maincpu.sv applies the mask; this is just the RAM.
 	//
-	// 32K words is ~51 M10K blocks, about 13% of the device.
+	// 128 KB, NOT 64, because zingzip_map declares two blocks:
+	//     map(0x200000, 0x20ffff).ram();
+	//     map(0x210000, 0x21ffff).ram();   // "RAM (gundhara)"
+	// and MAME's own comment names the one set that uses the second. At 64 KB
+	// the two aliased, and gundhara's start-up RAM test walked the second
+	// block -- clearing the first as it went, the stack at 0x20fffe with it.
+	// The `rts` out of the test routine popped a zeroed return address, the
+	// CPU ran from 0x000000 through the vector table (which disassembles as
+	// 256 legal `ori.b #imm,D0` pairs) into the handler at 0x400, and halted
+	// at the `bra.s *` every handler in the driver ends with. It read as an
+	// illegal instruction and was not one: nothing had been mis-decoded, the
+	// return address simply was not there any more.
+	//
+	// 64K words is ~102 M10K blocks, about 26% of the device.
 	// =====================================================================
 	// REGISTERED IN, like every other RAM the CPU drives. Without it the work
 	// RAM's address, data and write enables hang combinationally off the TG68K,
@@ -377,11 +421,11 @@ module seta_core (
 		m_addr <= wram_addr; m_wdata <= wram_wdata;
 	end
 
-	logic [15:0] wram [0:32767];
+	logic [15:0] wram [0:65535];
 	always_ff @(posedge clk) begin
-		if (m_wel) wram[m_addr[15:1]][7:0]  <= m_wdata[7:0];
-		if (m_weh) wram[m_addr[15:1]][15:8] <= m_wdata[15:8];
-		wram_rdata <= wram[m_addr[15:1]];
+		if (m_wel) wram[m_addr[16:1]][7:0]  <= m_wdata[7:0];
+		if (m_weh) wram[m_addr[16:1]][15:8] <= m_wdata[15:8];
+		wram_rdata <= wram[m_addr[16:1]];
 	end
 
 	// The second block, where a board has one. In Group A only wits does:
@@ -508,6 +552,9 @@ module seta_core (
 		.screen_h(screen_h), .vis_max_y(vact_end[8:0]), .backdrop(backdrop),
 		.code_mask(code_mask), .line_budget(line_budget),
 		.en_l0(en_l0), .en_l1(en_l1),
+		.l0_bpp6(l0_bpp6), .l1_bpp6(l1_bpp6),
+		.l0_pal_mode(l0_pal_mode), .l1_pal_mode(l1_pal_mode),
+		.l0_pal_bank(l0_pal_bank), .l1_pal_bank(l1_pal_bank),
 
 		// ---- the X1-012 tile layer, Phase 2 --------------------------------
 		// has_l0 comes from the board config and is low for every Group A set,
@@ -524,7 +571,7 @@ module seta_core (
 		.l0_ctrl_uds(io_uds), .l0_ctrl_lds(io_lds),
 		.l0_ctrl_rdata(l0_ctrl_rdata),
 		.l0_xoffs(l0_xoffs), .l0_xoffs_flip(l0_xoffs_flip),
-		.l0_colorbase(l0_colorbase), .l0_code_mask(l0_code_mask),
+		.l0_colorbase(l0_colorbase), .l0_code_limit(l0_code_limit),
 		.tile_req(tile_req), .tile_addr(tile_addr),
 		.tile_valid(tile_valid), .tile_data(tile_data),
 
@@ -538,7 +585,7 @@ module seta_core (
 		.l1_ctrl_uds(io_uds), .l1_ctrl_lds(io_lds),
 		.l1_ctrl_rdata(l1_ctrl_rdata),
 		.l1_xoffs(l1_xoffs), .l1_xoffs_flip(l1_xoffs_flip),
-		.l1_colorbase(l1_colorbase), .l1_code_mask(l1_code_mask),
+		.l1_colorbase(l1_colorbase), .l1_code_limit(l1_code_limit),
 		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.vregs(vregs),

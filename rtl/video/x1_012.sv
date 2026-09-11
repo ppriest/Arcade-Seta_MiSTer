@@ -90,7 +90,11 @@ module x1_012 #(
 	input  wire         flipscr,
 	input  wire   [8:0] vis_dimy,           // visible_area height, 240
 	input  wire [LB_W-1:0] colorbase,       // the GFXDECODE_ENTRY base
-	input  wire  [15:0] code_mask,          // gfx_element wraps a code past the end
+	// drawgfx.cpp: `code %= elements()`. NOT a mask -- see the note below.
+	input  wire  [15:0] code_limit,
+	// layout_tilemap_6bpp. A tile is 192 bytes rather than 128 and a pen is
+	// six bits rather than four; see the fetch below.
+	input  wire         bpp6,
 
 	// ---- line engine -------------------------------------------------------
 	// VBLANK LATCH. The bank bit is sampled at vblank_rise, the same pulse the
@@ -246,7 +250,7 @@ module x1_012 #(
 	// =====================================================================
 	typedef enum logic [3:0] {
 		S_IDLE, S_LATCH, S_TILE, S_TILE2, S_ATTR, S_ATTR2,
-		S_FETCH, S_WAIT, S_BLIT, S_NEXT, S_DONE
+		S_FETCH, S_WAIT, S_FETCH2, S_WAIT2, S_BLIT, S_NEXT, S_DONE
 	} state_t;
 	state_t state = S_IDLE;
 
@@ -287,7 +291,63 @@ module x1_012 #(
 	wire  [5:0] w_sel   = w0 + {chunk, 3'b000};
 	// 64 words per tile, and a granule is four words: the granule address is
 	// (code * 64 + word) >> 2, and the word within it selects 16 of the 64 bits.
-	wire [21:0] word_ix = {tile_code & code_mask[13:0], 6'd0} + {16'd0, w_sel};
+	// ONE CONDITIONAL SUBTRACT IS THE MODULO. A code is 14 bits and every
+	// element count in scope is over 8192, so a code can never be more than
+	// twice the limit and a single subtract reduces it exactly. zingzip's
+	// 6bpp layer is the one whose count -- 10922 -- is not a power of two,
+	// where a mask would have read past the end of the region into whatever
+	// SDRAM holds next.
+	//
+	// REGISTERED, one state after the code arrives. Combinationally, this
+	// compare and subtract fed the tile's byte base -- three more adds -- and
+	// then rom_addr, and the whole chain missed the 10.416 ns period by
+	// 1.25 ns. S_ATTR and S_ATTR2 are spare cycles between the code arriving
+	// and the first fetch, so the reduction takes one and the multiply the
+	// other; nothing downstream changes.
+	logic [15:0] tile_lim;
+	wire  [15:0] tile_lim_c = (tile_code >= code_limit)
+	                        ? (tile_code - code_limit) : tile_code;
+
+	wire [21:0] word_ix = {tile_lim[13:0], 6'd0} + {16'd0, w_sel};
+
+	// ---- 6bpp ---------------------------------------------------------------
+	// BYTE offsets, because 192 and 24 are not multiples of the 2-byte word the
+	// 4bpp path counts in. tile*192 = tile*128 + tile*64; chunk*24 =
+	// chunk*16 + chunk*8.
+	// tile * 192 = tile*128 + tile*64, registered for the same reason.
+	wire [13:0] code6   = tile_lim[13:0];
+	logic [22:0] tile_b6;
+	wire [22:0] tile_b6_c = {code6, 7'd0} + {1'b0, code6, 6'd0};
+	// 96*h + 3*(y&7). 96 is 64 + 32, not 64: the second half of the tile
+	// starts at 6*4*8*4 bits.
+	wire  [7:0] row_b6  = {eff_row[3], 6'd0} + {1'b0, eff_row[3], 5'd0}
+	                    + {3'd0, eff_row[2:0], 1'b0} + {5'd0, eff_row[2:0]};
+	wire  [6:0] chk_b6  = {chunk, 4'd0} + {1'b0, chunk, 3'd0};   // 24*chunk
+	wire [22:0] byte_ix = tile_b6 + {15'd0, row_b6} + {16'd0, chk_b6};
+
+	// The three bytes start at byte_ix and may cross into the next granule.
+	wire  [2:0] sub6     = byte_ix[2:0];
+	wire        strad6   = sub6 > 3'd5;
+
+	// A granule in ROM byte order: sdram.sv delivers four 16-bit words with
+	// word 0 in the low bits, and a word holds {odd byte, even byte}, so ROM
+	// byte i is simply bits [8i +: 8]. The 4bpp path says the same thing the
+	// long way round, by selecting a word and swapping its halves.
+	function automatic [7:0] gbyte(input [63:0] g, input [2:0] i);
+		gbyte = g[{i, 3'd0} +: 8];
+	endfunction
+
+	// Six planes, MSB first -- planeoffset[0] is the TOP bit of the pen, the
+	// same convention the 4bpp pen_of carries and the one the model scored
+	// 100% with against MAME's own render.
+	function automatic [5:0] pen6(input [23:0] v, input [1:0] i);
+		pen6 = { v[23 - {4'd0, i}],
+		         v[23 - ({4'd0, i} + 5'd4)],
+		         v[23 - ({4'd0, i} + 5'd8)],
+		         v[23 - ({4'd0, i} + 5'd12)],
+		         v[23 - ({4'd0, i} + 5'd16)],
+		         v[23 - ({4'd0, i} + 5'd20)] };
+	endfunction
 
 	function automatic [3:0] pen_of(input [15:0] w, input [1:0] i);
 		pen_of = { w[15 - {3'd0, i}],
@@ -303,6 +363,10 @@ module x1_012 #(
 	                                              rom_data[63:48];
 
 	logic [4:0] blit_px;         // 0..15 within the tile
+
+	// The 6bpp chunks, and the first granule of a straddling pair.
+	logic [23:0] chunks6 [0:3];
+	logic [63:0] gran_lo;
 
 	always_ff @(posedge clk) begin
 		lb_we    <= 1'b0;
@@ -350,17 +414,43 @@ module x1_012 #(
 				state     <= S_ATTR;
 			end
 
-			S_ATTR:  state <= S_ATTR2;
+			S_ATTR: begin
+				tile_lim <= tile_lim_c;
+				state    <= S_ATTR2;
+			end
 			S_ATTR2: begin
 				tile_color <= eng_vq[4:0];
+				tile_b6    <= tile_b6_c;
 				chunk      <= 2'd0;
 				state      <= S_FETCH;
 			end
 
 			S_FETCH: begin
 				rom_req  <= 1'b1;
-				rom_addr <= {3'd0, word_ix[21:2]};
+				rom_addr <= bpp6 ? byte_ix[22:3] : {3'd0, word_ix[21:2]};
 				state    <= S_WAIT;
+			end
+
+			// The second granule of a straddling 6bpp chunk.
+			S_FETCH2: begin
+				rom_req  <= 1'b1;
+				rom_addr <= byte_ix[22:3] + 20'd1;
+				state    <= S_WAIT2;
+			end
+
+			S_WAIT2: if (rom_valid) begin
+				chunks6[chunk] <= sub6 == 3'd6
+				    ? {gbyte(gran_lo, 3'd6), gbyte(gran_lo, 3'd7),
+				       gbyte(rom_data, 3'd0)}
+				    : {gbyte(gran_lo, 3'd7), gbyte(rom_data, 3'd0),
+				       gbyte(rom_data, 3'd1)};
+				if (chunk == 2'd3) begin
+					blit_px <= 5'd0;
+					state   <= S_BLIT;
+				end else begin
+					chunk <= chunk + 2'd1;
+					state <= S_FETCH;
+				end
 			end
 
 			S_WAIT: if (rom_valid) begin
@@ -379,7 +469,15 @@ module x1_012 #(
 				// already carries it once, as "a behavioural ROM in a bench
 				// must speak the transport's byte order".
 				chunks[chunk] <= { rom_word[7:0], rom_word[15:8] };
-				if (chunk == 2'd3) begin
+				if (bpp6) begin
+					gran_lo <= rom_data;
+					chunks6[chunk] <= {gbyte(rom_data, sub6),
+					                   gbyte(rom_data, sub6 + 3'd1),
+					                   gbyte(rom_data, sub6 + 3'd2)};
+				end
+				if (bpp6 && strad6) begin
+					state <= S_FETCH2;
+				end else if (chunk == 2'd3) begin
 					blit_px <= 5'd0;
 					state   <= S_BLIT;
 				end else begin
@@ -401,11 +499,21 @@ module x1_012 #(
 				// groups themselves in the wrong one -- which is why six of
 				// twenty-four frames failed, all of them by small counts, on
 				// exactly the frames that contain a flipped tile.
-				lb_wdata <= colorbase + {2'd0, tile_color, 4'd0}
-				            + {7'd0, pen_of(chunks[tile_fx ? blit_px[3:2]
-				                                           : (2'd3 - blit_px[3:2])],
-				                            tile_fx ? (2'd3 - blit_px[1:0])
-				                                    : blit_px[1:0])};
+				// SIX BITS OF PEN, so the colour steps by 64 rather than 16.
+				// The per-family index remaps the 6bpp games need on top of
+				// this live in the mixer, not here: this is the gfx_element's
+				// own (color, pen) pair, which is what MAME hands to them.
+				lb_wdata <= bpp6
+				    ? colorbase + {tile_color, 6'd0}
+				      + {5'd0, pen6(chunks6[tile_fx ? blit_px[3:2]
+				                                    : (2'd3 - blit_px[3:2])],
+				                    tile_fx ? (2'd3 - blit_px[1:0])
+				                            : blit_px[1:0])}
+				    : colorbase + {2'd0, tile_color, 4'd0}
+				      + {7'd0, pen_of(chunks[tile_fx ? blit_px[3:2]
+				                                     : (2'd3 - blit_px[3:2])],
+				                      tile_fx ? (2'd3 - blit_px[1:0])
+				                              : blit_px[1:0])};
 				if (blit_px == 5'd15) state <= S_NEXT;
 				else blit_px <= blit_px + 5'd1;
 			end

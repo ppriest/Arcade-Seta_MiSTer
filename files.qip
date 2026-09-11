@@ -48,6 +48,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/x1_010.sv
 # ---------------------------------------------------------------------------
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/x1_001.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/x1_012.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/x1_011_index.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_palette.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_video_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_video.sv

@@ -46,9 +46,12 @@ set fields_F {
 # INSTANCE B -- one granule layer 0 received, built in Seta.sv's
 # u_issp_gran. The byte offset into gfx2 is l0_gran_addr * 8; compare
 # l0_gran_data with the ROM image there.
-# INSTANCE A -- the last twenty ROM reads before an exception, built in
-# Seta.sv's u_issp_pc. pc0 is the newest. frozen says the ring stopped on
-# a fetch of vectors 2..11; until then it is a live window.
+# INSTANCE A -- the last twenty BRANCHES before an exception, built in
+# Seta.sv's u_issp_pc. Only a fetch that is not the previous one plus a word
+# is recorded, so each entry is a jump, branch, return or exception target
+# rather than one word of a routine -- twenty sequential fetches said nothing
+# about how the CPU got there. pc0 is the newest. frozen says the ring stopped
+# with the CPU executing the vector table; until then it is a live window.
 set fields_A {
     {pc0               0  23 hex}
     {pc1              24  47 hex}

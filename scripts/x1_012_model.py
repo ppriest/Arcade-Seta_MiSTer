@@ -108,9 +108,87 @@ def _two_layer_cfg(**over):
         palette_entries=512 * 3,
         l0_colorbase=0x400, l1_colorbase=0x200,
         l0_xoffsets=(-2, -2), l1_xoffsets=(-2, -2),
+        # 4bpp, one gfx entry per layer: colour mode 1 falls back to 0.
+        l0_bpp=4, l1_bpp=4,
+        # Direct: MAME leaves these games' colortable at its default, which
+        # dipalette.cpp fills as `pen % indirect_colors` -- identity.
+        l0_pal_mode="direct", l1_pal_mode="direct",
+        l0_pal_bank=0, l1_pal_bank=0,
     )
     cfg.update(over)
     return cfg
+
+
+def _6bpp_cfg(**over):
+    """The Phase 4 families. Bases are the GFXDECODE_ENTRY arguments."""
+    cfg = _two_layer_cfg()
+    cfg.update(
+        # 0x600 of palette RAM. The GFXDECODE bases index a COLORTABLE of
+        # 16*32 + 64*32*4 entries, but the colortable is the remap -- what the
+        # hardware has, and what the core instantiates, is 1536 entries.
+        palette_entries=0x600,
+        l0_xoffsets=(0, 0), l1_xoffsets=(0, 0),
+        # A 6bpp layer's pixel leaves the engine as {color, pen} -- no base.
+        l0_colorbase=0, l1_colorbase=0,
+    )
+    cfg.update(over)
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 -- 6bpp layers.
+#
+# GFXDECODE, entry [0] then [1], from seta.cpp:
+#   gundhara  L1 gfx2 16*32+64*32*1 / *3     L2 gfx3 16*32+64*32*0 / *2
+#   jjsquawk  L1 gfx2 16*32+64*32*0 / *2     L2 gfx3 16*32+64*32*1 / *3
+#             -- note gundhara and jjsquawk SWAP which layer sits at which
+#             base, on top of differing in their palette remap by two
+#             characters. Both read like typos and neither is one.
+# ---------------------------------------------------------------------------
+# `pal_mode`: "masked" drops the colour code's low two bits before the add,
+# "plain" does not. gundhara and jjsquawk BOTH instantiate gfx_jjsquawk_layer1
+# and gfx_jjsquawk_layer2 -- there is no gfx_gundhara_* pair -- and differ only
+# in which palette function they pass. `pal_bank` is where that function sends
+# each layer.
+SIXBPP_GAMES = {
+    # set_fg_xoffsets(0, 0) on gundhara, (1, 1) on jjsquawk -- the default
+    # the sprite config carries is drgnunit's (2, 2), and two pixels shows up
+    # as a ring of wrong pixels around every glyph.
+    "gundhara": _6bpp_cfg(
+        rot=270, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=6,
+        l0_pal_mode="masked", l1_pal_mode="masked",
+        l0_pal_bank=0x400, l1_pal_bank=0x200),
+    "jjsquawk": _6bpp_cfg(
+        rot=0, fg_xoffs=(1, 1), l0_bpp=6, l1_bpp=6,
+        # set_xoffsets(-1, -1) on both layers.
+        l0_xoffsets=(-1, -1), l1_xoffsets=(-1, -1),
+        l0_pal_mode="plain", l1_pal_mode="plain",
+        l0_pal_bank=0x400, l1_pal_bank=0x200),
+    # zingzip's layer 2 is 4bpp, and only its layer 1 is remapped -- the rest
+    # of the colortable keeps MAME's identity default, so layer 2 is direct
+    # with the palette base its GFXDECODE carries.
+    "zingzip": _6bpp_cfg(
+        rot=270, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=4,
+        l0_xoffsets=(-2, -1), l1_xoffsets=(-2, -1),
+        l0_pal_mode="masked", l0_pal_bank=0x400,
+        l1_pal_mode="direct", l1_colorbase=0x200),
+    "extdwnhl": _6bpp_cfg(
+        rot=0, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=4,
+        l0_xoffsets=(-2, -2), l1_xoffsets=(-2, -2),
+        l0_pal_mode="masked", l0_pal_bank=0x400,
+        l1_pal_mode="direct", l1_colorbase=0x200),
+    # sokonuke runs extdwnhl's machine_config outright.
+    "sokonuke": _6bpp_cfg(
+        rot=0, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=4,
+        l0_xoffsets=(-2, -2), l1_xoffsets=(-2, -2),
+        l0_pal_mode="masked", l0_pal_bank=0x400,
+        l1_pal_mode="direct", l1_colorbase=0x200),
+    # madshark calls no set_xoffsets at all.
+    "madshark": _6bpp_cfg(
+        rot=270, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=6,
+        l0_pal_mode="plain", l1_pal_mode="plain",
+        l0_pal_bank=0x400, l1_pal_bank=0x200),
+}
 
 
 TWO_LAYER_GAMES = {
@@ -189,33 +267,48 @@ LAYER_GAMES = {
 # the transcription with the planes read MSB-first scored 100.00%.
 #
 # Phase 4's 6bpp layouts have the same convention and the same trap.
-_PLANES = [0, 4, 8, 12]
-_XOFFS = ([4 * 4 * 8 * 3 + i for i in range(4)] +
-          [4 * 4 * 8 * 2 + i for i in range(4)] +
-          [4 * 4 * 8 * 1 + i for i in range(4)] +
-          [0 + i for i in range(4)])
-_YOFFS = ([0 + i * (4 * 4) for i in range(8)] +
-          [4 * 4 * 8 * 4 + i * (4 * 4) for i in range(8)])
-_TILE_BITS = 16 * 16 * 4
+def _layout(bpp):
+    """(planes, xoffs, yoffs, bits per tile) for layout_tilemap[_6bpp].
+
+    The two differ only in how many planes a pixel has, so the offsets are the
+    same expressions with 4 replaced by 6 -- which is exactly how seta.cpp
+    writes them. Transcribed, not derived:
+
+        4bpp  { STEP4(0,4) }                       planes
+              { STEP4(4*4*8*3,1), ... STEP4(0,1) } x
+              { STEP8(0,4*4), STEP8(4*4*8*4,4*4) } y
+        6bpp  { STEP4(0,4), STEP2(4*4,4) }
+              { STEP4(6*4*8*3,1), ... STEP4(0,1) }
+              { STEP8(0,6*4), STEP8(6*4*8*4,6*4) }
+    """
+    planes = [4 * i for i in range(bpp)]
+    xoffs = [bpp * 4 * 8 * g + i for g in (3, 2, 1, 0) for i in range(4)]
+    yoffs = ([i * (bpp * 4) for i in range(8)] +
+             [bpp * 4 * 8 * 4 + i * (bpp * 4) for i in range(8)])
+    return planes, xoffs, yoffs, 16 * 16 * bpp
 
 
-def decode_tiles(gfx):
-    """Every 16x16 4bpp tile in the region, as a flat list of 256 pens each."""
-    ntiles = (len(gfx) * 8) // _TILE_BITS
+_PLANES, _XOFFS, _YOFFS, _TILE_BITS = _layout(4)
+
+
+def decode_tiles(gfx, bpp=4):
+    """Every 16x16 tile in the region, as a flat list of 256 pens each."""
+    planes, xoffs, yoffs, tile_bits = _layout(bpp)
+    ntiles = (len(gfx) * 8) // tile_bits
     out = []
     for t in range(ntiles):
-        base = t * _TILE_BITS
+        base = t * tile_bits
         tile = bytearray(256)
         for y in range(16):
-            yo = _YOFFS[y]
+            yo = yoffs[y]
             for x in range(16):
-                xo = _XOFFS[x]
+                xo = xoffs[x]
                 pen = 0
-                for p, po in enumerate(_PLANES):
+                for p, po in enumerate(planes):
                     bit = base + yo + xo + po
                     byte = gfx[bit >> 3]
                     if byte & (0x80 >> (bit & 7)):
-                        pen |= 1 << (len(_PLANES) - 1 - p)
+                        pen |= 1 << (len(planes) - 1 - p)
                 tile[y * 16 + x] = pen
         out.append(tile)
     return out
@@ -224,7 +317,10 @@ def decode_tiles(gfx):
 class Layer:
     """One X1-012's worth of state, plus its tile ROM."""
 
-    def __init__(self, cfg, vram, vctrl, tiles):
+    def __init__(self, cfg, vram, vctrl, tiles, bpp=4, colorbase_m1=None):
+        self.bpp = bpp
+        # The mode-1 palette base, where the layer has a second gfx entry.
+        self.colorbase_m1 = colorbase_m1
         self.cfg = cfg
         self.vram = vram            # words
         self.vctrl = vctrl          # three words
@@ -255,9 +351,12 @@ class Layer:
         color = attr & 0x1f
         # gfx = (m_vctrl[2] & 0x10) >> 4, and gfx(1) is nullptr for every
         # game in this phase, so MAME popmessages and uses 0.
-        gfx = (self.vctrl[2] & 0x10) >> 4
-        if gfx == 1:
-            gfx = 0
+        # gfx = (m_vctrl[2] & 0x10) >> 4 picks the layer's second GFXDECODE
+        # entry. For the 4bpp games gfx(1) is nullptr and MAME falls back to 0;
+        # for the 6bpp ones it exists but differs only in a palette base that
+        # the colortable maps to the same place. Either way nothing here
+        # changes, so the bit is read and dropped.
+        gfx = 0
         if self.cfg["tile_offset"] is not None:
             code = self.cfg["tile_offset"](code)
         return code, color, flipx, flipy
@@ -304,6 +403,8 @@ def _draw(cfg, layer, bmp, vis_dimy, flip, opaque, base=None):
     # sprites at 0, layer 0 at 0x400 and layer 1 at 0x200 of 512*3 entries.
     if base is None:
         base = cfg["gfx_colorbase"]
+    # A 6bpp pen is six bits, so the colour granularity is 64.
+    gran = 64 if layer.bpp == 6 else 16
     for y in range(h):
         row = bmp[y]
         for x in range(w):
@@ -314,7 +415,7 @@ def _draw(cfg, layer, bmp, vis_dimy, flip, opaque, base=None):
             o = py * 1024 + px
             pen = pm[o]
             if opaque or pen:
-                row[x] = base + colors[o] * 16 + pen
+                row[x] = base + colors[o] * gran + pen
 
 
 def render2(cfg, l0, l1, spr, vis_dimy, flip, vregs):
@@ -367,16 +468,19 @@ def render2(cfg, l0, l1, spr, vis_dimy, flip, vregs):
     return bmp
 
 
-def render(cfg, vram, vctrl, tiles, spr, vis_dimy, flip):
+def render(cfg, vram, vctrl, tiles, spr, vis_dimy, flip,
+           bpp=4, colorbase_m1=None):
     """seta_layers_update for a ONE-layer game.
 
     m_layers[1] is absent, so `order` is 0 and the whole function collapses
     to: fill(0), layer 0 drawn OPAQUE, then the sprites. Nothing chooses a
     priority and nothing swaps.
     """
-    layer = Layer(cfg, vram, vctrl, tiles)
+    layer = Layer(cfg, vram, vctrl, tiles, bpp, colorbase_m1)
     pm, colors = layer.pixmap()
     sx, sy = layer.scroll(vis_dimy, flip)
+    base = cfg["gfx_colorbase"]
+    gran = 64 if bpp == 6 else 16
 
     w, h = cfg["screen_w"], cfg["screen_h"]
     # Rows, not a flat list: this is the bitmap Sprites.draw_* write into, and
@@ -422,7 +526,7 @@ def render(cfg, vram, vctrl, tiles, spr, vis_dimy, flip):
             else:
                 px, py = (x + sx) & 1023, (y + sy) & 511
             o = py * 1024 + px
-            row[x] = cfg["gfx_colorbase"] + colors[o] * 16 + pm[o]
+            row[x] = base + colors[o] * gran + pm[o]
 
     if spr is not None:
         spr.draw_background(bmp)

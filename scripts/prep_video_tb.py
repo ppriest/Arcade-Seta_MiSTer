@@ -43,7 +43,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 from x1_001_model import (GAMES, Sprites, load_capture, SNAPSHOT_TRANSFORM,
                           _read_orientation, _be16)
-from x1_012_model import LAYER_GAMES, TWO_LAYER_GAMES
+from x1_012_model import LAYER_GAMES, TWO_LAYER_GAMES, SIXBPP_GAMES
 from build_region import region_image
 
 OUT = REPO / "sim" / "seta_video_tb"
@@ -59,10 +59,16 @@ CFG = [
     "vtotal", "vs_start", "vs_end", "vact_start", "vact_end",
     "pal_entries",
     # ---- Phase 2 / 3: the tile layers ----
-    "has_l0", "l0_xoffs", "l0_xoffs_flip", "l0_colorbase", "l0_code_mask",
-    "has_l1", "l1_xoffs", "l1_xoffs_flip", "l1_colorbase", "l1_code_mask",
+    "has_l0", "l0_xoffs", "l0_xoffs_flip", "l0_colorbase", "l0_code_limit",
+    "has_l1", "l1_xoffs", "l1_xoffs_flip", "l1_colorbase", "l1_code_limit",
     "vregs",
+    # ---- Phase 4: 6bpp layers and the palette address formation ----
+    "l0_bpp6", "l1_bpp6",
+    "l0_pal_mode", "l1_pal_mode", "l0_pal_bank", "l1_pal_bank",
 ]
+
+# rtl/video/x1_011_index.sv's mode encoding.
+PAL_MODE = {"direct": 0, "masked": 1, "plain": 2}
 
 
 def s9(v):
@@ -100,10 +106,15 @@ def main():
                     help="m_vregs for a two-layer game; write only, so it comes from the capture write log")
     a = ap.parse_args()
 
-    two = a.game in TWO_LAYER_GAMES
+    # The 6bpp sets are two-layer games with a different tile format and a
+    # palette address formation on the way out; everything else about the
+    # fixture is the same.
+    two_layer = dict(TWO_LAYER_GAMES)
+    two_layer.update(SIXBPP_GAMES)
+    two = a.game in two_layer
     two_or_one = two or a.game in LAYER_GAMES
     if two:
-        cfg = TWO_LAYER_GAMES[a.game]
+        cfg = two_layer[a.game]
     elif a.game in LAYER_GAMES:
         cfg = LAYER_GAMES[a.game]
     elif a.game in GAMES:
@@ -186,8 +197,14 @@ def main():
         "".join(f"{px[x, y][0] << 16 | px[x, y][1] << 8 | px[x, y][2]:06x}\n"
                 for y in range(H) for x in range(W)))
 
-    l0_mask = (len(region_image(a.game, "gfx2")[0]) // 128 - 1) if two_or_one else 0
-    l1_mask = (len(region_image(a.game, "gfx3")[0]) // 128 - 1) if two else 0
+    # The ELEMENT COUNT, not a mask: drawgfx.cpp reduces a code with
+    # `code %= elements()`, and one 6bpp region in scope is not a power of two.
+    l0_bpp = cfg.get("l0_bpp", 4)
+    l1_bpp = cfg.get("l1_bpp", 4)
+    l0_lim = (len(region_image(a.game, "gfx2")[0]) //
+              (192 if l0_bpp == 6 else 128)) if two_or_one else 0
+    l1_lim = (len(region_image(a.game, "gfx3")[0]) //
+              (192 if l1_bpp == 6 else 128)) if two else 0
 
     geo = geometry(cfg)
     vals = {
@@ -216,13 +233,19 @@ def main():
         "l0_xoffs":      s9(cfg.get("l0_xoffsets", (0, 0))[1]),
         "l0_xoffs_flip": s9(cfg.get("l0_xoffsets", (0, 0))[0]),
         "l0_colorbase":  cfg.get("l0_colorbase", 0),
-        "l0_code_mask":  l0_mask,
+        "l0_code_limit": l0_lim,
         "has_l1":        1 if two else 0,
         "l1_xoffs":      s9(cfg.get("l1_xoffsets", (0, 0))[1]),
         "l1_xoffs_flip": s9(cfg.get("l1_xoffsets", (0, 0))[0]),
         "l1_colorbase":  cfg.get("l1_colorbase", 0),
-        "l1_code_mask":  l1_mask,
+        "l1_code_limit": l1_lim,
         "vregs":         a.vregs,
+        "l0_bpp6":       1 if l0_bpp == 6 else 0,
+        "l1_bpp6":       1 if l1_bpp == 6 else 0,
+        "l0_pal_mode":   PAL_MODE[cfg.get("l0_pal_mode", "direct")],
+        "l1_pal_mode":   PAL_MODE[cfg.get("l1_pal_mode", "direct")],
+        "l0_pal_bank":   cfg.get("l0_pal_bank", 0),
+        "l1_pal_bank":   cfg.get("l1_pal_bank", 0),
     }
     vals.update(geo)
     (OUT / "cfg.hex").write_text("".join(f"{vals[k]:08x}\n" for k in CFG))

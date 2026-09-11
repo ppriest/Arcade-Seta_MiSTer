@@ -19,6 +19,8 @@ What this understands, which is everything seta.cpp uses for "maincpu":
     ROM_LOAD16_BYTE       one byte lane; dest & 1 selects even or odd
     ROM_LOAD16_WORD_SWAP  whole words, byte-swapped, no pairing
     ROM_LOAD              plain, byte for byte
+    ROM_LOAD24_BYTE       one byte every THREE, from dest
+    ROM_LOAD24_WORD_SWAP  two byte-swapped bytes every three, from dest
     ROM_CONTINUE          the rest of the PREVIOUS file, at another offset
 
 It deliberately does NOT try to be a general MAME ROM loader. Anything it does
@@ -37,6 +39,11 @@ KINDS = {
     "ROM_LOAD16_BYTE": "load16_byte",
     "ROM_LOAD16_WORD_SWAP": "load16_wswap",
     "ROM_LOAD": "load",
+    # The 6bpp tile layers, and macros seta.cpp defines itself rather
+    # than MAME core ones: ROM_SKIP(2) and GROUPWORD|REVERSE|SKIP(1),
+    # loaded at 0 and 1 so the region comes out as 3-byte groups.
+    "ROM_LOAD24_BYTE": "load24_byte",
+    "ROM_LOAD24_WORD_SWAP": "load24_wswap",
     # ROM_COPY("src", srcofs, dstofs, len) takes bytes from ANOTHER region
     # rather than from a file, so it carries no CRC and cannot be resolved
     # through romset.py. kamenrid and magspeed build both tile regions out of
@@ -83,7 +90,11 @@ def region_records(body, want="maincpu"):
                             int(mc.group(2), 16)))
             continue
 
-        m = re.match(r'(\w+)\(\s*"([^"]+)"\s*,\s*(0x[0-9a-fA-F]+)\s*,'
+        # `ROM_LOAD24_BYTE     ( "bpgh-009.u65", ...` -- the 6bpp loads are
+        # written with space before and after the paren where every 4bpp load
+        # in this driver is not, and a record that does not parse is silently
+        # dropped into `unknown`.
+        m = re.match(r'(\w+)\s*\(\s*"([^"]+)"\s*,\s*(0x[0-9a-fA-F]+)\s*,'
                      r'\s*(0x[0-9a-fA-F]+)(.*)', line)
         if m and m.group(1) in KINDS:
             # The CRC is what actually identifies a dump. In a MERGED romset a
