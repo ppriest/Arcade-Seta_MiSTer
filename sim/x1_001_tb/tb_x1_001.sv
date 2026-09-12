@@ -72,9 +72,11 @@ module tb_x1_001;
 
 	logic        line_start = 0;
 	logic        vblank_rise = 0;
+	logic        snap_start  = 0;
 	// +nocopy: skip the setac_eof copy test (render straight from the dump).
 	logic        copy_test = 1'b1;
 	int          copy_bad = 0;
+	int          race_bad = 0;
 	logic  [8:0] line = 0;
 	wire         line_done, busy;
 
@@ -114,7 +116,8 @@ module tb_x1_001;
 		.screen_h(cfgv[C_SCRH][8:0]), .vis_max_y(cfgv[C_VISMAXY][8:0]),
 		.backdrop(cfgv[C_BACKDROP][LB_W-1:0]),
 		.code_mask(cfgv[C_CODEMASK][15:0]),
-		.vblank_rise(vblank_rise), .buffer_sprites(copy_test),
+		.vblank_rise(vblank_rise), .snap_start(snap_start),
+		.buffer_sprites(copy_test),
 		.line_start(line_start), .line(line),
 		.line_done(line_done), .busy(busy),
 		.rom_req(rom_req), .rom_addr(rom_addr),
@@ -341,9 +344,34 @@ module tb_x1_001;
 			copy_test = 1'b0;
 		end
 
-		// The engine renders from the snapshot taken at vblank: take one, and
-		// wait out the 9216-cycle copy.
-		vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+		// THE COPY MUST NOT MIX TWO FRAMES. The game's handler rewrites the
+		// sprite list during blanking and the copy walks it one word a cycle,
+		// so a write that lands after the cursor has passed its address used
+		// to leave the old word in the shadow and the new one in the live
+		// RAM -- a sprite drawn with another sprite's tile or flip, and only
+		// ever while the CPU was running. Write behind the cursor, in both
+		// halves of the copy, and require the snapshot to hold what was
+		// written.
+		snap_start <= 1'b1; @(posedge clk); snap_start <= 1'b0;
+		repeat (300) @(posedge clk);            // the cursor is past 0x40 by now
+		for (i = 0; i < 64; i++)
+			cpu_code_write(13'h0040 + i[12:0], 16'hA500 + i[15:0]);
+		while (dut.snap_i < 14'd8400) @(posedge clk);   // into the Y half
+		for (i = 0; i < 32; i++)
+			cpu_ylow_write(10'h010 + i[9:0], 8'h3C);
+		while (dut.snap_busy) @(posedge clk);
+		for (i = 0; i < 64; i++)
+			if (dut.codesh[13'h0040 + i[12:0]] !== (16'hA500 + i[15:0])) race_bad++;
+		for (i = 0; i < 32; i++)
+			if (dut.ylowsh[10'h010 + i[9:0]] !== 8'h3C) race_bad++;
+		$display("  written during the copy: %0d of 96 words missing from the snapshot",
+		         race_bad);
+		for (i = 0; i < 'h300; i++)  cpu_ylow_write(i[9:0], ylowimg[i]);
+		for (i = 0; i < 8192; i++)   cpu_code_write(i[12:0], codeimg[i]);
+
+		// The engine renders from the snapshot taken late in vblank: take
+		// one, and wait out the 9216-cycle copy.
+		snap_start <= 1'b1; @(posedge clk); snap_start <= 1'b0;
 		repeat (12000) @(posedge clk);
 
 		// Prime: render the first visible line into one buffer, then run the
@@ -384,6 +412,9 @@ module tb_x1_001;
 
 		if (checked == 0)
 			$display("FAIL: nothing was compared -- run scripts/prep_x1_001_tb.py");
+		else if (race_bad != 0)
+			$display("FAIL: %0d word(s) written during the copy are not in the snapshot",
+			         race_bad);
 		else if (copy_bad != 0)
 			$display("FAIL: the setac_eof copy left %0d words wrong", copy_bad);
 		else if (bad != 0)

@@ -36,6 +36,7 @@ from collections import Counter
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "scripts"))
 
 TITLES = {
     "gundhara": "Gundhara",
@@ -46,8 +47,10 @@ TITLES = {
 
 
 def probe_b():
-    p = subprocess.run(["quartus_stp", "-t", "scripts/read_issp.tcl", "B"],
-                       cwd=REPO, capture_output=True, text=True)
+    # Through read_issp.py, which holds scripts/hwlock.py's marker: a bare
+    # quartus_stp would let a build start underneath the read.
+    from read_issp import read
+    p = read("B", capture=True)
     d = dict(re.findall(r"^\s+(\w+)\s+(\S+)\s*$", p.stdout, re.M))
     return int(d["l0_gran_addr"], 16), int(d["l0_gran_data"], 16)
 

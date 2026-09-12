@@ -140,9 +140,9 @@ as every Group A game on the same 16 MHz X1-001.
 
 ### Everything the renderer reads is sampled at vblank
 
-The X1-001 renders from a snapshot of its code, Y and control RAM taken at
-vblank; the X1-012 latches its scroll registers and bank bit there, and the
-mixer its order register. MAME draws the whole frame at vblank from the
+The X1-001 renders from a snapshot of its code, Y and control RAM taken late
+in vblank, five lines before the frame wraps; the X1-012 latches its scroll
+registers and bank bit at vblank, and the mixer its order register. MAME draws the whole frame at vblank from the
 registers' values then, which is the same picture. The chip reads scroll per
 scanline (MAME's own comment cites Caliber 50's underground raster effect),
 so a game that changes scroll mid-frame ON PURPOSE will not show it here.
@@ -157,6 +157,13 @@ tile on screen at the current scroll -- about six visible-tile writes a frame
 (Eight Forces: 15,180, the same order). A handful of 16-pixel squares, against
 one scroll write that moves every line below it, which is what the split across
 the middle actually was.
+
+The sprite snapshot was first taken AT vblank, which is the line the games'
+vblank interrupt fires on, so its 9216-cycle copy walked the list while the
+handler rewrote it and a sprite drew with another sprite's tile or flip --
+only while the CPU ran, worst on Mad Shark. It now starts five lines before
+the wrap, and a CPU write during the copy goes to the snapshot too
+(`sim/x1_001_tb` writes behind the copy's cursor and checks).
 
 *Deliberate; matches MAME's picture. Caliber 50 would need per-line scroll.*
 
@@ -288,6 +295,57 @@ misbehaves in a way that points here.*
 of the whole window during play: the game touches 0x900061–0x909a19 and
 0x9fff7b–0x9ffffb only, which under a 64 KB mirror lands at 0x0061–0x9a19 and
 0xff7b–0xfffb with zero collisions.
+
+### zombraid's battery RAM is 256 bytes, saved when the OSD next opens
+
+`zombraid_map` shares the whole of 0x300000–0x30ffff as `"nvram"` and MAME
+writes all 64 KB to disk at exit. The game uses 128 bytes of it: the low
+lane of 0x300100–0x3001ff behind a write-enable latch at 0x3000f0 (decoded
+in docs/ROADMAP.md, "What the battery RAM actually holds"). The core saves
+that 256-byte window through the framework's `<nvram index="4" size="256"/>`
+file: restored by an index-4 download after the ROM, and requested for
+upload when the game closes the latch after writing inside the window --
+the end of its SAVE routine. MiSTer services the request when the OSD is
+next opened (`MENU_SAVE_CHECK` polls `UIO_CHK_UPLOAD`) or on "Save
+settings", so a calibration done in service mode reaches the SD card at the
+next OSD visit, not at power-off. The latch itself is not modelled: the
+window is plain RAM to the CPU.
+
+### zombraid's guns are sticks and d-pads
+
+seta.cpp's `GUNX1`/`GUNY1`/`GUNX2`/`GUNY2` are `IPT_LIGHTGUN_X/Y`, 0..255,
+0x80 at rest, X `PORT_REVERSE`. The core holds a position per player and
+moves it from hps_io's left analog stick (absolute, `0x7f - x`, `0x80 + y`,
+past a dead zone of 8) or the d-pad (two units a frame, clamped); releasing
+either leaves the position where it was, where MAME's analog port would
+return to centre. Each axis is independent and takes its direction input
+first: an earlier single condition wrote both axes from either one, which
+reset Y on every left or right press.
+
+Three kinds of controller say "left" three different ways here -- a digital
+panel sets the joystick bit, an arcade panel behind a gamepad encoder sends
+no bit and puts the stick on the left USB axis at full deflection, and a
+real analog stick sends whatever it is pushed to -- so the OSD carries a
+per-player setting. Auto reads a fully deflected axis as a direction and
+anything less as a position; Aim always positions; D-pad never does. The ADC itself (`rtl/cpu/adc0834.sv`) is MAME's
+`adc083x.cpp` state machine and is not a divergence -- `sim/adc0834_tb`
+replays two frames of the game's own `gun_w` words through it -- the input
+source is. A mouse or lightgun path is a follow-up.
+
+### zombraid's OSD crosshair reads the game's aim out of work RAM
+
+The game turns the ADC values into calibrated screen positions and keeps
+them at 0x20c4aa/0x20c4ac (P1 X/Y) and 0x20c4ae/0x20c4b0 (P2), placing its
+own reticle sprites from those words. The core's crosshair option reads the
+same words through a second port on work RAM and draws at (X, 255 - Y):
+measured against MAME snapshots of the name-entry reticle at five gun
+positions (`scripts/gun_find.py`), the reticle's centre is at column X and
+between rows 255-Y and 254-Y. This is the "pointer for zombraid crosshair
+hack" MAME's work-RAM share comment refers to, revived: it ties the overlay
+to one ROM revision's RAM layout (the US 9/28/95 set; the prototypes' code
+is stated to be the same), and it can affect nothing the game does. The
+raw-value alternative (MAME's PORT_CROSSHAIR convention) cannot match the
+game's own reticle, because the calibration lives in the game.
 
 ---
 

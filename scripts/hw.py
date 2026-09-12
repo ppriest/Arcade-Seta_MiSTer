@@ -185,7 +185,7 @@ def resolve_mra(m, name):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=("launch", "shot", "run", "playing"))
+    ap.add_argument("command", choices=("launch", "shot", "run", "playing", "osd"))
     ap.add_argument("mra", nargs="?", help=".mra name or absolute remote path")
     ap.add_argument("--out", default=str(REPO / "debug" / "hw" / "shot.png"))
     ap.add_argument("--settle", type=float, default=4)
@@ -198,6 +198,16 @@ def main():
 
     if a.command == "playing":
         print(m.get("/games/playing"))
+        return 0
+
+    if a.command == "osd":
+        # Toggle the OSD. The remote API's named-key route accepts "f12" and
+        # returns 200 without opening it; the raw Linux keycode (KEY_F12 =
+        # 88) does. Opening the OSD is also what makes the MiSTer poll the
+        # core's nvram save request (menu.cpp MENU_SAVE_CHECK), so this is
+        # how a save is forced from a script.
+        m.post("/controls/keyboard-raw/88")
+        print("  OSD toggled")
         return 0
 
     if a.command in ("launch", "run"):

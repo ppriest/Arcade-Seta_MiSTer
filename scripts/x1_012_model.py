@@ -169,6 +169,13 @@ SIXBPP_GAMES = {
         l0_pal_mode="bland0", l1_pal_mode="bland0",
         l0_pal_bank=0x400, l1_pal_bank=0x200,
         palette_entries=3072),
+    # zombraid: gundhara's remap, set_xoffsets(-2, -2) on both layers,
+    # set_fg_xoffsets(0, 0) inherited from gundhara's config, ROT0.
+    "zombraid": _6bpp_cfg(
+        rot=0, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=6,
+        l0_xoffsets=(-2, -2), l1_xoffsets=(-2, -2),
+        l0_pal_mode="masked", l1_pal_mode="masked",
+        l0_pal_bank=0x400, l1_pal_bank=0x200),
     "jjsquawk": _6bpp_cfg(
         rot=0, fg_xoffs=(1, 1), l0_bpp=6, l1_bpp=6,
         # set_xoffsets(-1, -1) on both layers.

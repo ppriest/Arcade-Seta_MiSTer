@@ -1733,3 +1733,24 @@ rewriting too.
 - **The ModelSim `work` library lives at the repo root**, mapped by each testbench directory's
   `modelsim.ini` via `work = ../../work`. Run `vsim` from the testbench directory so it is picked up.
   After an RTL change recompile only the changed files (`vcom`, `vlog -sv`) rather than rebuilding.
+
+### [Seta] A snapshot is a race with whoever writes the thing being copied
+
+The sprite engine renders from a copy of sprite RAM, taken so that a list the
+game rewrites mid-frame cannot tear the picture. The copy walks 9216 words one
+a cycle and was started on vblank -- the same line the games' vblank interrupt
+fires, whose handler rewrites that list. So the copy took half its records
+from one frame and half from the next, and sprites drew with each other's
+tiles and flips.
+
+What pointed at it: the glitch vanished when the CPU was paused. A fault that
+needs the CPU running and is not in the CPU is a race with something the CPU
+writes. The golden-frame benches could not see it -- their RAM is a static
+capture, so nothing writes while they render.
+
+Two things, both needed: start the copy when the writer is quiet (late in
+blanking, after the handler has had the interval), and make the copy atomic
+against writes that land anyway (a write during the copy goes to the copy too,
+and the cursor holds for that cycle). The bench now writes behind the cursor
+and requires the snapshot to hold it; with the write-through disabled it loses
+96 of 96 words.

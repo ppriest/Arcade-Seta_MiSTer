@@ -97,6 +97,11 @@ LAYOUTS = {
           {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1_E",
            "gfx2": "BASE_GFX2_E", "gfx3": "BASE_GFX3_E",
            "x1snd": "BASE_X1SND_E"}),
+    # zombraid: 3 MB tile regions and 4 MB of samples.
+    "F": (["maincpu", "gfx1", "gfx2", "gfx3", "x1snd"],
+          {"maincpu": "BASE_MAINCPU", "gfx1": "BASE_GFX1_F",
+           "gfx2": "BASE_GFX2_F", "gfx3": "BASE_GFX3_F",
+           "x1snd": "BASE_X1SND_F"}),
 }
 
 # Which layout a set uses is decided by the RTL's own game numbering: the Group
@@ -112,9 +117,16 @@ LAYOUT_C_SETS = {"daioh", "daioha", "rezon", "rezono", "wrofaero",
 LAYOUT_D_SETS = {"zingzip", "extdwnhl", "sokonuke", "jjsquawk", "jjsquawko",
                  "madshark"}
 LAYOUT_E_SETS = {"gundhara", "gundharac"}
+LAYOUT_F_SETS = {"zombraid"}
+
+# Battery-backed RAM, bytes. zombraid: the 128 low-lane bytes of
+# 0x300100-0x3001ff, saved as the 256-byte window (docs/ROADMAP.md).
+NVRAM_SETS = {"zombraid": 256}
 
 
 def layout_of(setname):
+    if setname in LAYOUT_F_SETS:
+        return "F"
     if setname in LAYOUT_E_SETS:
         return "E"
     if setname in LAYOUT_D_SETS:
@@ -591,6 +603,9 @@ BUTTON_LAYOUTS = {
     5: ["Button 1", "Button 2", "Card 1", "Card 2", "Card 3", "Card 4"],
     6: ["Button 1", "Button 2", "Button 3",
         "Button 4", "Button 5", "Button 6"],
+    # zombraid: JOY_TYPE1_2BUTTONS' shape with the stick unused, so the core
+    # reads it as layout 0; only the names differ.
+    7: ["Trigger", "Reload"],
 }
 
 
@@ -631,6 +646,8 @@ def input_layout(setname, block, all_blocks, depth=0):
             return got
     if 'PORT_NAME("P1 Card 1")' in p1:
         return 5
+    if 'PORT_NAME("P1 Trigger")' in p1:
+        return 7
     # extdwnhl and sokonuke write JOY_TYPE1_1BUTTON's shape out by hand, with
     # a PORT_2WAY stick and IPT_UNKNOWN where up and down would be. The core
     # drives those two bits from the pad's up and down; the games read them as
@@ -892,6 +909,11 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     lines.append('')
     lines.append('    ' + buttons_xml(
         input_layout(setname, dip_blocks[info["inputs"]], dip_blocks)))
+    if setname in NVRAM_SETS:
+        # The framework keeps a file of this size per .mra: it downloads it
+        # into the core at index 4 after the ROM and reads it back when the
+        # core requests. rtl/seta_core.sv maps it onto the battery RAM.
+        lines.append(f'    <nvram index="4" size="{NVRAM_SETS[setname]}"/>')
     lines.append('</misterromdescription>')
     xml = "\n".join(lines) + "\n"
 

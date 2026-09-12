@@ -231,6 +231,12 @@ hardware.
   explicit write clears it (which is what blockcar relies on — it maps no ack at all); an
   acknowledge clears the level the CPU *took*, not the highest pending; and a request arriving on
   the acknowledge cycle survives. All pass, with 5 acknowledges observed at the right levels.
+  STALE: at the zombraid commit the bench dies in maincpu's board-unmapped assertion before any
+  check runs, printing `board=Z` -- the bench has not been touched since Phase 1 and the fault is
+  in how it drives the (since widened) board port, not in the interrupt logic. Unfixed.
+  `sim/seta_core_tb` is stale the same way: at the zombraid commit AND at its parent, vsim 10.5b
+  dies ("vish lost connection to vsim process") at time 0 after the fixture banner, so it judges
+  nothing. `maincpu_sweep.py`, `x1_010_tb`, `seta_video_tb` and hardware are the checks in use.
 
   Two details had to be read rather than assumed. MAME's three-argument
   `set_inputline(tag, line, value)` is `if (data) exec.set_input_line(linenum, value)` — it fires
@@ -898,10 +904,90 @@ colour mode 0) and `zombraid` (ADC0834 light gun, battery-backed RAM).
 blandia status: the board arm, both colour modes, the second palette window and the offset effect
 are in the RTL; both `.mra` files prove byte-for-byte; the intro at frame 900 -- two 6bpp layers in
 colour mode 0 -- is pixel-identical to MAME in `seta_video_tb`; and on a DE10-nano the intro scene
-renders and samples play. What is NOT yet verified against MAME is the offset effect itself: a
+renders and samples play. On hardware the first play-through showed tilemaps and no sprites: both
+blandia configs have `screen_vblank_seta_buffer_sprites` and the game leaves spritectrl bit 5
+clear, and the board arm had not set `buffer_sprites`, so the eof copy that moves the sprites into
+the drawn bank never ran (the video bench could not see this -- its fixture is MAME's post-copy
+RAM). Set, and build 10000034 draws the story screen's sprites. What is NOT yet verified against MAME is the offset effect itself: a
 write tap over 6300 frames of attract found no layer-1 tile with colour 31, so no attract frame
 exercises it, and `blandia_palette2.bin` is all zeros there too. It needs a gameplay capture. Both
 sets stay in `HELD_BACK_SETS` until that and a play-through are done.
+
+zombraid status: `BOARD_ZOMBRAID` (zingzip_map plus the gun, no PIT), `GAME_ZOMBRAID` (gundhara's
+config with `set_xoffsets(-2, -2)`, ROT0, 16384-tile code limits), `LAYOUT_F` (3 MB tile regions,
+4 MB of samples, 14 MB total, no padding), `x1_bank_mode` 2 (`zombraid_x1_map`: the chip's top
+half is a window onto eight 512 KB entries, entry 0 aliasing entry 1) and `rtl/cpu/adc0834.sv`,
+a transcription of MAME's `adc083x.cpp` state machine that `sim/adc0834_tb` checks against the
+`gun_w` protocol for every channel, both differential polarities, an aborted conversion and a
+late start bit. The four gun channels come from hps_io's left analog sticks: X is `0x7f - x`
+(PORT_REVERSE), Y is `0x80 + y`. `scripts/maincpu_sweep.py zombraid` passes (159 reads), the
+`.mra` proves byte-for-byte, intro frame 3600 (both 6bpp layers, sprites, vregs 0x38 from the
+write log) is pixel-identical to MAME in `seta_video_tb`, and on a DE10-nano (build 10000033) the
+attract intro renders and the sample ROM is being read. First hardware play: X aimed from the
+stick, Y did not move on the pad used, unexplained -- `sim/adc0834_tb` replays two frames of the
+game's own `gun_w` words (216 writes, 8 conversions) and each decodes as the channel it selected,
+so the ADC and the game's protocol agree and the fault is in the analog word reaching the core.
+Since then the position is held per player and moved by the d-pad as well (two units a frame,
+clamped) or absolutely by the stick, and an OSD crosshair option draws each gun, P1 red and P2
+blue. The crosshair follows the GAME'S aim, not the raw value: `scripts/gun_find.py` coins up,
+holds the gun at five positions in MAME and diffs work RAM, which put the calibrated positions at
+0x20c4aa/ac (P1) and 0x20c4ae/b0 (P2) -- the words the game places its own reticle sprites from --
+and the snapshots put that reticle's centre at column X, rows 255-Y and 254-Y, so the overlay
+draws at (X, 255 - Y) (docs/MAME_DIVERGENCE.md). Hardware: the game plays and calibrates on the
+board; the first overlay, drawn from the raw value, was nowhere near the reticle (its arithmetic
+also wrapped in nine bits). The set stays in `HELD_BACK_SETS` until the aim-word overlay has been
+seen on the board.
+
+What the battery RAM actually holds, from the program ROM and a MAME write tap on
+0x300000-0x30ffff over 900 frames of attract (`debug/zombraid-nvram`):
+
+- LOAD, 0x0ccc, run at boot: `move.w #$a3,$3000f0`; copy 128 words from `$300100`, keeping the
+  LOW BYTE of each, into work RAM `$20ca12`; `move.w #$ffff,$3000f0`. Then the long at `$20ca12`
+  must be `"TOMO"` (ROM 0x0d54) and the checksum (0x0c66) must match, else the 128-byte defaults
+  at 0x0d54 are copied in and SAVE is called.
+- SAVE, 0x0c78: checksum, `#$a3 -> $3000f0`, the 128 bytes written one per word to
+  `$300100-$3001ff`, `#$ffff -> $3000f0`. Only service mode reaches it after boot.
+- The tap saw exactly the LOAD bracket (frame 3, scanlines 141 and 144, the 128-word loop
+  between) and nothing else in the window: the block is not work RAM, and MAME's nvram was valid.
+- The defaults: `TOMO`, checksum and complement, then `0080 0088 0080 0088 0300 0280 0300 0280`
+  -- per-player pairs that read like gun centre and scale. Which fields the calibration screen
+  rewrites is unverified; it needs a service-mode run. MAME's comment's `c0/40/48/a8` do not
+  occur in the ROM.
+
+So persistence is 256 bytes at `$300100-$3001ff` (the low lane of the "8K x8 SRAM" the map
+comment names; the odd bytes read back as open bus, 0xf7 in MAME's shipped `nvram.bin`) plus a
+write-enable latch at `$3000f0` that the core need not model. A fixed window, not a table:
+kept separate from `hiscore.v`.
+
+How it is wired: the `.mra` carries `<nvram index="4" size="256"/>`; Main_MiSTer's
+`arcade_nvm_load()` sends `config/nvram/<mra>.nvm` as an index-4 download after the ROM and
+`seta_core.sv` writes it into the 0x300000 block through the CPU's port (the CPU is in reset for
+any download); the upload reads through a second, read-only port. The core pulses
+`ioctl_upload_req` when the game writes `$ffff` to `$3000f0` after writing inside the window,
+and hps_io latches that until the HPS polls it: `menu.cpp`'s `MENU_SAVE_CHECK`, entered whenever
+the OSD's main menu opens, calls `arcade_nvm_save()` if `UIO_CHK_UPLOAD` is set, and "Save
+settings" calls it unconditionally. So a service-mode calibration lands on the card at the next
+OSD visit.
+
+Verified on a DE10-nano with probe D's `nv_*` fields: first boot with no file, the game's LOAD
+rejected the zero block, wrote the defaults and closed the latch -- `nv_saves` 1 -- and opening
+the OSD produced `config/nvram/Zombie Raid (9-28-95, US).nvm`, 256 bytes holding `TOMO`, the
+checksum pair and `80 88 80 88 03 00 02 80 …` in the odd (low-lane) bytes, exactly the ROM's
+table at 0x0d54 (the even bytes are 0xf9, D0's stale high byte in the game's word writes). A
+fresh core load with the file present booted with `nv_saves` 0: the downloaded block passed the
+signature and checksum and nothing was re-saved. One thing seen and not chased: after that OSD
+save the core's reset-cleared counters read zero, so something reset the core -- `core_reset`
+includes `ioctl_download`, and any HPS send (the DIP block, say) reboots the game. Unverified
+whether an ordinary OSD open/close does that.
+`seta_video_tb` reports 49 line overruns on this fixture with the line-budget cutoff disabled
+(the `prep_video_tb.py` default) and a worst line of 1963 cycles; blandia's frame-900 fixture
+reports exactly 49 as well, at 1339 cycles, so the count is a property of the bench setup and not
+of either game. Unexplained.
+Not done: the battery-backed RAM at 0x300000 is the ordinary second work-RAM block and is not
+persisted, so the calibration the game stores there is lost at power-off, exactly as MAME behaves
+without its nvram file; a mouse or lightgun input path; the two prototype `.mra` files, whose
+`ROMREGION_ERASE00` tile regions load three byte lanes into six chips and need the interleave
+writer extended.
 
 **Phase 6 — polish.** `hiscore.v`, CRT offset, pause, savestates. CRT offset is a per-game
 H/V shift exposed in the OSD and applied at the video output, not in the core's timing --

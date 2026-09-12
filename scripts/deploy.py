@@ -51,7 +51,9 @@ SUCCESS = "Full Compilation was successful"
 # in as phases land -- name the .mra stems, matching build_mra.py's output.
 # blandia and blandiap: the .mra files prove byte-for-byte and the board arm is
 # in the RTL, but the set has not yet run on a DE10-nano.
-HELD_BACK_SETS = ("Blandia", "Blandia (prototype)")
+# zombraid: attract runs on hardware and matches MAME; the gun has not been used
+# in play there yet.
+HELD_BACK_SETS = ("Blandia", "Blandia (prototype)", "Zombie Raid")
 
 
 def load_env(path):

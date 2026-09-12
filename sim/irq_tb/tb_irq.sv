@@ -90,7 +90,7 @@ module tb_irq;
 	logic [7:1] irq_clr  = 7'd0;
 
 	maincpu dut (
-		.clk(clk), .reset(reset), .board(4'd8 /* BOARD_THUNDERL */), .cpu_ce(cpu_ce),
+		.clk(clk), .reset(reset), .board(4'd8 /* BOARD_THUNDERL */), .cpu_ce(cpu_ce), .gun_ch(32'h80808080),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
 		.wram_addr(wram_addr), .wram_wel(wram_wel), .wram_weh(wram_weh),

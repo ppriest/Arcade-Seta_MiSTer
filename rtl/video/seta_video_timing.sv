@@ -83,7 +83,13 @@ module seta_video_timing (
 	// business, not this module's.
 	output logic       irq_vblank_line,   // MAME scanline 240
 	output logic       irq_mid_line,      // MAME scanline 112
-	output logic       vblank_rise
+	output logic       vblank_rise,
+	// LATE IN VBLANK, a few lines before the engine starts the first visible
+	// line. The sprite snapshot is taken here rather than at vblank_rise:
+	// the games' vblank handler begins on the same line vblank_rise fires,
+	// so a copy started there walks the sprite list while the CPU is still
+	// rewriting it. See rtl/video/x1_001.sv.
+	output logic       snap_start
 );
 
 	wire h_last = (hcount == htotal - 10'd1);
@@ -102,6 +108,7 @@ module seta_video_timing (
 		irq_vblank_line <= 1'b0;
 		irq_mid_line    <= 1'b0;
 		vblank_rise     <= 1'b0;
+		snap_start      <= 1'b0;
 
 		if (reset) begin
 			hcount <= 10'd0;
@@ -124,6 +131,13 @@ module seta_video_timing (
 				if (line_next == 10'd240) irq_vblank_line <= 1'b1;
 				if (line_next == 10'd112) irq_mid_line    <= 1'b1;
 				if (line_next == vact_end + 10'd1) vblank_rise <= 1'b1;
+				// FIVE LINES BEFORE THE FRAME WRAPS. The copy takes a line
+				// and a half and the engine starts the first visible line
+				// two lines before the wrap, so this leaves it a line and a
+				// half of margin -- and gives the handler the whole vblank
+				// to finish its writes first. Every board in scope blanks
+				// for at least eight lines.
+				if (line_next == vtotal - 10'd5) snap_start <= 1'b1;
 			end
 		end
 	end

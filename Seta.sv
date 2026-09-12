@@ -117,6 +117,18 @@ localparam CONF_STR = {
 	"O[75:71],Crop offset,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"O[46:44],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"-;",
+	// Gun games only (H2): where the ADC's X/Y inputs point, drawn on the
+	// core's output. P1 red, P2 blue.
+	"H2O[86:85],Crosshair,Off,P1,P2,P1+P2;",
+	// HOW TO READ THE LEFT STICK, per player, because the two panels on one
+	// cabinet need not agree. Auto takes a fully deflected axis as a
+	// direction and anything less as a position; Aim always positions
+	// (a real analog stick); D-pad never does (an arcade panel whose
+	// encoder reports the stick as the left USB axis).
+	"H2O[88:87],P1 stick,Auto,Aim,D-pad;",
+	"H2O[90:89],P2 stick,Auto,Aim,D-pad;",
+	"H2O[92:91],Mouse aims,P1,P2,Off;",
+	"H2-;",
 	// THE DIP PAGE. This one line is the whole of it: the framework reads the
 	// loaded .mra's <switches> block and renders a page from it. Without the
 	// line the switches are still DELIVERED -- they arrive as ioctl index 254
@@ -156,7 +168,9 @@ wire  [21:0] gamma_bus;
 wire   [1:0] buttons;
 wire [127:0] status;
 wire  [10:0] ps2_key;
+wire  [24:0] ps2_mouse;
 wire [31:0] joystick_0, joystick_1;
+wire [15:0] joystick_l_analog_0, joystick_l_analog_1;
 
 wire        ioctl_download;
 wire [15:0] ioctl_index;
@@ -164,6 +178,11 @@ wire        ioctl_wr;
 wire [26:0] ioctl_addr;
 wire  [7:0] ioctl_dout;
 wire        ioctl_wait;
+wire  [7:0] ioctl_din;
+wire        nvram_save;
+wire        ioctl_upload;
+wire  [1:0] dbg_nv_state;
+wire  [7:0] dbg_nv_saves;
 
 hps_io #(.CONF_STR(CONF_STR)) hps_io
 (
@@ -176,10 +195,12 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({14'd0, debug_menu_hide, 1'b0}),  // H1: the Debug page
+	.status_menumask({13'd0, ~gun_game, debug_menu_hide, 1'b0}),  // H1 Debug page, H2 crosshair
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
+	.joystick_l_analog_0(joystick_l_analog_0),
+	.joystick_l_analog_1(joystick_l_analog_1),
 
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
@@ -188,7 +209,17 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
 
-	.ps2_key(ps2_key)
+	// The .mra's <nvram index="4"> file: the framework sends it down after
+	// the ROM and reads it back when the core raises the request -- which
+	// seta_core does when zombraid has finished a save.
+	.ioctl_upload(ioctl_upload),
+	.ioctl_upload_req(nvram_save),
+	.ioctl_upload_index(8'd4),
+	.ioctl_din(ioctl_din),
+	.ioctl_rd(),
+
+	.ps2_key(ps2_key),
+	.ps2_mouse(ps2_mouse)
 );
 
 ///////////////////////   CLOCKS   ///////////////////////////////
@@ -319,6 +350,8 @@ function automatic [7:0] seta_port(input [31:0] j, input [2:0] layout);
 endfunction
 
 wire [2:0] input_layout;
+wire       gun_game;
+wire [35:0] gun_aim;
 
 // daioh's EXTRA port: P1 buttons 4-6 at bits 0-2, P2's at 3-5. Buttons 4, 5
 // and 6 are joystick bits 7, 8 and 9. Every other board leaves it undecoded.
@@ -326,8 +359,33 @@ wire [15:0] extra_in = ~{10'h000,
 	joystick_1[9], joystick_1[8], joystick_1[7],
 	joystick_0[9], joystick_0[8], joystick_0[7]};
 
-wire [15:0] p1_in = ~{8'h00, seta_port(joystick_0, input_layout)};
-wire [15:0] p2_in = ~{8'h00, seta_port(joystick_1, input_layout)};
+// THE MOUSE. hps_io hands over PS/2 packets: bit 24 toggles once per event,
+// [15:8] and [23:16] are the X and Y counts with their signs in [4] and
+// [5], and PS/2 counts Y POSITIVE UP. Nothing in the framework needed
+// adding -- the core simply never connected it.
+//
+// A mouse is relative by nature, so it ADDS to the held gun position (in
+// the gun block below) rather than replacing it, which is what a gun wants
+// and what a self-centring stick cannot give. Its buttons are the trigger
+// and the reload, ORed into the player's word here; gated on gun_game, so
+// no other set in the driver ever sees a mouse click.
+reg         ps2_mouse_q;
+always @(posedge clk_sys) ps2_mouse_q <= ps2_mouse[24];
+wire        ms_ev = ps2_mouse[24] ^ ps2_mouse_q;
+wire signed [9:0] ms_dx = $signed({{2{ps2_mouse[4]}}, ps2_mouse[15:8]});
+wire signed [9:0] ms_dy = $signed({{2{ps2_mouse[5]}}, ps2_mouse[23:16]});
+wire [1:0]  ms_who = status[92:91];         // 0 P1, 1 P2, 2 off
+wire        ms_sel [0:1];
+assign ms_sel[0] = gun_game && (ms_who == 2'd0);
+assign ms_sel[1] = gun_game && (ms_who == 2'd1);
+
+// Bit 4 is BUTTON1 and bit 5 BUTTON2 in every layout seta_port builds.
+wire [31:0] joy_gun [0:1];
+assign joy_gun[0] = joystick_0 | (ms_sel[0] ? {26'd0, ps2_mouse[1], ps2_mouse[0], 4'd0} : 32'd0);
+assign joy_gun[1] = joystick_1 | (ms_sel[1] ? {26'd0, ps2_mouse[1], ps2_mouse[0], 4'd0} : 32'd0);
+
+wire [15:0] p1_in = ~{8'h00, seta_port(joy_gun[0], input_layout)};
+wire [15:0] p2_in = ~{8'h00, seta_port(joy_gun[1], input_layout)};
 
 // COINS: coin 1 and 2, service, tilt, and then whatever DIP bits the game puts
 // in the top nibble. sw[2] supplies those; where a game uses none of them the
@@ -383,6 +441,158 @@ reg core_ce_d;
 always @(posedge clk_sys) core_ce_d <= core_ce;
 wire core_ce_v = core_ce | core_ce_d;
 
+// ZOMBRAID'S GUNS. seta.cpp's GUNX/GUNY ports are 0..255, 0x80 at rest, X
+// PORT_REVERSE (full left reads 0xff); the game calibrates the ends itself
+// (its defaults are left 0xc0, right 0x40, top 0x48, bottom 0xa8), so the
+// scale only has to be monotonic. Two sources per player, held in the game's
+// units:
+//   * the left analog stick, ABSOLUTE: while deflected past a dead zone of
+//     8 the position is the stick, X = 0x7f - x, Y = 0x80 + y (hps_io's word
+//     is {y, x}, signed, up and left negative);
+//   * the d-pad, RELATIVE: two units a frame in the pressed direction,
+//     clamped at the ends, so a digital pad can aim at all. Right lowers X
+//     and down raises Y, in the reversed-X units above.
+// Releasing either leaves the position where it was, which is what a gun
+// does and what an analog stick snapping back to 0x80 would not.
+//
+// THE AXES ARE INDEPENDENT, AND A FULLY DEFLECTED AXIS IS A D-PAD.
+// Three kinds of controller reach this core and they say "left" three
+// different ways: a panel with a digital encoder sets joystick bit 1; a
+// panel behind a gamepad encoder (an arcade stick reporting as an Xbox 360
+// pad, say) sends NO direction bit and puts the stick on the analog axis
+// at full deflection; a real analog stick sends whatever it is pushed to.
+// Taking any analog deflection as a position made the second kind snap to
+// the screen edge and stick there, and the first kind reset the other axis
+// to centre on every press, both seen on hardware.
+//
+// So Auto takes saturation to mean "d-pad" -- an arcade stick is either
+// centred or hard over, never at 60% -- and anything between the dead zone
+// and saturation to mean "aim here". A real stick pushed all the way then
+// ramps to the edge rather than jumping to it, which is the one behaviour
+// Auto costs, and the OSD's per-player Aim / D-pad settings are the escape
+// when a controller does not fit the rule.
+reg  [7:0] gun_x [0:1];
+reg  [7:0] gun_y [0:1];
+wire [31:0] gun_joy [0:1];
+wire [15:0] gun_ana [0:1];
+assign gun_joy[0] = joystick_0;          assign gun_joy[1] = joystick_1;
+assign gun_ana[0] = joystick_l_analog_0; assign gun_ana[1] = joystick_l_analog_1;
+
+// hps_io's analog byte is signed, +x right and +y down. Magnitude, with
+// -128 reading as 128.
+function automatic [7:0] gun_mag(input [7:0] v);
+	gun_mag = v[7] ? (8'd0 - v) : v;
+endfunction
+
+localparam [7:0] GUN_DEAD = 8'd8;    // below this the axis is at rest
+localparam [7:0] GUN_FULL = 8'd96;   // at or above it, the axis is a d-pad
+
+// One mouse count is one gun unit, clamped to the ends of the range.
+function automatic [7:0] gun_step(input signed [9:0] d, input [7:0] v);
+	logic signed [10:0] s;
+	s = $signed({3'b000, v}) + {d[9], d};
+	gun_step = (s < 11'sd1) ? 8'd1 : (s > 11'sd254) ? 8'd254 : s[7:0];
+endfunction
+
+// Per player: which directions are being asked for (digital bit or an
+// analog axis this mode reads as one), and which axes carry a position.
+wire [1:0] gun_mode [0:1];
+assign gun_mode[0] = status[88:87];
+assign gun_mode[1] = status[90:89];
+wire [3:0] gun_dir [0:1];    // 3 up, 2 down, 1 left, 0 right -- joystick order
+wire [1:0] gun_abs [0:1];    // 1 Y, 0 X
+genvar gi;
+generate
+	for (gi = 0; gi < 2; gi = gi + 1) begin : gun_decode
+		wire [7:0] ax = gun_ana[gi][7:0];
+		wire [7:0] ay = gun_ana[gi][15:8];
+		wire       lx = gun_mag(ax) >= GUN_DEAD;    // off centre at all
+		wire       ly = gun_mag(ay) >= GUN_DEAD;
+		// Which deflections this mode reads as a direction: all of them in
+		// D-pad, none in Aim, the full ones in Auto.
+		wire       dx = (gun_mode[gi] == 2'd2) ? lx
+		              : (gun_mode[gi] == 2'd1) ? 1'b0
+		              : (gun_mag(ax) >= GUN_FULL);
+		wire       dy = (gun_mode[gi] == 2'd2) ? ly
+		              : (gun_mode[gi] == 2'd1) ? 1'b0
+		              : (gun_mag(ay) >= GUN_FULL);
+		assign gun_dir[gi] = {gun_joy[gi][3] | ( ay[7] & dy),     // up
+		                      gun_joy[gi][2] | (~ay[7] & dy),     // down
+		                      gun_joy[gi][1] | ( ax[7] & dx),     // left
+		                      gun_joy[gi][0] | (~ax[7] & dx)};    // right
+		assign gun_abs[gi] = {ly & ~dy, lx & ~dx};
+	end
+endgenerate
+reg core_vb_d;
+always @(posedge clk_sys) begin
+	core_vb_d <= core_vb;
+	for (int g = 0; g < 2; g++) begin
+		if (reset) begin
+			gun_x[g] <= 8'h80; gun_y[g] <= 8'h80;
+		end else if (ms_ev && ms_sel[g]) begin
+			// The mouse moves it, both axes at once: right and up in PS/2
+			// are right and up on the screen, and the gun's X runs the
+			// other way (PORT_REVERSE) while its Y runs downward.
+			gun_x[g] <= gun_step(-ms_dx, gun_x[g]);
+			gun_y[g] <= gun_step(-ms_dy, gun_y[g]);
+		end else begin
+			// X: a direction ramps, a partial deflection positions
+			if (gun_dir[g][0] | gun_dir[g][1]) begin
+				if (core_vb & ~core_vb_d) begin
+					if (gun_dir[g][0] && gun_x[g] > 8'd1)   gun_x[g] <= gun_x[g] - 8'd2;   // right
+					if (gun_dir[g][1] && gun_x[g] < 8'd254) gun_x[g] <= gun_x[g] + 8'd2;   // left
+				end
+			end else if (gun_abs[g][0])
+				gun_x[g] <= 8'h7f - gun_ana[g][7:0];
+			// Y: the same, down positive
+			if (gun_dir[g][2] | gun_dir[g][3]) begin
+				if (core_vb & ~core_vb_d) begin
+					if (gun_dir[g][2] && gun_y[g] < 8'd254) gun_y[g] <= gun_y[g] + 8'd2;   // down
+					if (gun_dir[g][3] && gun_y[g] > 8'd1)   gun_y[g] <= gun_y[g] - 8'd2;   // up
+				end
+			end else if (gun_abs[g][1])
+				gun_y[g] <= 8'h80 + gun_ana[g][15:8];
+		end
+	end
+end
+wire [31:0] gun_ch = {gun_y[1], gun_x[1], gun_y[0], gun_x[0]};
+
+// THE CROSSHAIRS, where the GAME says the guns point. zombraid keeps its
+// calibrated aim per player in work RAM -- X at 0x20c4aa, Y at 0x20c4ac,
+// P2 at 0x20c4ae/0x20c4b0 -- and draws its own reticle sprites from those
+// words; seta_core reads them out as gun_aim. Measured against MAME
+// snapshots of the name-entry reticle at five gun positions
+// (scripts/gun_find.py): its centre is at column X and between rows 255-Y
+// and 254-Y, so the cross is drawn at (X, 255 - Y). Pixels are counted off
+// the core's own DE, so it lands in core space and rotates with the
+// picture; the visible area of the one gun game is 384 x 240.
+reg  [8:0] ovl_x, ovl_y;
+reg        core_hb_d;
+always @(posedge clk_sys) begin
+	core_hb_d <= core_hb;
+	if (core_ce) begin
+		if (core_hb)        ovl_x <= 9'd0;
+		else                ovl_x <= ovl_x + 9'd1;
+		if (core_vb)        ovl_y <= 9'd0;
+		else if (core_hb & ~core_hb_d) ovl_y <= ovl_y + 9'd1;
+	end
+end
+wire [8:0]  xh_cx [0:1];
+wire [8:0]  xh_cy [0:1];
+assign xh_cx[0] = gun_aim[8:0];             assign xh_cy[0] = 9'd255 - gun_aim[17:9];
+assign xh_cx[1] = gun_aim[26:18];           assign xh_cy[1] = 9'd255 - gun_aim[35:27];
+function automatic xh_hit(input [8:0] px, input [8:0] py, input [8:0] cx, input [8:0] cy);
+	logic [8:0] dx, dy;
+	dx = (px > cx) ? px - cx : cx - px;
+	dy = (py > cy) ? py - cy : cy - py;
+	xh_hit = (dx == 9'd0 && dy <= 9'd6 && dy != 9'd0) || (dy == 9'd0 && dx <= 9'd6 && dx != 9'd0);
+endfunction
+wire xh_p1 = status[85] && xh_hit(ovl_x, ovl_y, xh_cx[0], xh_cy[0]);
+wire xh_p2 = status[86] && xh_hit(ovl_x, ovl_y, xh_cx[1], xh_cy[1]);
+wire [7:0] ovl_r = xh_p1 ? 8'hff : xh_p2 ? 8'h20 : core_r;
+wire [7:0] ovl_g = xh_p1 ? 8'h20 : xh_p2 ? 8'h60 : core_g;
+wire [7:0] ovl_b = xh_p1 ? 8'h20 : xh_p2 ? 8'hff : core_b;
+
 wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun;
 wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped;
 wire [15:0] dbg_snd_samples, dbg_snd_overrun, dbg_snd_rom_reads;
@@ -422,7 +632,8 @@ seta_core seta_core
 	.init(~pll_locked),
 
 	.game(mod_byte[4:0]),
-	.game_rot(game_rot), .input_layout(input_layout),
+	.game_rot(game_rot), .input_layout(input_layout), .gun_game(gun_game),
+	.gun_aim(gun_aim),
 
 	.SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ),
 	.SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
@@ -434,9 +645,11 @@ seta_core seta_core
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
 	.ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
+	.ioctl_din(ioctl_din), .nvram_save(nvram_save),
 
 	.p1_in(p1_in), .p2_in(p2_in), .coins_in(coins_in), .extra_in(extra_in),
 	.p3_in(p3_in), .p4_in(p4_in), .dsw_in(dsw_in),
+	.gun_ch(gun_ch),
 
 	.pause_cpu(pause_core),
 	.en_spr(~status[80]),
@@ -476,7 +689,8 @@ seta_core seta_core
 	.dbg_snd_rom_reads(dbg_snd_rom_reads),
 	.dbg_irq_pending(dbg_irq_pending),
 	.dbg_cpu_stb(dbg_cpu_stb), .dbg_cpu_addr(dbg_cpu_addr),
-	.dbg_cpu_we(dbg_cpu_we), .dbg_cpu_data(dbg_cpu_data)
+	.dbg_cpu_we(dbg_cpu_we), .dbg_cpu_data(dbg_cpu_data),
+	.dbg_nv_state(dbg_nv_state), .dbg_nv_saves(dbg_nv_saves)
 );
 
 // ---------------------------------------------------------------------------
@@ -554,7 +768,8 @@ issp_probe #(.INSTANCE_ID("A"), .PROBE_W(488), .SOURCE_W(8)) u_issp_pc (
 // download or the arbiter put the wrong bytes there.
 issp_probe #(.INSTANCE_ID("B"), .PROBE_W(128), .SOURCE_W(8)) u_issp_gran (
 	.clk(clk_sys),
-	.probe({19'd0, dbg_last_vec, dbg_l0_last_addr, dbg_l0_last_data}),
+	// [124:109] the held P1 gun position {y, x}, in the game's units.
+	.probe({3'd0, gun_y[0], gun_x[0], dbg_last_vec, dbg_l0_last_addr, dbg_l0_last_data}),
 	.source()
 );
 
@@ -575,7 +790,21 @@ issp_probe #(.INSTANCE_ID("B"), .PROBE_W(128), .SOURCE_W(8)) u_issp_gran (
 issp_probe #(.INSTANCE_ID("C"), .PROBE_W(128), .SOURCE_W(8)) u_issp_tile (
 	.clk(clk_sys),
 	.probe({
-		32'd0,
+		// WHAT THE HPS SENDS FOR EACH GUN, both players, because the gun
+		// input code is one loop over the two and P2 behaves differently
+		// from P1 on the same RTL -- so the difference is in the words, not
+		// in the logic. Five bits per analog axis is exactly what the dead
+		// zone tests, sign included.
+		//
+		//   [ 99: 96]  joystick_0[3:0]   P1 directions: R L D U
+		//   [103:100]  joystick_1[3:0]   P2 directions
+		//   [113:104]  P1 analog {y[7:3], x[7:3]}
+		//   [123:114]  P2 analog {y[7:3], x[7:3]}
+		//   [127:124]  spare
+		4'd0,
+		joystick_l_analog_1[15:11], joystick_l_analog_1[7:3],
+		joystick_l_analog_0[15:11], joystick_l_analog_0[7:3],
+		joystick_1[3:0], joystick_0[3:0],
 		dbg_l1_overrun, dbg_l1_tiles, dbg_l1_lines,
 		dbg_l0_overrun, dbg_l0_tiles, dbg_l0_lines
 	}),
@@ -591,11 +820,17 @@ issp_probe #(.INSTANCE_ID("C"), .PROBE_W(128), .SOURCE_W(8)) u_issp_tile (
 //   [ 71: 56]  dbg_io_reads     peripheral reads
 //   [ 85: 72]  dbg_dl_max4k     highest download address, in 4 KB units
 //   [109: 86]  dbg_last_io      address of the last peripheral read
-//   [127:110]  spare
+//   [    110]  OSD_STATUS       the framework's OSD is open
+//   [    111]  nv_armed         zombraid's battery-RAM write latch open
+//   [    112]  nv_dirty         a write inside the window since it opened
+//   [    113]  ioctl_upload     the HPS is reading the nvram file back
+//   [121:114]  dbg_nv_saves     save requests raised
+//   [127:122]  spare
 issp_probe #(.INSTANCE_ID("D"), .PROBE_W(128), .SOURCE_W(8)) u_issp_cpu (
 	.clk(clk_sys),
 	.probe({
-		18'd0,
+		6'd0,
+		dbg_nv_saves, ioctl_upload, dbg_nv_state, OSD_STATUS,
 		dbg_last_io,
 		dbg_dl_max4k,
 		dbg_io_reads,
@@ -669,7 +904,7 @@ arcade_video #(.WIDTH(384), .DW(24), .GAMMA(1)) arcade_video
 	.clk_video(clk_video),
 	.ce_pix(core_ce_v),
 
-	.RGB_in({core_r, core_g, core_b}),
+	.RGB_in({ovl_r, ovl_g, ovl_b}),
 	.HBlank(core_hb),
 	.VBlank(core_vb),
 	.HSync(core_hs),

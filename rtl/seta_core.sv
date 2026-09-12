@@ -54,6 +54,13 @@ module seta_core (
 	input  wire [26:0] ioctl_addr,
 	input  wire  [7:0] ioctl_dout,
 	output wire        ioctl_wait,
+	// ---- battery RAM, through the framework's <nvram> file (index 4) ---------
+	// The file is the 256 bytes at 0x300100-0x3001ff in 68000 byte order. It
+	// arrives as an index-4 download after the ROM and is read back byte by
+	// byte, at ioctl_addr, when nvram_save asks the HPS to; see the wram2
+	// block for what fires that.
+	output wire  [7:0] ioctl_din,
+	output logic       nvram_save,
 
 	// ---- inputs, already assembled into the driver's port words -------------
 	// Active LOW, as the driver's PORT_START blocks are.
@@ -62,6 +69,8 @@ module seta_core (
 	input  wire [15:0] extra_in,
 	input  wire [15:0] p3_in, p4_in,     // wits only
 	input  wire [15:0] dsw_in,
+	// zombraid's ADC0834 channels, 0..255: {GUNY2, GUNX2, GUNY1, GUNX1}.
+	input  wire [31:0] gun_ch,
 
 	input  wire        pause_cpu,
 
@@ -89,6 +98,11 @@ module seta_core (
 	output wire  [1:0] game_rot,
 	// Seta.sv assembles the P1/P2 words; see seta_board_cfg.sv.
 	output wire  [2:0] input_layout,
+	// This set reads gun_ch: Seta.sv shows the crosshair option for it.
+	output wire        gun_game,
+	// Where the game says the guns point, in its own screen pixels:
+	// {Y2, X2, Y1, X1}, nine bits each, read out of its work RAM (below).
+	output wire [35:0] gun_aim,
 	output wire [15:0] dbg_snd_samples, dbg_snd_overrun, dbg_snd_rom_reads,
 	output wire  [7:1] dbg_irq_pending,
 
@@ -133,7 +147,12 @@ module seta_core (
 	output wire        dbg_cpu_stb,
 	output wire [23:1] dbg_cpu_addr,
 	output wire        dbg_cpu_we,
-	output wire [15:0] dbg_cpu_data
+	output wire [15:0] dbg_cpu_data,
+	// The nvram save path: latch armed, a write seen inside the window, and
+	// how many requests have been raised. Answers "did the core ask" when
+	// no file appears.
+	output wire  [1:0] dbg_nv_state,
+	output logic [7:0] dbg_nv_saves
 );
 
 	// =====================================================================
@@ -169,7 +188,7 @@ module seta_core (
 	// port connection, so a declaration further down is a DUPLICATE and the
 	// error names the wrong line. LESSONS_LEARNED carries this one already.
 	wire        buffer_sprites;
-	wire        has_x1_bank;
+	wire  [1:0] x1_bank_mode;
 	wire  [2:0] vregs_ofs;
 	wire        tilemaps_flip;
 	wire        gfx1_invert;
@@ -182,6 +201,8 @@ module seta_core (
 	wire signed [8:0] l0_xoffs, l0_xoffs_flip, l1_xoffs, l1_xoffs_flip;
 	wire [10:0] l0_colorbase, l1_colorbase;
 	wire [15:0] l0_code_limit, l1_code_limit;
+
+	assign gun_game = (game == GAME_ZOMBRAID);
 
 	seta_board_cfg u_cfg (
 		.game(game),
@@ -200,7 +221,7 @@ module seta_core (
 		.l0_pal_mode(l0_pal_mode), .l1_pal_mode(l1_pal_mode),
 		.has_pal2(has_pal2),
 		.l0_pal_bank(l0_pal_bank), .l1_pal_bank(l1_pal_bank),
-		.has_x1_bank(has_x1_bank),
+		.x1_bank_mode(x1_bank_mode),
 		.vregs_ofs(vregs_ofs),
 		.tilemaps_flip(tilemaps_flip),
 		.narrow_320(), .short_224(),
@@ -279,6 +300,7 @@ module seta_core (
 		.pal_index_w(pal_index_w), .coins_at8(coins_at8),
 		.io_extra(io_extra),
 		.io_uds(io_uds), .io_lds(io_lds), .io_sel(io_sel), .io_rdata(io_rdata),
+		.gun_ch(gun_ch),
 		.ipl_level(ipl_level), .iack(iack), .iack_level(iack_level),
 		.dbg_stb(dbg_cpu_stb), .dbg_addr(dbg_cpu_addr),
 		.dbg_we(dbg_cpu_we), .dbg_data(dbg_cpu_data)
@@ -430,6 +452,29 @@ module seta_core (
 		wram_rdata <= wram[m_addr[16:1]];
 	end
 
+	// ZOMBRAID'S AIM, for the crosshair overlay. The game turns the ADC
+	// values into calibrated screen positions and keeps them at
+	// 0x20c4aa (P1 X), 0x20c4ac (P1 Y), 0x20c4ae (P2 X), 0x20c4b0 (P2 Y);
+	// its own reticle sprites are placed from those words. Found with
+	// scripts/gun_find.py, which holds the gun at five positions in MAME and
+	// diffs work RAM. A read-only second port on the block walks the four
+	// words; nothing here writes.
+	logic  [1:0] aim_i;
+	logic [15:0] aim_q;
+	logic  [8:0] aim_x1, aim_y1, aim_x2, aim_y2;
+	wire  [15:0] aim_addr = 16'h6255 + {14'd0, aim_i};    // (0x20c4aa - 0x200000) / 2
+	always_ff @(posedge clk) begin
+		aim_q <= wram[aim_addr];
+		aim_i <= aim_i + 2'd1;
+		case (aim_i - 2'd1)                                // aim_q is the previous index
+			2'd0: aim_x1 <= aim_q[8:0];
+			2'd1: aim_y1 <= aim_q[8:0];
+			2'd2: aim_x2 <= aim_q[8:0];
+			2'd3: aim_y2 <= aim_q[8:0];
+		endcase
+	end
+	assign gun_aim = {aim_y2, aim_x2, aim_y1, aim_x1};
+
 	// The second block, where a board has one. In Group A only wits does:
 	// 0xe04000-0xe07fff, 16 KB.
 	// Registered in for the same reason, and on the same three-cycle budget.
@@ -439,18 +484,71 @@ module seta_core (
 	logic [15:0] wram2 [0:32767];
 	logic [15:0] wram2_q;
 	wire         w2_we = io_req && io_we && io_sel[IO_WRAM2];
+	wire         has_nvram = (game == GAME_ZOMBRAID);
 	logic        n2_we, n2_lds, n2_uds;
 	logic [15:1] n2_addr;
 	logic [15:0] n2_wdata;
+	// The nvram download (below) comes in through THIS port: the CPU is in
+	// reset for the whole of any download, so the port is free, and a second
+	// writing port is something Quartus refuses to infer for this array
+	// ("multiple constant drivers").
+	wire         nv_dl    = ioctl_download && (ioctl_index == 16'd4) && has_nvram;
+	wire  [14:0] nv_addr  = 15'h0080 + {8'd0, ioctl_addr[7:1]};
 	always_ff @(posedge clk) begin
-		n2_we <= w2_we; n2_lds <= io_lds; n2_uds <= io_uds;
-		n2_addr <= io_addr[15:1]; n2_wdata <= io_wdata;
+		if (nv_dl) begin
+			n2_we <= ioctl_wr; n2_lds <= ioctl_addr[0]; n2_uds <= ~ioctl_addr[0];
+			n2_addr <= nv_addr; n2_wdata <= {ioctl_dout, ioctl_dout};
+		end else begin
+			n2_we <= w2_we; n2_lds <= io_lds; n2_uds <= io_uds;
+			n2_addr <= io_addr[15:1]; n2_wdata <= io_wdata;
+		end
 	end
 	always_ff @(posedge clk) begin
 		if (n2_we && n2_lds) wram2[n2_addr][7:0]  <= n2_wdata[7:0];
 		if (n2_we && n2_uds) wram2[n2_addr][15:8] <= n2_wdata[15:8];
 		wram2_q <= wram2[n2_addr];
 	end
+
+	// ZOMBRAID'S BATTERY RAM is 128 bytes of this block, in the low lane of
+	// 0x300100-0x3001ff, behind a write-enable latch at 0x3000f0 -- decoded
+	// from the program ROM and a MAME write tap (docs/ROADMAP.md, "What the
+	// battery RAM actually holds"):
+	//
+	//     LOAD (boot):  $3000f0 <- $00a3; 128 words read; $3000f0 <- $ffff
+	//     SAVE (service mode, and at boot when the signature or checksum
+	//     fails):        $3000f0 <- $00a3; 128 words written; $3000f0 <- $ffff
+	//
+	// So the closing $ffff after a write inside the window is the moment the
+	// game has finished saving, and nvram_save pulses there to have the HPS
+	// read the 256 bytes back out. The boot LOAD closes the latch with no
+	// write inside and fires nothing. The latch itself needs no modelling:
+	// the block is ordinary RAM to the CPU, and the file goes in and out
+	// through a second port on it at words 0x80-0xff.
+	wire         nv_latch  = w2_we && has_nvram && io_addr[15:1] == 15'h0078;   // 0x3000f0
+	wire         nv_inside = w2_we && has_nvram && io_addr[15:8] == 8'h01;      // 0x3001xx
+	logic        nv_armed, nv_dirty;
+	always_ff @(posedge clk) begin
+		nvram_save <= 1'b0;
+		if (reset) begin
+			nv_armed <= 1'b0; nv_dirty <= 1'b0;
+		end else if (nv_latch) begin
+			if (io_wdata == 16'h00a3) begin nv_armed <= 1'b1; nv_dirty <= 1'b0; end
+			if (io_wdata == 16'hffff) begin nv_armed <= 1'b0; nvram_save <= nv_dirty; end
+		end else if (nv_inside && nv_armed)
+			nv_dirty <= 1'b1;
+	end
+	assign dbg_nv_state = {nv_dirty, nv_armed};
+	always_ff @(posedge clk) begin
+		if (reset) dbg_nv_saves <= 8'd0;
+		else if (nvram_save && dbg_nv_saves != 8'hff) dbg_nv_saves <= dbg_nv_saves + 8'd1;
+	end
+
+	// The upload reads through a second, READ-ONLY port. The HPS strobes one
+	// byte every few microseconds and latches ioctl_din on the strobe, so a
+	// registered read of the current address is early.
+	logic [15:0] nv_q;
+	always_ff @(posedge clk) nv_q <= wram2[nv_addr];
+	assign ioctl_din = ioctl_addr[0] ? nv_q[7:0] : nv_q[15:8];
 
 	// The palette SRAM, 16 KB at 0x?00000, on the boards maincpu.sv says
 	// have one (has_xram). The palette proper is 0x400-0xFFF of it and is
@@ -732,24 +830,35 @@ module seta_core (
 	wire        snd_rom_req;
 	wire [19:0] snd_rom_addr;
 
-	// X1-010 SAMPLE BANKING, from seta.cpp's blandia_x1_map:
+	// X1-010 SAMPLE BANKING. The chip addresses 1 MB; two machine configs
+	// give it an address map with a bank window in it, selected by m_vregs
+	// bits 5:3 (seta_vregs_w).
 	//
+	// blandia_x1_map (blandia, eightfrc), x1_bank_mode 1:
 	//     map(0x00000, 0xbffff).rom();
 	//     map(0xc0000, 0xfffff).bankr("x1_bank");
+	// init_bankx1: eight entries of 0x40000 from the start of the region.
+	// The top quarter is a window onto any 256 KB slice of 2 MB.
 	//
-	// with init_bankx1 configuring eight entries of 0x40000 from the start of
-	// the region, and the entry selected by m_vregs bits 5:3. So the top
-	// quarter of the chip's address space is a window onto any of eight
-	// 256 KB slices of a 2 MB region, and the bottom three quarters are the
-	// first 768 KB directly.
+	// zombraid_x1_map (zombraid), x1_bank_mode 2:
+	//     map(0x00000, 0x7ffff).rom();
+	//     map(0x80000, 0xfffff).bankr("x1_bank");
+	// init_zombraid: entry 0 is region + 0x80000, entries 1..7 are
+	// region + 0x80000 + (n-1) * 0x80000 -- so entry n is region + n *
+	// 0x80000 for n >= 1 and entry 0 aliases entry 1 ("bank 1 is never
+	// explicitly selected, 0 is used in its place"). The top half is a
+	// window onto any 512 KB slice of 4 MB.
 	//
-	// Only the games whose machine_config calls set_addrmap(0,
-	// blandia_x1_map) have it: blandia, eightfrc and zombraid. has_x1_bank is
-	// low everywhere else, and then this is the identity.
-	wire        snd_banked = has_x1_bank && (snd_rom_addr >= 20'hc0000);
-	wire [20:0] snd_phys   = snd_banked
-	        ? ({1'b0, vregs[5:3], 18'd0} + {1'b0, snd_rom_addr - 20'hc0000})
-	        : {1'b0, snd_rom_addr};
+	// Mode 0 is the identity: the chip's 1 MB is the region's first 1 MB.
+	wire  [2:0] snd_bank   = vregs[5:3];
+	wire  [2:0] snd_bank_z = (snd_bank == 3'd0) ? 3'd1 : snd_bank;
+	wire        snd_bank_b = (x1_bank_mode == 2'd1) && (snd_rom_addr >= 20'hc0000);
+	wire        snd_bank_2 = (x1_bank_mode == 2'd2) && snd_rom_addr[19];
+	wire [21:0] snd_phys   = snd_bank_b
+	        ? ({1'b0, snd_bank, 18'd0} + {2'b0, snd_rom_addr - 20'hc0000})
+	        : snd_bank_2
+	        ? {snd_bank_z, snd_rom_addr[18:0]}
+	        : {2'b0, snd_rom_addr};
 	wire        snd_rom_valid;
 	wire  [7:0] snd_rom_data;
 	wire [15:0] x1_rdata;

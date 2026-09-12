@@ -71,7 +71,8 @@ package seta_game_pkg;
 		GAME_SOKONUKE  = 5'd24,
 		GAME_MADSHARK  = 5'd25,
 		GAME_BLANDIA   = 5'd26,
-		GAME_BLANDIAP  = 5'd27
+		GAME_BLANDIAP  = 5'd27,
+		GAME_ZOMBRAID  = 5'd28
 	} game_t;
 endpackage
 
@@ -158,9 +159,14 @@ module seta_board_cfg (
 	// GAME WIRES IT; every Group B set does, and qzkklogy and qzkklgy2 have
 	// spritectrl bit 5 clear, so the copy actually runs on them every frame.
 	output logic        buffer_sprites,
-	// set_addrmap(0, blandia_x1_map): the X1-010's top quarter is a bank
-	// window. blandia, eightfrc and zombraid only.
-	output logic        has_x1_bank,
+	// THE X1-010's BANK WINDOW, where the machine config gives the chip an
+	// address map of its own. seta_core.sv forms the sample address from it:
+	//   0  none: the chip's 1 MB is the region's first 1 MB
+	//   1  blandia_x1_map: 0xc0000-0xfffff is one of eight 256 KB entries
+	//      (blandia, eightfrc)
+	//   2  zombraid_x1_map: 0x80000-0xfffff is one of eight 512 KB entries,
+	//      entry 0 aliasing entry 1
+	output logic  [1:0] x1_bank_mode,
 	// seta_vregs_w's BYTE offset inside the vregs region. It is not the same
 	// on every board -- 0x500003 on rezon and oisipuzl, 0x500005 on msgundam,
 	// 0x600003 on kamenrid -- and the neighbouring bytes are other registers,
@@ -310,7 +316,7 @@ module seta_board_cfg (
 		fg_xoffs_flip   = 9'sd0;
 		buffer_sprites  = 1'b0;
 		input_layout    = 3'd0;   // JOY_TYPE1_2BUTTONS
-		has_x1_bank     = 1'b0;
+		x1_bank_mode    = 2'd0;
 		vregs_ofs       = 3'd3;
 		tilemaps_flip   = 1'b0;
 		narrow_320      = 1'b0;
@@ -676,11 +682,48 @@ module seta_board_cfg (
 			l0_code_limit = 16'h2000; l1_code_limit = 16'h2000;
 			pal_entries = 12'd3072;      // 1536 of its own plus the effect's
 			has_pal2 = 1'b1;
-			has_x1_bank = 1'b1;
+			// screen_vblank_seta_buffer_sprites on both machine configs, and
+			// the game leaves spritectrl bit 5 clear, so the eof copy is what
+			// moves its sprites into the drawn bank. Without it: tilemaps and
+			// no sprites on hardware.
+			buffer_sprites = 1'b1;
+			x1_bank_mode = 2'd1;
 			// set_fg_xoffsets(8, 0): "correct (test grid, startup bg)".
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd8;
 			// seta_interrupt_2_and_4, NOT the 1-and-2 the other 6bpp sets use.
 			irq_sl240_level = 3'd2; irq_sl112_level = 3'd4;
+		end
+
+		// zombraid: gundhara's machine config without the PIT, on
+		// zingzip_map plus the gun ADC (BOARD_ZOMBRAID). Two 6bpp layers
+		// remapped like gundhara's, set_xoffsets(-2, -2) on both, ROT0.
+		//
+		// The panel is two buttons and Start -- Trigger at bit 4, Reload at
+		// bit 5 -- which is JOY_TYPE1_2BUTTONS with the directions unused,
+		// so the default layout serves. The gun positions go to the ADC
+		// through maincpu.sv, not through this port.
+		//
+		// 4 MB of samples: the X1-010's top half is a window onto eight
+		// 512 KB entries (zombraid_x1_map), the largest sample region in
+		// the driver, and LAYOUT_F is sized for it.
+		GAME_ZOMBRAID: begin
+			input_layout = 3'd0;
+			map_board = 5'd17; cpu_div = 5'd6;       // 16 MHz
+			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;   // 2 MB
+			game_rot = 2'd0;
+			has_l0 = 1'b1; has_l1 = 1'b1; layout = 3'd5;
+			l0_bpp6 = 1'b1; l1_bpp6 = 1'b1;
+			l0_xoffs = -9'sd2; l0_xoffs_flip = -9'sd2;
+			l1_xoffs = -9'sd2; l1_xoffs_flip = -9'sd2;
+			l0_colorbase = 11'd0; l1_colorbase = 11'd0;
+			l0_pal_mode = 3'd1; l1_pal_mode = 3'd1;     // masked, as gundhara
+			l0_pal_bank = 11'h400; l1_pal_bank = 11'h200;
+			// 0x300000 / 192 = 16384 tiles in each region.
+			l0_code_limit = 16'h4000; l1_code_limit = 16'h4000;
+			pal_entries = 12'd1536;
+			x1_bank_mode = 2'd2;
+			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd0;
+			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
 		end
 
 		GAME_WROFAERO: begin
@@ -733,7 +776,7 @@ module seta_board_cfg (
 			pal_entries = 12'd1536;
 			fg_xoffs = 9'sd3; fg_xoffs_flip = 9'sd4;
 			short_224 = 1'b1;
-			has_x1_bank = 1'b1;
+			x1_bank_mode = 2'd1;
 			irq_sl240_level = 3'd1; irq_sl112_level = 3'd2;
 		end
 

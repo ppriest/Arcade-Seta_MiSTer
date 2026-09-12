@@ -55,8 +55,10 @@ package seta_board_pkg;
 		BOARD_ATEHATE   = 5'd12,  // atehate_map    -- 1 MB of work RAM
 		BOARD_PAIRLOVE  = 5'd13,  // pairlove_map   -- 2048 palette entries,
 		                          //                   plus a protection RAM
-		BOARD_MADSHARK  = 5'd16   // madshark_map   -- kamenrid's registers,
+		BOARD_MADSHARK  = 5'd16,  // madshark_map   -- kamenrid's registers,
 		                          //                   magspeed's inputs
+		BOARD_ZOMBRAID  = 5'd17   // zombraid_map   -- zingzip_map plus the
+		                          //                   gun ADC at 0xf00000
 	} board_t;
 endpackage
 
@@ -146,6 +148,13 @@ module maincpu (
 	output logic        io_uds, io_lds,
 	output logic [15:0] io_sel,
 	input  wire  [15:0] io_rdata,
+
+	// ---- zombraid's guns ----------------------------------------------------
+	// The ADC0834's four inputs, 0..255 each: {GUNY2, GUNX2, GUNY1, GUNX1}.
+	// Decoded here rather than on io_sel because the ADC is one register
+	// behind two addresses, like thunderl's PAL, and io_sel's sixteen bits
+	// are all taken.
+	input  wire  [31:0] gun_ch,
 
 	// ---- Interrupts ---------------------------------------------------------
 	// Level, not a pulse. 0 = none. seta.cpp drives level 1/2 (scanline 240 and
@@ -270,6 +279,8 @@ module maincpu (
 	logic [23:0] wdog_base;
 	// Thunder & Lightning's protection PAL. NONE on every other board.
 	logic        has_tprot;
+	// zombraid_map's ADC0834: gun_w at 0xf00000, gun_r at 0xf00002.
+	logic        has_gun;
 	// THE PALETTE SRAM IS A CHIP, AND ITS SIZE VARIES. kamenrid_map and
 	// magspeed_map declare 16 KB behind the palette (0x?01000-0x?03fff);
 	// rezon_map, zingzip_map and daioh_map declare 64 KB (0x701000-0x70ffff).
@@ -336,6 +347,7 @@ module maincpu (
 		in_base      = 24'h400000;  dsw_base   = 24'h600000;
 		wdog_base    = NONE;
 		has_tprot    = 1'b0;
+		has_gun      = 1'b0;
 		xram_span    = 24'h4000;
 		pal2_base    = NONE;
 		in_span      = 5'd6;        coins_hi   = 1'b0;
@@ -354,6 +366,18 @@ module maincpu (
 				// at 0xf00000. rezon has neither, and a NONE base leaves
 				// is_pit low so nothing decodes there.
 				pit_base = 24'hD00000;
+			end
+
+			// zombraid_map is zingzip_map plus the gun. Same RAM, same
+			// palette chip, same tails; no PIT (the machine config removes
+			// it) and nothing at 0xf00000 but the ADC. The 0x400000 write
+			// the map nops lands on the inputs window, which takes no
+			// writes anyway.
+			BOARD_ZOMBRAID: begin                    // zombraid_map
+				has_xram = 1'b1;
+				xram_span = 24'h10000;
+				has_tails = 1'b1;
+				has_gun = 1'b1;
 			end
 
 			BOARD_DAIOH: begin                       // daioh_map
@@ -738,6 +762,28 @@ module maincpu (
 	                         tp[2] & ~tp[3],                 // 1
 	                         tp[2]};                         // 0
 	logic [7:0] tprot_reg;
+
+	// -----------------------------------------------------------------
+	// zombraid's ADC0834 (gun_w / gun_r).
+	//
+	//     map(0xf00000, 0xf00001).w(gun_w)   bits 0 CLK, 1 DI, 2 /CS,
+	//                                        3-4 the recoil solenoids
+	//     map(0xf00002, 0xf00003).r(gun_r)   DO in bit 0
+	//
+	// The three serial lines are one register the CPU rewrites for every
+	// edge; rtl/cpu/adc0834.sv finds the edges in it.
+	// -----------------------------------------------------------------
+	wire is_gun_w = has_gun && (q_a[23:1] == 23'h780000);   // 0xf00000
+	wire is_gun_r = has_gun && (q_a[23:1] == 23'h780001);   // 0xf00002
+	logic [2:0] gun_reg;
+	wire        gun_do;
+
+	adc0834 u_adc (
+		.clk(clk), .reset(reset),
+		.cs_n(gun_reg[2]), .sclk(gun_reg[0]), .di(gun_reg[1]), .dout(gun_do),
+		.ch0(gun_ch[7:0]), .ch1(gun_ch[15:8]), .ch2(gun_ch[23:16]), .ch3(gun_ch[31:24])
+	);
+
 	wire [23:0] xram_base = pal_base - 24'h400;
 	wire is_xram    = has_xram && (q_a >= xram_base) && (q_a < xram_base + xram_span);
 
@@ -811,7 +857,7 @@ module maincpu (
 	logic [15:0] q_wdata;
 	logic        q_we, q_uds, q_lds;
 	logic        q_wram, q_wram_wel, q_wram_weh;
-	logic        q_wdog, q_tprot;
+	logic        q_wdog, q_tprot, q_gun;
 	logic [19:1] q_wram_addr;
 	logic [15:0] q_sel;
 
@@ -858,6 +904,7 @@ module maincpu (
 			acc_ready <= 1'b0;
 			rd_data   <= 16'h0000;
 			tprot_reg <= 8'h00;
+			gun_reg   <= 3'b100;             // /CS high: the ADC idle
 		end else begin
 			case (state)
 				S_IDLE: begin
@@ -900,6 +947,7 @@ module maincpu (
 					q_wram      <= is_wram;
 					q_wdog      <= is_wdog;
 					q_tprot     <= is_tprot_r;
+					q_gun       <= is_gun_r;
 					// BOTH ARMS ARE SIZED EXPLICITLY. Written as one ternary
 					// the 12-bit pal2 arm widens the main one, and the main
 					// one MUST wrap in eleven bits: the xram window below the
@@ -915,6 +963,7 @@ module maincpu (
 					// narrower wraps in the middle of the window.
 					pal_index_w <= is_pal2 ? pal_off_2 : {1'b0, pal_off_main};
 					if (is_tprot_w && acc_write) tprot_reg <= tprot_next;
+					if (is_gun_w && acc_write && !n_lds) gun_reg <= cpu_dout[2:0];
 					q_wram_addr <= wram_off[19:1];
 					q_wram_wel  <= is_wram && acc_write && !n_lds;
 					q_wram_weh  <= is_wram && acc_write && !n_uds;
@@ -932,6 +981,7 @@ module maincpu (
 					// address decoded on the way past.
 					rd_data   <= q_wdog  ? 16'hFFFF
 					           : q_tprot ? {8'd0, tprot_reg}
+					           : q_gun   ? {15'd0, gun_do}
 					           : q_wram  ? wram_rdata : io_rdata;
 					acc_ready <= 1'b1;
 					state     <= S_DONE;

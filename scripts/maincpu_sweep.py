@@ -30,8 +30,8 @@ REPO = Path(__file__).resolve().parent.parent
 # set -> board index, from seta_board_pkg in rtl/cpu/maincpu.sv.
 BOARDS = {
     "rezon": 0, "rezono": 0, "zingzip": 0, "wrofaero": 0, "gundhara": 0,
-    "gundharac": 0, "jjsquawk": 0, "jjsquawko": 0, "zombraid": 0,
-    "zombraidp": 0, "zombraidpj": 0, "daiohc": 0, "daiohp": 0, "daiohp2": 0,
+    "gundharac": 0, "jjsquawk": 0, "jjsquawko": 0, "zombraid": 17,
+    "zombraidp": 17, "zombraidpj": 17, "daiohc": 0, "daiohp": 0, "daiohp2": 0,
     "daioh": 1, "daioha": 1,
     "extdwnhl": 2, "sokonuke": 2,
     "kamenrid": 3, "madshark": 3,

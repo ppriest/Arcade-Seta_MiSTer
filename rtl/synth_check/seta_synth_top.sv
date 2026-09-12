@@ -89,6 +89,7 @@ module seta_synth_top (
 		.clk(clk), .reset(reset),
 		.board(pat[19:16]),          // static in the core; see the .sdc
 		.cpu_ce(ce_16m),
+		.gun_ch(pat[31:0]),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
 		.wram_addr(wram_addr), .wram_wel(wram_wel), .wram_weh(wram_weh),

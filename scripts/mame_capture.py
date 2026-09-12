@@ -21,6 +21,13 @@ the whole tilemap and sprite path with no hardware involved.
 import argparse, os, shutil, subprocess, sys
 from pathlib import Path
 
+# NO CONSOLE WINDOW. mame.exe is a console program; spawned from a process
+# that has no console of its own (an editor's tool runner, a scheduled job)
+# Windows gives it a fresh, visible one, so a -video none -nowindow run still
+# pops a black window on the desktop. This flag stops that on Windows and is
+# nothing elsewhere.
+NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
 MAME_DIR = Path(os.getenv("MAME_DIR", r"C:\Emulation\Emulators\MAME"))
 MAME_EXE = MAME_DIR / os.getenv("MAME_EXE", "arcade64.exe")
 
@@ -379,7 +386,7 @@ def main():
             "-rompath", rompath(repo),
             "-seconds_to_run", "10",
         ]
-        sr = subprocess.run(seed, cwd=str(MAME_DIR), env=env,
+        sr = subprocess.run(seed, cwd=str(MAME_DIR), env=env, **NO_WINDOW,
                             capture_output=True, text=True, timeout=300)
         for line in (sr.stdout or "").splitlines():
             if line.startswith("SEED") or line.startswith("LUAFAIL"):
@@ -474,7 +481,7 @@ def main():
 
     print("  " + " ".join(cmd))
     # cwd matters: MAME resolves mame.ini, and therefore rompath, relative to it.
-    r = subprocess.run(cmd, cwd=str(MAME_DIR), env=env,
+    r = subprocess.run(cmd, cwd=str(MAME_DIR), env=env, **NO_WINDOW,
                        capture_output=True, text=True, timeout=900)
     for line in (r.stdout or "").splitlines():
         if line.startswith("CAPTURE") or "rror" in line:
@@ -530,4 +537,5 @@ def main():
         print(f"  {n:24s} {(out / n).stat().st_size:>8,} bytes")
 
 
-main()
+if __name__ == "__main__":
+    main()

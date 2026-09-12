@@ -80,6 +80,8 @@ set fields_B {
     {l0_gran_data      0  63 hex}
     {l0_gran_addr     64  84 hex}
     {last_vector      85 108 hex}
+    {gun_x           109 116 hex}
+    {gun_y           117 124 hex}
 }
 
 # INSTANCE C -- the two tilemap engines, built in Seta.sv's u_issp_tile.
@@ -94,6 +96,10 @@ set fields_C {
     {l1_lines         48  63 dec}
     {l1_tiles         64  79 dec}
     {l1_overrun       80  95 dec}
+    {joy0_dir         96  99 hex}
+    {joy1_dir        100 103 hex}
+    {analog0         104 113 hex}
+    {analog1         114 123 hex}
 }
 
 # INSTANCE D -- where the CPU is, built in Seta.sv's u_issp_cpu.
@@ -109,6 +115,11 @@ set fields_D {
     {io_reads        56  71 dec}
     {dl_max4k        72  85 hex}
     {last_io         86 109 hex}
+    {osd_status     110 110 bit}
+    {nv_armed       111 111 bit}
+    {nv_dirty       112 112 bit}
+    {hps_upload     113 113 bit}
+    {nv_saves       114 121 dec}
 }
 
 set fields_E {

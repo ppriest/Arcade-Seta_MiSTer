@@ -6,10 +6,12 @@ hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for
 ## Contents
 
 - [Games](#games)
+  - [Game Notes](#game-notes)
+  - [Supported](#supported)
+  - [Out of scope for now](#out-of-scope-for-now)
 - [Hardware](#hardware)
 - [History](#history)
 - [Installation](#installation)
-- [Building](#building)
 - [Status](#status)
   - [Todo](#todo)
   - [Resource usage](#resource-usage)
@@ -21,10 +23,19 @@ hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for
 
 ## Games
 
-The goal is to support the collection of hardware covered by MAME in `seta.cpp`. Minus bootlegs on differnet hardware, and betting hardware.
+The goal is to support the collection of hardware covered by MAME in `seta.cpp`. Minus bootlegs on different hardware, and betting hardware.
 
-Blandia runs; its palette-offset effect is not yet verified against MAME (no attract frame uses
-it, so it needs a gameplay capture). Zombie Raid is not yet supported.
+### Game Notes
+
+* **Daioh** - You can flip between the USA 6 button and the Japanese 2 button arrangement from the DIP menu
+
+* **Zombie Raid** - There is options to help with simulating a lightgun
+  * P1 stick / P2 stick (Auto / Aim / D-pad) — 'Auto' reads a fully deflected axis as a direction and a partial one as a position. 'D-pad' for when using e.g. an arcade stick simulating an analogue left-stick. 'Aim' is absolute behaviour for a real analog stick.
+  * Crosshair - (P1 / P2 / P1+P2) - Self-explanatory. Matches the location the game knows the cursor to be. Red is P1, Blue is P2. It's hack.
+  * Mouse aims (P1 / P2 / Off) — a mouse moves that player's aim, with left button as Trigger and right as Reload. Relative, so it inherits the game's own calibration.
+  * The gun calibration is kept in battery RAM, which is saved to the `.nvm` file when the OSD is next opened (or from `Save settings`).
+
+### Supported
 
 | Name | Year | Manufacturer | Main CPU | Tilemaps | Notes |
 |-|-|-|-|-|-|
@@ -48,13 +59,15 @@ it, so it needs a gameplay capture). Zombie Raid is not yet supported.
 | Eight Forces | 1994 | Tecmo | M68000 @ 16 MHz | 2× 4bpp | 12 MB of ROM |
 | Magical Speed | 1994 | Allumer | M68000 @ 16 MHz | 2× 4bpp | Timer; as Kamen Rider |
 | Zing Zing Zip | 1992 | Allumer / Tecmo | M68000 @ 16 MHz | 6bpp + 4bpp | vblank IRQ is level 3 |
+| Blandia | 1992 | Allumer | M68000 @ 16 MHz | 2× 6bpp | Second palette bank and its offset effect; banked samples |
 | J. J. Squawkers | 1993 | Athena / Able | M68000 @ 16 MHz | 2× 6bpp |  |
 | Mad Shark | 1993 | Allumer | M68000 @ 16 MHz | 2× 6bpp |  |
 | Extreme Downhill | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp | 320 wide; a 4 MB tile region |
 | Sokonuke Taisen Game | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp |  |
 | Gundhara | 1995 | Banpresto | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, a second work-RAM block |
+| Zombie Raid | 1995 | American Sammy | M68000 @ 16 MHz | 2× 6bpp | ADC0834 light gun, battery-backed RAM, 4 MB of samples |
 
-### Out of scope
+### Out of scope for now
 
 | MAME description | Why |
 |-|-|
@@ -99,10 +112,16 @@ Some links discussing the hardware:
 
 ## History
 
+* **`Arcade-Seta_20260912.rbf`**
+  * Blandia and Zombie Raid added
+  * Sound in Extreme Downhill and Sokonuke Taisen
+  * J. J. Squawkers passes its boot RAM test
+
 * **`Arcade-Seta_20260911.rbf`**
   * All twenty sets run
   * Tilemap tearing fixed
   * Inputs/DIPs all reviewed and corrected (6 button Daioh)
+
 * **`Arcade-Seta_20260910.rbf`**
   * **Alpha release**
   * Support for a bunch of games in varying states of running
@@ -116,21 +135,20 @@ Some links discussing the hardware:
 ## Status
 
 Known issues:
-* **Extreme Downhill** - boot screen background off?
-* **Mad Shark** - Sprite glitching - reading whilst attributes being written
+* **Mad Shark** - A shimmering vertical line on the tilemaps
+* **Zing Zing Zip** and **Gundhara** - Occasional sprite glitching; not yet rechecked since the Mad Shark sprite fix
+* **Eight Forces** - Flip Screen (DIP) does not work
+* **Extreme Downhill** - boot screen background garbage
 * **Mobile Suit Gundam** - resets in game (protection?)
 * **Oishii Puzzle** - some broken tiles
-* **Zing Zing Zip** - Occasionally sprite glitching
 
 See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
 
 ### Todo
 
-- [ ] Phase 5: `blandia`'s palette-offset effect verified against a gameplay capture
-- [ ] Phase 5: `zombraid`'s light gun and battery RAM
-- [ ] CRT offset -- a per-game H/V shift in the OSD, so the picture can be centred on a
-      real monitor without touching the core's own timing
+- [ ] CRT offset -- a per-game H/V shift in the OSD, so the picture can be centred on a real monitor without touching the core's own timing
 - [ ] `hiscore.v` support, savestates
+- [ ] `zombraidp` / `zombraidpj` `.mra` files -- ERASE00 regions loaded in three byte lanes
 - [ ] `daiohc` — the `wrofaero` machine config with `daioh`-sized graphics, needs its own arm
 - [ ] The three 14.318181 MHz games (`orbs`, `keroppi`, `krzybowl`) need a Bresenham clock enable
 

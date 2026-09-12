@@ -185,9 +185,9 @@ module seta_sdram_top (
 
 	// ---- X1-010 PCM samples --------------------------------------------------
 	input  wire        snd_req,
-	// 21 bits, not 20: eightfrc and blandia have 2 MB of samples, reached
-	// through the X1-010's bank register.
-	input  wire [20:0] snd_addr,      // byte address within "x1snd"
+	// 22 bits, not 20: eightfrc and blandia have 2 MB of samples and
+	// zombraid 4 MB, reached through the X1-010's bank register.
+	input  wire [21:0] snd_addr,      // byte address within "x1snd"
 	output wire        snd_valid,
 	output wire  [7:0] snd_data
 );
@@ -220,15 +220,26 @@ module seta_sdram_top (
 	localparam logic [25:0] BASE_GFX3_E    = 26'h0c0_0000;   // 4 MB
 	localparam logic [25:0] BASE_X1SND_E   = 26'h100_0000;   // 1 MB
 
+	// LAYOUT_F -- zombraid alone: 3 MB in each tile region and 4 MB of
+	// samples, the largest sample region in the driver. Sized to its
+	// ROM_START exactly, no slack in any region.
+	localparam logic [25:0] BASE_GFX1_F    = 26'h020_0000;   // 2 MB
+	localparam logic [25:0] BASE_GFX2_F    = 26'h040_0000;   // 3 MB
+	localparam logic [25:0] BASE_GFX3_F    = 26'h070_0000;   // 3 MB
+	localparam logic [25:0] BASE_X1SND_F   = 26'h0a0_0000;   // 4 MB
+
 	wire layout_b = (layout == 3'd1);
 	wire layout_c = (layout == 3'd2);
 	wire layout_d = (layout == 3'd3);
 	wire layout_e = (layout == 3'd4);
+	wire layout_f = (layout == 3'd5);
 
-	wire   [25:0] BASE_GFX1 = layout_e ? BASE_GFX1_E :
+	wire   [25:0] BASE_GFX1 = layout_f ? BASE_GFX1_F :
+	                          layout_e ? BASE_GFX1_E :
 	                          layout_d ? BASE_GFX1_D :
 	                          layout_c ? BASE_GFX1_C : BASE_GFX1_AB;
-	wire   [25:0] BASE_GFX2 = layout_e ? BASE_GFX2_E :
+	wire   [25:0] BASE_GFX2 = layout_f ? BASE_GFX2_F :
+	                          layout_e ? BASE_GFX2_E :
 	                          layout_d ? BASE_GFX2_D :
 	                          layout_c ? BASE_GFX2_C : BASE_GFX2_B;
 	// x1snd sits above gfx2, which is only present in LAYOUT_B. BOTH VALUES
@@ -238,7 +249,8 @@ module seta_sdram_top (
 	// that must agree with it exactly.
 	localparam logic [25:0] BASE_X1SND_A = 26'h030_0000;
 	localparam logic [25:0] BASE_X1SND_B = 26'h040_0000;
-	wire   [25:0] BASE_X1SND = layout_e ? BASE_X1SND_E :
+	wire   [25:0] BASE_X1SND = layout_f ? BASE_X1SND_F :
+	                           layout_e ? BASE_X1SND_E :
 	                           layout_d ? BASE_X1SND_D :
 	                           layout_c ? BASE_X1SND_C :
 	                           layout_b ? BASE_X1SND_B : BASE_X1SND_A;
@@ -246,10 +258,12 @@ module seta_sdram_top (
 	// window there would reach into gfx2 -- which must NOT be swizzled, because
 	// layout_tilemap is RGN_FRAC(1,1) and its rows are already four chunks in
 	// one region rather than two halves. So the window follows the layout.
-	wire   [25:0] BASE_GFX3 = layout_e ? BASE_GFX3_E :
+	wire   [25:0] BASE_GFX3 = layout_f ? BASE_GFX3_F :
+	                          layout_e ? BASE_GFX3_E :
 	                          layout_d ? BASE_GFX3_D : BASE_GFX3_C;
 
-	wire   [25:0] SIZE_GFX1 = layout_e ? 26'h080_0000 :
+	wire   [25:0] SIZE_GFX1 = layout_f ? 26'h020_0000 :
+	                          layout_e ? 26'h080_0000 :
 	                          layout_d ? 26'h020_0000 :
 	                          layout_c ? 26'h040_0000 :
 	                          layout_b ? 26'h010_0000 : 26'h020_0000;
@@ -435,7 +449,7 @@ module seta_sdram_top (
 	sdram_narrow_bridge #(.WORD_BYTES(1)) u_snd_bridge (
 		.clk(clk), .reset(reset),
 		.inval(ioctl_download),
-		.req(snd_req), .addr({6'd0, snd_addr}),
+		.req(snd_req), .addr({4'd0, snd_addr}),
 		.valid(snd_valid), .data(snd_data),
 		.g_req(snd_g_req), .g_addr(snd_g_addr),
 		.g_valid(snd_g_valid), .g_data(snd_g_data)

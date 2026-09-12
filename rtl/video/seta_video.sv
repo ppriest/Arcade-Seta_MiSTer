@@ -184,6 +184,10 @@ module seta_video #(
 	wire       line_start;
 	wire [8:0] line;
 
+	// DECLARED BEFORE THE INSTANCE: ModelSim infers a net at a port
+	// connection, and a declaration below it is then a duplicate.
+	wire snap_start;
+
 	seta_video_timing u_timing (
 		.clk(clk), .reset(reset), .ce_pix(ce_pix),
 		.htotal(htotal), .hs_start(hs_start), .hs_end(hs_end),
@@ -194,7 +198,7 @@ module seta_video #(
 		.hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank), .de(de),
 		.line_start(line_start), .line(line),
 		.irq_vblank_line(irq_vblank_line), .irq_mid_line(irq_mid_line),
-		.vblank_rise(vblank_rise)
+		.vblank_rise(vblank_rise), .snap_start(snap_start)
 	);
 
 	// ---- sprites ------------------------------------------------------------
@@ -221,6 +225,7 @@ module seta_video #(
 		.bank_size(bank_size), .spritelimit(spritelimit), .transpen(transpen),
 		.bgflag_opaque(bgflag_opaque),
 		.buffer_sprites(buffer_sprites), .vblank_rise(vblank_rise),
+		.snap_start(snap_start),
 		.colorbase_fg(colorbase_fg), .colorbase_bg(colorbase_bg),
 		.screen_h(screen_h), .vis_max_y(vis_max_y), .backdrop(backdrop),
 		.code_mask(code_mask), .line_budget(line_budget),

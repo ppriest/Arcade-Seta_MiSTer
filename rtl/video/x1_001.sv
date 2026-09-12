@@ -194,6 +194,9 @@ module x1_001 #(
 	// screen_vblank_seta_buffer_sprites, on the RISING edge of vblank.
 	input  wire         buffer_sprites,
 	input  wire         vblank_rise,
+	// When to take the snapshot the engine renders from: late in vblank,
+	// after the game's handler has had the blanking interval to write.
+	input  wire         snap_start,
 	input  wire [LB_W-1:0] colorbase_fg,    // gfx colorbase + m_colorbase*16
 	input  wire [LB_W-1:0] colorbase_bg,    // gfx colorbase alone
 	input  wire   [8:0] screen_h,           // screen.height() -- 256, NOT 240
@@ -358,12 +361,33 @@ module x1_001 #(
 
 	// ---- the snapshot copy ------------------------------------------------
 	// 8192 code words then 1024 Y bytes, one a cycle: 9216 cycles, under two
-	// scanlines, started at vblank_rise and held until any setac_eof copy has
-	// finished. The engine reads the half-written snapshot meanwhile, on
-	// lines nobody sees. Control is sampled at the start.
+	// scanlines, and held until any setac_eof copy has finished. The engine
+	// reads the half-written snapshot meanwhile, on lines nobody sees.
+	// Control is sampled at the start.
+	//
+	// WHEN, AND WHAT THE CPU IS DOING MEANWHILE. Taken at vblank_rise this
+	// copy started on the same line as the games' vblank interrupt, so it
+	// walked the sprite list while the handler rewrote it: the records below
+	// the cursor came from the new frame and the ones above it from the old,
+	// and a sprite drew with another sprite's tile or flip. It showed only
+	// while the CPU was running -- paused, there was nothing to race with --
+	// and worst on the sets that write the most list in that handler
+	// (Mad Shark). Two things fix it, and both are needed:
+	//
+	//   * snap_start fires FIVE LINES BEFORE the frame wraps instead, so the
+	//     handler has the whole blanking interval to finish first;
+	//   * a CPU write during the copy takes the shadow's write port and
+	//     holds the copy for that cycle, so the word it is on is re-read
+	//     after the write rather than before it. The shadow is then the live
+	//     RAM as of the moment the copy ends, not a mixture of two frames.
+	//     The 68000 cannot write oftener than one cycle in twenty-four here,
+	//     so the hold costs a few per cent of a copy that has a line and a
+	//     half of margin.
 	logic        snap_pending = 1'b0, snap_busy = 1'b0;
 	logic [13:0] snap_i, snap_wi;
 	logic        snap_wr_code, snap_wr_ylow;
+	// A CPU write takes the shadow's write port, so the copy stands still.
+	wire         snap_hold = snap_busy && ((c_we && (c_uds || c_lds)) || y_we);
 	always_ff @(posedge clk) begin
 		snap_wr_code <= 1'b0;
 		snap_wr_ylow <= 1'b0;
@@ -371,14 +395,18 @@ module x1_001 #(
 			snap_pending <= 1'b0;
 			snap_busy    <= 1'b0;
 		end else begin
-			if (vblank_rise) snap_pending <= 1'b1;
+			if (snap_start) snap_pending <= 1'b1;
 			if (snap_busy) begin
-				// The word read on the previous cycle is written this one.
-				snap_wi      <= snap_i;
-				snap_wr_code <= (snap_i < 14'd8192);
-				snap_wr_ylow <= (snap_i >= 14'd8192);
-				if (snap_i == 14'd9215) snap_busy <= 1'b0;
-				else snap_i <= snap_i + 14'd1;
+				// The word read on the previous cycle is written this one --
+				// unless the CPU is writing, in which case the copy stands
+				// still and this word is read again next cycle.
+				if (!snap_hold) begin
+					snap_wi      <= snap_i;
+					snap_wr_code <= (snap_i < 14'd8192);
+					snap_wr_ylow <= (snap_i >= 14'd8192);
+					if (snap_i == 14'd9215) snap_busy <= 1'b0;
+					else snap_i <= snap_i + 14'd1;
+				end
 			end else if (snap_pending && !eof_busy) begin
 				snap_pending <= 1'b0;
 				snap_busy    <= 1'b1;
@@ -386,6 +414,9 @@ module x1_001 #(
 				ctrlsh[0] <= ctrlmem[0]; ctrlsh[1] <= ctrlmem[1];
 				ctrlsh[2] <= ctrlmem[2]; ctrlsh[3] <= ctrlmem[3];
 			end
+			// The control bytes are four registers rather than a RAM, so a
+			// write during the copy simply goes to both.
+			if (snap_busy && k_we) ctrlsh[k_addr] <= k_wdata;
 		end
 	end
 
@@ -411,8 +442,19 @@ module x1_001 #(
 	wire [12:0] live_rd_addr = eof_busy ? eof_src : snap_i[12:0];
 	always_ff @(posedge clk) live_code_q <= codemem[live_rd_addr];
 	always_ff @(posedge clk) eng_code_q  <= codesh[eng_code_addr];
-	always_ff @(posedge clk)
-		if (snap_wr_code) codesh[snap_wi[12:0]] <= live_code_q;
+
+	// THE SHADOW'S WRITE PORT, muxed: the copy has it except on a cycle the
+	// CPU writes, which takes it and holds the copy. One port, one always
+	// block, for the reason the live RAM's comment gives.
+	wire        shc_cpu    = snap_busy && c_we;
+	wire [12:0] shc_addr   = shc_cpu ? c_addr  : snap_wi[12:0];
+	wire [15:0] shc_data   = shc_cpu ? c_wdata : live_code_q;
+	wire        shc_lo     = shc_cpu ? c_lds : snap_wr_code;
+	wire        shc_hi     = shc_cpu ? c_uds : snap_wr_code;
+	always_ff @(posedge clk) begin
+		if (shc_lo) codesh[shc_addr][7:0]  <= shc_data[7:0];
+		if (shc_hi) codesh[shc_addr][15:8] <= shc_data[15:8];
+	end
 
 	always_ff @(posedge clk) begin
 		if (y_we) ylowmem[y_addr] <= y_wdata;
@@ -420,8 +462,11 @@ module x1_001 #(
 	end
 	always_ff @(posedge clk) live_ylow_q <= ylowmem[snap_i[9:0]];
 	always_ff @(posedge clk) eng_ylow_q  <= ylowsh[eng_ylow_addr];
+	wire        shy_cpu  = snap_busy && y_we;
+	wire  [9:0] shy_addr = shy_cpu ? y_addr  : snap_wi[9:0];
+	wire  [7:0] shy_data = shy_cpu ? y_wdata : live_ylow_q;
 	always_ff @(posedge clk)
-		if (snap_wr_ylow) ylowsh[snap_wi[9:0]] <= live_ylow_q;
+		if (shy_cpu || snap_wr_ylow) ylowsh[shy_addr] <= shy_data;
 
 	always_ff @(posedge clk) begin
 		if (k_we) ctrlmem[k_addr] <= k_wdata;
