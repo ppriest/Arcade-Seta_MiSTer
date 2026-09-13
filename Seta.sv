@@ -353,7 +353,10 @@ always @(posedge clk_sys) begin
 	if (reset)                          pause_toggle <= 1'b0;
 	else if (pause_btn & ~pause_btn_d)  pause_toggle <= ~pause_toggle;
 end
-wire pause_core = pause_toggle | status[82];
+wire        dbg_rd_en;
+wire [12:0] dbg_rd_idx;
+wire [31:0] dbg_spr_rd;
+wire pause_core = pause_toggle | status[82] | dbg_rd_en;
 
 // P3/P4: wits only
 wire [15:0] p3_in = 16'hffff;
@@ -484,6 +487,7 @@ wire [7:0] ovl_b = xh_p1 ? 8'h20 : xh_p2 ? 8'hff : core_b;
 
 wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun;
 wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped;
+wire [63:0] dbg_snap;
 wire [15:0] dbg_snd_samples, dbg_snd_overrun, dbg_snd_rom_reads;
 wire  [7:1] dbg_irq_pending;
 wire [23:0] dbg_last_rom;
@@ -542,6 +546,7 @@ seta_core seta_core
 	.gun_ch(gun_ch),
 
 	.pause_cpu(pause_core),
+	.dbg_rd_en(dbg_rd_en), .dbg_rd_idx(dbg_rd_idx), .dbg_spr_rd(dbg_spr_rd),
 	.en_spr(~status[80]),
 	.en_pcm(~status[81]),
 	.en_l0(~status[83]), .en_l1(~status[84]),
@@ -575,7 +580,7 @@ seta_core seta_core
 	.dbg_lines(dbg_lines), .dbg_sprites(dbg_sprites),
 	.dbg_fetches(dbg_fetches), .dbg_overrun(dbg_overrun),
 	.dbg_worst_line(dbg_worst_line), .dbg_worst_sprites(dbg_worst_sprites),
-	.dbg_dropped(dbg_dropped),
+	.dbg_dropped(dbg_dropped), .dbg_snap(dbg_snap),
 	.dbg_snd_samples(dbg_snd_samples), .dbg_snd_overrun(dbg_snd_overrun),
 	.dbg_snd_rom_reads(dbg_snd_rom_reads),
 	.dbg_irq_pending(dbg_irq_pending),
@@ -676,6 +681,27 @@ issp_probe #(.INSTANCE_ID("E"), .PROBE_W(128), .SOURCE_W(8)) u_issp_io (
 	}),
 	.source()
 );
+// Instance G, sprite snapshot timing: [15:0] code writes dropped under setac_eof,
+// [31:16] frames with a sprite write during setac_eof or the snapshot, [47:32]
+// line of the last sprite write at the latest snapshot, [63:48] its maximum.
+issp_probe #(.INSTANCE_ID("G"), .PROBE_W(64), .SOURCE_W(8)) u_issp_snap (
+	.clk(clk_sys),
+	.probe(dbg_snap),
+	.source()
+);
+// Instance H, sprite RAM readback: source {en, 2'b0, idx[12:0]} pauses the CPU
+// and selects a code word / Y byte / control byte; probe {ctrl, ylow, code}.
+wire [15:0] dbg_rd_src;
+issp_probe #(.INSTANCE_ID("H"), .PROBE_W(32), .SOURCE_W(16)) u_issp_sprrd (
+	.clk(clk_sys),
+	.probe(dbg_spr_rd),
+	.source(dbg_rd_src)
+);
+assign dbg_rd_en  = dbg_rd_src[15];
+assign dbg_rd_idx = dbg_rd_src[12:0];
+`else
+assign dbg_rd_en  = 1'b0;
+assign dbg_rd_idx = 13'd0;
 `endif  // DEBUG_ISSP
 
 ///////////////////////   VIDEO   ////////////////////////////////

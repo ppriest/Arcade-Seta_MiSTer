@@ -135,7 +135,8 @@ module seta_video #(
 	output wire [15:0] dbg_l0_cut, dbg_l0_hits, dbg_l0_overrun,
 	output wire [15:0] dbg_l1_cut, dbg_l1_hits, dbg_l1_overrun,
 	output wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun,
-	output wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped
+	output wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped,
+	output wire [63:0] dbg_snap
 );
 
 	localparam int PAW = $clog2(PAL_ENTRIES);
@@ -200,7 +201,7 @@ module seta_video #(
 		.dbg_lines(dbg_lines), .dbg_sprites(dbg_sprites),
 		.dbg_fetches(dbg_fetches), .dbg_overrun(dbg_overrun),
 		.dbg_worst_line(dbg_worst_line), .dbg_worst_sprites(dbg_worst_sprites),
-		.dbg_dropped(dbg_dropped)
+		.dbg_dropped(dbg_dropped), .dbg_snap(dbg_snap)
 	);
 
 	logic [PAW-1:0] pal_index;

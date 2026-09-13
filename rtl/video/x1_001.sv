@@ -105,7 +105,11 @@ module x1_001 #(
 	// worst line in clk_sys cycles (a line is 6144)
 	output logic [15:0] dbg_worst_line    = '0,   // clk_sys cycles, line_start to done
 	output logic [15:0] dbg_worst_sprites = '0,   // sprites blitted in one line
-	output logic [15:0] dbg_dropped       = '0    // lines cut short by line_budget
+	output logic [15:0] dbg_dropped       = '0,   // lines cut short by line_budget
+	// {max, last} line of the last CPU sprite write before a snapshot, frames
+	// with a CPU sprite write during setac_eof or the snapshot, code writes
+	// dropped under the setac_eof copy
+	output logic [63:0] dbg_snap          = '0
 );
 
 	// Chip RAM: one write and one read port each (block RAM inference).
@@ -414,6 +418,24 @@ module x1_001 #(
 	function automatic logic [15:0] sat_inc(input logic [15:0] v);
 		sat_inc = (v == 16'hFFFF) ? v : v + 16'd1;
 	endfunction
+
+	logic [8:0] wr_line = '0;
+	logic       wr_in_window = 1'b0, snap_busy_d = 1'b0;
+	wire        spr_wr = (c_we && (c_uds || c_lds)) || y_we;
+	always_ff @(posedge clk) begin
+		snap_busy_d <= snap_busy;
+		if (spr_wr) wr_line <= line;
+		if (eof_wr && c_we && (c_uds || c_lds)) dbg_snap[15:0] <= sat_inc(dbg_snap[15:0]);
+		if (spr_wr && (eof_busy || snap_pending || snap_busy)) wr_in_window <= 1'b1;
+		if (snap_busy_d && !snap_busy) begin
+			if (wr_in_window) dbg_snap[31:16] <= sat_inc(dbg_snap[31:16]);
+			wr_in_window <= 1'b0;
+		end
+		if (snap_start) begin
+			dbg_snap[47:32] <= {7'd0, wr_line};
+			if ({7'd0, wr_line} > dbg_snap[63:48]) dbg_snap[63:48] <= {7'd0, wr_line};
+		end
+	end
 
 	assign busy     = (state != S_IDLE);
 	assign rom_addr = row_granule;

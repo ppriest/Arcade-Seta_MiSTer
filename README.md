@@ -10,7 +10,9 @@ hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for
   - [Supported](#supported)
   - [Out of scope for now](#out-of-scope-for-now)
 - [Hardware](#hardware)
+  - [Video timing](#video-timing)
 - [History](#history)
+- [Screenshots](#screenshots)
 - [Installation](#installation)
 - [Status](#status)
   - [Todo](#todo)
@@ -34,6 +36,7 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp`.
   * Crosshair - (P1 / P2 / P1+P2) - Self-explanatory. Matches the location the game knows the cursor to be. Red is P1, Blue is P2. It's hack.
   * Mouse aims (P1 / P2 / Off) — a mouse moves that player's aim, with left button as Trigger and right as Reload. Relative, so it inherits the game's own calibration.
   * The gun calibration is kept in battery RAM, which is saved to the `.nvm` file when the OSD is next opened (or from `Save settings`).
+  * Reportedly it _does_ work on a Guncon 2, but it's not great with the dark scenes and jumps around
 
 * **CRT adjust** (all games) - H-Size, H-Position and V-Shift for an analog CRT, from rmonic79's [Arcade-Raiden_MiSTer](https://github.com/rmonic79/Arcade-Raiden_MiSTer).
   * **CRT width: Match 384** (320-wide games only: Extreme Downhill, Sokonuke Taisen, Oishii Puzzle) - The option holds each pixel 1.2x as long, so the picture covers the 384-wide games' area, while the line (15.625 kHz), frame rate (57.44 Hz) and syncs stay the same. 
@@ -112,6 +115,28 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp`.
 | uPD71054C | Programmable interval timer (8254) | Written, channel 0 (the IRQ 4 timer) |
 | ADC0834 | Zombie Raid's light gun ADC | Written |
 
+### Video timing
+
+Every game runs an 8 MHz dot clock (16 MHz / 2), 512 dots per line and 272 lines per frame:
+
+* 8,000,000 / 512 = **15,625 Hz** line rate
+* 15,625 / 272 = **57.4449 Hz** frame rate
+
+MAME gives only refresh rates. The one marked "verified on PCB" in `seta.cpp` is Daioh's 57.42 Hz; the 60 Hz sets carry no comment.
+
+Confirmed on a PCB: Guru's measurement of Caliber 50 (`downtown.cpp`, same X1-001 / X1-007 / X1-012 chipset, not in this core) is **HSync 15.6250 kHz, VSync 57.4449 Hz** on X1-007 pins 22 and 23, the calculated values exactly.
+
+Not every board measures the same:
+
+| Board | HSync | VSync | Source |
+|-|-|-|-|
+| Caliber 50 | 15.6250 kHz | 57.4449 Hz | `downtown.cpp`, Guru |
+| SD Gundam Neo Battling (in this core) | 15.22 kHz | 58 Hz | `seta.cpp`, Guru |
+| Crazy Fight (out of scope) | 15.1433 kHz | 59.1851 Hz | `seta.cpp`, Guru |
+| Thundercade (older board, not in this core) | 15.21 kHz | 59.1845 Hz | `downtown.cpp`, Guru |
+
+The SD Gundam Neo Battling figures do not fit 512 × 272 at 8 MHz. 15.22 kHz would be about 526 dots per line and 58 Hz about 262 lines. That board still runs the common timing here.
+
 Some links discussing the hardware:
 * https://www.arcade-museum.com/manuf/Seta.html
 
@@ -142,6 +167,189 @@ Some links discussing the hardware:
   * **Alpha release**
   * Support for a bunch of games in varying states of running
 
+## Screenshots
+
+### Wit's
+
+![wits 20260912_185751-screen](docs/screenshots/wits/20260912_185751-screen.png)
+![wits 20260912_185746-screen](docs/screenshots/wits/20260912_185746-screen.png)
+
+### Thunder & Lightning
+
+![thunderl 20260913_175358-screen](docs/screenshots/thunderl/20260913_175358-screen.png)
+![thunderl 20260913_175420-screen](docs/screenshots/thunderl/20260913_175420-screen.png)
+
+### Pairs Love
+
+![pairlove 20260913_172646-screen](docs/screenshots/pairlove/20260913_172646-screen.png)
+![pairlove 20260913_172616-screen](docs/screenshots/pairlove/20260913_172616-screen.png)
+
+### Block Carnival / Thunder & Lightning 2
+
+![blockcar 20260913_165041-screen](docs/screenshots/blockcar/20260913_165041-screen.png)
+![blockcar 20260913_165031-screen](docs/screenshots/blockcar/20260913_165031-screen.png)
+![blockcar 20260913_165103-screen](docs/screenshots/blockcar/20260913_165103-screen.png)
+
+### Ultraman Club
+
+![umanclub 20260913_175457-screen](docs/screenshots/umanclub/20260913_175457-screen.png)
+![umanclub 20260913_175447-screen](docs/screenshots/umanclub/20260913_175447-screen.png)
+![umanclub 20260913_175449-screen](docs/screenshots/umanclub/20260913_175449-screen.png)
+![umanclub 20260913_175522-screen](docs/screenshots/umanclub/20260913_175522-screen.png)
+
+### SD Gundam Neo Battling
+
+![neobattl 20260913_175100-screen](docs/screenshots/neobattl/20260913_175100-screen.png)
+![neobattl 20260913_175027-screen](docs/screenshots/neobattl/20260913_175027-screen.png)
+![neobattl 20260913_175105-screen](docs/screenshots/neobattl/20260913_175105-screen.png)
+![neobattl 20260913_175124-screen](docs/screenshots/neobattl/20260913_175124-screen.png)
+
+### Athena no Hatena?
+
+![atehate 20260913_165012-screen](docs/screenshots/atehate/20260913_165012-screen.png)
+![atehate 20260913_165021-screen](docs/screenshots/atehate/20260913_165021-screen.png)
+
+### Dragon Unit / Castle of Dragon
+
+![drgnunit 20260913_165328-screen](docs/screenshots/drgnunit/20260913_165328-screen.png)
+![drgnunit 20260913_165339-screen](docs/screenshots/drgnunit/20260913_165339-screen.png)
+![drgnunit 20260913_165453-screen](docs/screenshots/drgnunit/20260913_165453-screen.png)
+![drgnunit 20260913_165456-screen](docs/screenshots/drgnunit/20260913_165456-screen.png)
+![drgnunit 20260913_165513-screen](docs/screenshots/drgnunit/20260913_165513-screen.png)
+
+### Strike Gunner S.T.G
+
+![stg 20260913_175315-screen](docs/screenshots/stg/20260913_175315-screen.png)
+![stg 20260913_175326-screen](docs/screenshots/stg/20260913_175326-screen.png)
+![stg 20260913_175342-screen](docs/screenshots/stg/20260913_175342-screen.png)
+
+### Quiz Kokology
+
+![qzkklogy 20260913_174612-screen](docs/screenshots/qzkklogy/20260913_174612-screen.png)
+![qzkklogy 20260913_172827-screen](docs/screenshots/qzkklogy/20260913_172827-screen.png)
+![qzkklogy 20260913_174024-screen](docs/screenshots/qzkklogy/20260913_174024-screen.png)
+
+### Quiz Kokology 2
+
+![qzkklgy2 20260913_174701-screen](docs/screenshots/qzkklgy2/20260913_174701-screen.png)
+![qzkklgy2 20260913_174635-screen](docs/screenshots/qzkklgy2/20260913_174635-screen.png)
+![qzkklgy2 20260913_174706-screen](docs/screenshots/qzkklgy2/20260913_174706-screen.png)
+
+### Rezon
+
+![rezon 20260913_174735-screen](docs/screenshots/rezon/20260913_174735-screen.png)
+![rezon 20260913_174841-screen](docs/screenshots/rezon/20260913_174841-screen.png)
+![rezon 20260913_175006-screen](docs/screenshots/rezon/20260913_175006-screen.png)
+
+### Daioh
+
+![daioh 20260912_184844-screen](docs/screenshots/daioh/20260912_184844-screen.png)
+![daioh 20260913_165125-screen](docs/screenshots/daioh/20260913_165125-screen.png)
+![daioh 20260913_165131-screen](docs/screenshots/daioh/20260913_165131-screen.png)
+![daioh 20260913_165145-screen](docs/screenshots/daioh/20260913_165145-screen.png)
+![daioh 20260913_165156-screen](docs/screenshots/daioh/20260913_165156-screen.png)
+![daioh 20260913_165227-screen](docs/screenshots/daioh/20260913_165227-screen.png)
+
+### Mobile Suit Gundam
+
+![msgundam 20260913_171937-screen](docs/screenshots/msgundam/20260913_171937-screen.png)
+![msgundam 20260913_171904-screen](docs/screenshots/msgundam/20260913_171904-screen.png)
+![msgundam 20260913_171913-screen](docs/screenshots/msgundam/20260913_171913-screen.png)
+![msgundam 20260913_171934-screen](docs/screenshots/msgundam/20260913_171934-screen.png)
+![msgundam 20260913_171951-screen](docs/screenshots/msgundam/20260913_171951-screen.png)
+
+### War of Aero
+
+![wrofaero 20260913_175642-screen](docs/screenshots/wrofaero/20260913_175642-screen.png)
+![wrofaero 20260913_175621-screen](docs/screenshots/wrofaero/20260913_175621-screen.png)
+![wrofaero 20260913_175709-screen](docs/screenshots/wrofaero/20260913_175709-screen.png)
+
+### Oishii Puzzle Ha Irimasenka
+
+![oisipuzl 20260913_172104-screen](docs/screenshots/oisipuzl/20260913_172104-screen.png)
+![oisipuzl 20260913_172113-screen](docs/screenshots/oisipuzl/20260913_172113-screen.png)
+![oisipuzl 20260913_172134-screen](docs/screenshots/oisipuzl/20260913_172134-screen.png)
+
+### Kamen Rider Club Battle Race
+
+![kamenrid 20260913_171740-screen](docs/screenshots/kamenrid/20260913_171740-screen.png)
+![kamenrid 20260913_171718-screen](docs/screenshots/kamenrid/20260913_171718-screen.png)
+![kamenrid 20260913_171801-screen](docs/screenshots/kamenrid/20260913_171801-screen.png)
+
+### Eight Forces
+
+![eightfrc 20260913_165553-screen](docs/screenshots/eightfrc/20260913_165553-screen.png)
+![eightfrc 20260913_165602-screen](docs/screenshots/eightfrc/20260913_165602-screen.png)
+![eightfrc 20260913_165641-screen](docs/screenshots/eightfrc/20260913_165641-screen.png)
+![eightfrc 20260913_165710-screen](docs/screenshots/eightfrc/20260913_165710-screen.png)
+
+### Magical Speed
+
+![magspeed 20260913_171640-screen](docs/screenshots/magspeed/20260913_171640-screen.png)
+![magspeed 20260913_171623-screen](docs/screenshots/magspeed/20260913_171623-screen.png)
+![magspeed 20260913_171656-screen](docs/screenshots/magspeed/20260913_171656-screen.png)
+
+### Zing Zing Zip
+
+![zingzip 20260913_175727-screen](docs/screenshots/zingzip/20260913_175727-screen.png)
+![zingzip 20260913_175747-screen](docs/screenshots/zingzip/20260913_175747-screen.png)
+
+### Blandia
+
+![blandia 20260913_164854-screen](docs/screenshots/blandia/20260913_164854-screen.png)
+![blandia 20260913_164908-screen](docs/screenshots/blandia/20260913_164908-screen.png)
+![blandia 20260913_164959-screen](docs/screenshots/blandia/20260913_164959-screen.png)
+
+### J. J. Squawkers
+
+![jjsquawk 20260913_171010-screen](docs/screenshots/jjsquawk/20260913_171010-screen.png)
+![jjsquawk 20260912_185112-screen](docs/screenshots/jjsquawk/20260912_185112-screen.png)
+![jjsquawk 20260912_185133-screen](docs/screenshots/jjsquawk/20260912_185133-screen.png)
+![jjsquawk 20260913_171058-screen](docs/screenshots/jjsquawk/20260913_171058-screen.png)
+![jjsquawk 20260913_171108-screen](docs/screenshots/jjsquawk/20260913_171108-screen.png)
+
+### Mad Shark
+
+![madshark 20260913_171532-screen](docs/screenshots/madshark/20260913_171532-screen.png)
+![madshark 20260913_171507-screen](docs/screenshots/madshark/20260913_171507-screen.png)
+![madshark 20260913_171518-screen](docs/screenshots/madshark/20260913_171518-screen.png)
+![madshark 20260913_171542-screen](docs/screenshots/madshark/20260913_171542-screen.png)
+
+### Extreme Downhill
+
+![extdwnhl 20260913_165744-screen](docs/screenshots/extdwnhl/20260913_165744-screen.png)
+![extdwnhl 20260913_165737-screen](docs/screenshots/extdwnhl/20260913_165737-screen.png)
+![extdwnhl 20260913_165740-screen](docs/screenshots/extdwnhl/20260913_165740-screen.png)
+![extdwnhl 20260913_165742-screen](docs/screenshots/extdwnhl/20260913_165742-screen.png)
+![extdwnhl 20260913_165743-screen](docs/screenshots/extdwnhl/20260913_165743-screen.png)
+![extdwnhl 20260913_165755-screen](docs/screenshots/extdwnhl/20260913_165755-screen.png)
+![extdwnhl 20260913_165757-screen](docs/screenshots/extdwnhl/20260913_165757-screen.png)
+![extdwnhl 20260913_165758-screen](docs/screenshots/extdwnhl/20260913_165758-screen.png)
+
+### Sokonuke Taisen Game
+
+![sokonuke 20260913_175159-screen](docs/screenshots/sokonuke/20260913_175159-screen.png)
+![sokonuke 20260913_175154-screen](docs/screenshots/sokonuke/20260913_175154-screen.png)
+![sokonuke 20260913_175215-screen](docs/screenshots/sokonuke/20260913_175215-screen.png)
+
+### Gundhara
+
+![gundhara 20260913_165917-screen](docs/screenshots/gundhara/20260913_165917-screen.png)
+![gundhara 20260912_185014-screen](docs/screenshots/gundhara/20260912_185014-screen.png)
+![gundhara 20260912_185023-screen](docs/screenshots/gundhara/20260912_185023-screen.png)
+![gundhara 20260912_185030-screen](docs/screenshots/gundhara/20260912_185030-screen.png)
+![gundhara 20260912_191123-screen](docs/screenshots/gundhara/20260912_191123-screen.png)
+![gundhara 20260913_165835-screen](docs/screenshots/gundhara/20260913_165835-screen.png)
+![gundhara 20260913_165907-screen](docs/screenshots/gundhara/20260913_165907-screen.png)
+![gundhara 20260913_165925-screen](docs/screenshots/gundhara/20260913_165925-screen.png)
+![gundhara 20260913_170957-screen](docs/screenshots/gundhara/20260913_170957-screen.png)
+
+### Zombie Raid
+
+![zombraid 20260912_190049-screen](docs/screenshots/zombraid/20260912_190049-screen.png)
+![zombraid 20260912_190041-screen](docs/screenshots/zombraid/20260912_190041-screen.png)
+![zombraid 20260912_190059-screen](docs/screenshots/zombraid/20260912_190059-screen.png)
+
 ## Installation
 
 * Take the latest `*.rbf` from `releases/` and put it in `_Arcade/cores`
@@ -151,6 +359,7 @@ Some links discussing the hardware:
 ## Status
 
 Known issues:
+* **Quiz Kokology**, **Blandia** - During intro bad tiles can render
 * **Thunder & Lightning** - Character sprites in attract glitch in at the edge of the screen. The same in MAME. Appears to be an original game bug.
 
 See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
@@ -177,7 +386,7 @@ Whole core (`Arcade-Seta_20260913.rbf`), on the DE10-nano's Cyclone V 5CSEBA6, s
 
 ## AI Attestation
 
-This core is being developed with heavy use of a frontier coding assistant.
+This core is being developed with heavy use of a frontier coding assistant. The author is somewhat familiar with some of the games on this platform, being a co-author of the MAME driver.
 
 ## Verification
 

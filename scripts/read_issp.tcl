@@ -34,6 +34,18 @@ set fields_F {
     {pll_locked     127 127 bit}
 }
 
+# INSTANCE G -- sprite snapshot timing, built in Seta.sv's u_issp_snap.
+# eof_lost: CPU sprite-code writes dropped under the setac_eof copy. late_frames:
+# frames with a sprite write during setac_eof or the snapshot. last_wr_line:
+# the render line of the last sprite write when the latest snapshot started
+# (line = vcount + 2; vblank at 248, snapshot at 267); max_wr_line its maximum.
+set fields_G {
+    {eof_lost         0  15 dec}
+    {late_frames     16  31 dec}
+    {last_wr_line    32  47 dec}
+    {max_wr_line     48  63 dec}
+}
+
 # INSTANCE E -- CPU writes per video region, built in Seta.sv's u_issp_io.
 #
 # What it answers: a black screen with every counter at zero means the CPU
@@ -227,6 +239,7 @@ switch -- $inst_id {
     B       { set fields $fields_B }
     A       { set fields $fields_A }
     E       { set fields $fields_E }
+    G       { set fields $fields_G }
     default {
         puts "instance id '$inst_id' has no field table -- add one before reading it"
         exit 1

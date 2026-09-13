@@ -61,6 +61,11 @@ module seta_core (
 	input  wire [31:0] gun_ch,
 
 	input  wire        pause_cpu,
+	// sprite RAM readback (probe build): with the CPU paused, dbg_rd_idx drives
+	// the chip's read address; dbg_spr_rd = {ctrl, ylow, code} two cycles later
+	input  wire        dbg_rd_en,
+	input  wire [12:0] dbg_rd_idx,
+	output wire [31:0] dbg_spr_rd,
 
 	// debug switches
 	input  wire        en_spr,
@@ -80,6 +85,7 @@ module seta_core (
 	output wire [15:0] dbg_l1_cut, dbg_l1_hits, dbg_l1_overrun,
 	output wire [15:0] dbg_lines, dbg_sprites, dbg_fetches, dbg_overrun,
 	output wire [15:0] dbg_worst_line, dbg_worst_sprites, dbg_dropped,
+	output wire [63:0] dbg_snap,
 	// driver ROT
 	output wire  [1:0] game_rot,
 	output wire  [2:0] input_layout,
@@ -485,6 +491,7 @@ module seta_core (
 
 	wire [15:0] pal_rdata, code_rdata;
 	wire  [7:0] ylow_rdata, ctrl_rdata;
+	assign dbg_spr_rd = {ctrl_rdata, ylow_rdata, code_rdata};
 	wire        irq_vbl_pulse, irq_sl240_pulse, irq_sl112_pulse;
 
 	// en_spr withholds the sprite engine's ROM data; the engine keeps running
@@ -544,14 +551,14 @@ module seta_core (
 		.vregs(vregs), .tilemaps_flip(tilemaps_flip),
 
 		.code_we(io_req && io_we && io_sel[IO_SPRCODE] && !io_addr[14]),
-		.code_addr(io_addr[13:1]), .code_wdata(io_wdata),
+		.code_addr(dbg_rd_en ? dbg_rd_idx : io_addr[13:1]), .code_wdata(io_wdata),
 		.code_uds(io_uds), .code_lds(io_lds), .code_rdata(code_rdata),
 		// spriteylow_w16 takes the low byte
 		.ylow_we(io_req && io_we && io_sel[IO_SPRYLOW] && io_lds),
-		.ylow_addr(io_addr[10:1]), .ylow_wdata(io_wdata[7:0]),
+		.ylow_addr(dbg_rd_en ? dbg_rd_idx[9:0] : io_addr[10:1]), .ylow_wdata(io_wdata[7:0]),
 		.ylow_rdata(ylow_rdata),
 		.ctrl_we(io_req && io_we && io_sel[IO_SPRCTRL] && io_lds),
-		.ctrl_addr(io_addr[2:1]), .ctrl_wdata(io_wdata[7:0]),
+		.ctrl_addr(dbg_rd_en ? dbg_rd_idx[1:0] : io_addr[2:1]), .ctrl_wdata(io_wdata[7:0]),
 		.ctrl_rdata(ctrl_rdata),
 		.pal_we(io_req && io_we && io_sel[IO_PALETTE]),
 		// index formed in maincpu.sv (pal_index_w)
@@ -573,7 +580,7 @@ module seta_core (
 		.dbg_lines(dbg_lines), .dbg_sprites(dbg_sprites),
 		.dbg_fetches(dbg_fetches), .dbg_overrun(dbg_overrun),
 		.dbg_worst_line(dbg_worst_line), .dbg_worst_sprites(dbg_worst_sprites),
-		.dbg_dropped(dbg_dropped)
+		.dbg_dropped(dbg_dropped), .dbg_snap(dbg_snap)
 	);
 
 	wire pit_out0;
