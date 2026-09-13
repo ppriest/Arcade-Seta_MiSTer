@@ -67,6 +67,9 @@ sim/**/*dump*.txt
 # simulator runs from.
 /*.raw
 
+# Verilator (scripts/run_verilator.sh)
+obj_verilator/
+
 # ---------------------------------------------------------------------------
 # Copyrighted MAME ROM dumps -- used locally for bring-up and for building
 # the ROM images the .mra files describe. NEVER committed, in any

@@ -35,6 +35,10 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp`.
   * Mouse aims (P1 / P2 / Off) — a mouse moves that player's aim, with left button as Trigger and right as Reload. Relative, so it inherits the game's own calibration.
   * The gun calibration is kept in battery RAM, which is saved to the `.nvm` file when the OSD is next opened (or from `Save settings`).
 
+* **CRT adjust** (all games) - H-Size, H-Position and V-Shift for an analog CRT, from rmonic79's [Arcade-Raiden_MiSTer](https://github.com/rmonic79/Arcade-Raiden_MiSTer).
+  * **CRT width: Match 384** (320-wide games only: Extreme Downhill, Sokonuke Taisen, Oishii Puzzle) - The option holds each pixel 1.2x as long, so the picture covers the 384-wide games' area, while the line (15.625 kHz), frame rate (57.44 Hz) and syncs stay the same. 
+  * V-Size is left out: the core already uses 542 of the device's 553 RAM blocks.
+
 ### Supported
 
 | Name | Year | Manufacturer | Main CPU | Tilemaps | Notes |
@@ -47,7 +51,7 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp`.
 | SD Gundam Neo Battling | 1992 | Banpresto | M68000 @ 16 MHz | 0 | |
 | Athena no Hatena? | 1993 | Athena | M68000 @ 16 MHz | 0 | 2 MB of sprites, 64 KB of work RAM mirrored |
 | Dragon Unit / Castle of Dragon | 1989 | Athena / Seta | M68000 @ 8 MHz | 1× 4bpp | |
-| Strike Gunner S.T.G | 1991 | Athena / Tecmo | M68000 @ 8 MHz | 1× 4bpp | | Flickers badly |
+| Strike Gunner S.T.G | 1991 | Athena / Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
 | Quiz Kokology | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
 | Quiz Kokology 2 | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
 | Rezon | 1991 | Allumer | M68000 @ 16 MHz | 2× 4bpp | |
@@ -102,15 +106,27 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp`.
 | X1-007 | Video blanking | Written |
 | X1-010 | 16-voice PCM / wavetable sound | Written, verified against MAME |
 | X1-004 | Input handling | Folded into the address decode |
-| X1-005 / X1-009 | NVRAM |  |
+| X1-005 / X1-009 | NVRAM | Zombie Raid's battery RAM, saved to the `.nvm` file |
 | X1-011 | Graphics mixing | Written |
 | X1-012 | Tilemaps | Written, verified against MAME |
-| uPD71054C | Programmable interval timer (8254) |  |
+| uPD71054C | Programmable interval timer (8254) | Written, channel 0 (the IRQ 4 timer) |
+| ADC0834 | Zombie Raid's light gun ADC | Written |
 
 Some links discussing the hardware:
 * https://www.arcade-museum.com/manuf/Seta.html
 
 ## History
+
+* **`Arcade-Seta_20260913.rbf`**
+  * Fast ROM loading
+  * Timer interrupt ran at half rate: music at the right speed in War of Aero and the other five timer games
+  * Flip screen DIP now works for all games that have one, as a true 180 degree rotation (MAME is 128 px / 8 lines out, see `docs/MAME_DIVERGENCE.md`)
+  * Oishii Puzzle tile layers no longer flipped with the sprites
+  * Mobile Suit Gundam interrupts fixed
+  * Extreme Downhill boot screen black
+  * Tile row cache for busy 6bpp lines
+  * CRT adjust: H-Size, H-Position, V-Shift
+  * CRT width: Match 384 for the 320-wide games
 
 * **`Arcade-Seta_20260912.rbf`**
   * Blandia and Zombie Raid added
@@ -135,32 +151,27 @@ Some links discussing the hardware:
 ## Status
 
 Known issues:
-* **Mad Shark** - A shimmering vertical line on the tilemaps
-* **Zing Zing Zip** and **Gundhara** - Occasional sprite glitching; not yet rechecked since the Mad Shark sprite fix
-* **Eight Forces** - Flip Screen (DIP) does not work
-* **Extreme Downhill** - boot screen background garbage
-* **Mobile Suit Gundam** - resets in game (protection?)
-* **Oishii Puzzle** - some broken tiles
+* **Thunder & Lightning** - Character sprites in attract glitch in at the edge of the screen. The same in MAME. Appears to be an original game bug.
 
 See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
 
 ### Todo
 
-- [ ] CRT offset -- a per-game H/V shift in the OSD, so the picture can be centred on a real monitor without touching the core's own timing
 - [ ] `hiscore.v` support, savestates
 - [ ] `zombraidp` / `zombraidpj` `.mra` files -- ERASE00 regions loaded in three byte lanes
 - [ ] `daiohc` — the `wrofaero` machine config with `daioh`-sized graphics, needs its own arm
 - [ ] The three 14.318181 MHz games (`orbs`, `keroppi`, `krzybowl`) need a Bresenham clock enable
+- [ ] Upstream to MAME: flip screen as the unflipped frame rotated 180 -- the x1_012 tilemap mirror about the 512x256 bitmap, and the per-game flip offsets (`fg_yoffs`, `fg_xoffs`, layer `xoffs`) in `docs/MAME_DIVERGENCE.md`
 
 ### Resource usage
 
-Whole core, on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
+Whole core (`Arcade-Seta_20260913.rbf`), on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
 
 | resource | used | available |
 | --- | --- | --- |
-| Logic (ALMs) | 23,584 (56%) | 41,910 |
-| Block memory bits | 3,300,545 (58%) | 5,662,720 |
-| RAM blocks | 419 (76%) | 553 |
+| Logic (ALMs) | 26,348 (63%) | 41,910 |
+| Block memory bits | 4,261,313 (75%) | 5,662,720 |
+| RAM blocks | 542 (98%) | 553 |
 | DSP blocks | 44 (39%) | 112 |
 | PLLs | 3 | 6 |
 
@@ -170,7 +181,7 @@ This core is being developed with heavy use of a frontier coding assistant.
 
 ## Verification
 
-Not PCB-validated. MAME is the accuracy reference, with its own acknowledged uncertainties noted where they matter. Goal is to reconcile the inconsistencies and unlikely behaviour.
+Not PCB-validated. MAME is the accuracy reference for the most part, with its own acknowledged uncertainties noted where they matter. Goal is to reconcile the inconsistencies and unlikely behaviour. The exception so far is flip screen, checked against the unflipped picture rotated 180 degrees rather than against MAME.
 
 * Hardware facts come from the MAME driver and verified against it.
   * Graphics layouts were decoded from real ROM data before any RTL used them
@@ -195,6 +206,8 @@ Not PCB-validated. MAME is the accuracy reference, with its own acknowledged unc
   whole specification for the sound chip.
 - **Tobias Gubener** ([TobiFlex](https://github.com/TobiFlex)) for
   [TG68K.C](https://github.com/TobiFlex/TG68K.C).
+- **Umberto Parisi** ([rmonic79](https://github.com/rmonic79)) for `crt_adjust.sv`, from
+  [Arcade-Raiden_MiSTer](https://github.com/rmonic79/Arcade-Raiden_MiSTer).
 
 ## Layout
 
@@ -206,7 +219,7 @@ Standard [Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer) stru
 | `rtl` | core source |
 | `releases` | `.mra` files, and the current `.rbf` |
 | `docs` | design notes and hard-won debugging lessons |
-| `sim` | ModelSim testbenches |
+| `sim` | ModelSim and Verilator testbenches |
 | `scripts` | capture/verification tooling (see [`scripts/README.md`](scripts/README.md)) |
 | `debug` | reference captures from MAME used as ground truth (gitignored) |
 | `roms` | your own MAME sets (gitignored, never committed) |
@@ -215,7 +228,8 @@ Standard [Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer) stru
 
 GPL v3 (see `LICENSE`). Imported components keep their own licences and are GPLv3-compatible:
 TG68K.C (LGPLv3+), the adapted SDR SDRAM controller (Sorgelig, GPL-3.0-or-later),
-`screen_rotate_two.sv` (Sorgelig, GPLv2), and the MiSTer framework in `sys/`.
+`screen_rotate_two.sv` (Sorgelig, GPLv2), `crt_adjust.sv` (rmonic79, GPL-3.0-or-later), and the MiSTer
+framework in `sys/`.
 
 Game ROMs contain copyrighted material and are not included. Obtaining them is your
 responsibility.

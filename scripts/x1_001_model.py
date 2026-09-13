@@ -71,7 +71,10 @@ from decode_gfx import LAYOUTS, decode_tile, resolve_planes
 # checkable rather than implicit.
 # ---------------------------------------------------------------------------
 _GROUP_A = dict(
-    fg_xoffs=(0, 0), fg_yoffs=(-0x12, 0x0e),
+    # fg_yoffs flip is -0x0a, not MAME's -0x12: with -0x12 every flipped frame
+    # is the unflipped one rotated 180 degrees and moved 8 lines. The 224-line
+    # sets keep -0x12 (scripts/x1_012_model.py).
+    fg_xoffs=(0, 0), fg_yoffs=(-0x0a, 0x0e),
     bg_xoffs=(0, 0), bg_yoffs=(0x1, -0x1),
     colorbase=0, spritelimit=0x1ff, transpen=0,
     gfx_colorbase=0x000, total_color_codes=32,

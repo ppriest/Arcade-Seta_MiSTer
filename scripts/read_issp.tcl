@@ -90,11 +90,11 @@ set fields_B {
 # starved on the SDRAM port it shares with the sprite engine, and most of
 # its tiles never arrive.
 set fields_C {
-    {l0_lines          0  15 dec}
-    {l0_tiles         16  31 dec}
+    {l0_cut_frame      0  15 dec}
+    {l0_cache_hits    16  31 dec}
     {l0_overrun       32  47 dec}
-    {l1_lines         48  63 dec}
-    {l1_tiles         64  79 dec}
+    {l1_cut_frame     48  63 dec}
+    {l1_cache_hits    64  79 dec}
     {l1_overrun       80  95 dec}
     {joy0_dir         96  99 hex}
     {joy1_dir        100 103 hex}

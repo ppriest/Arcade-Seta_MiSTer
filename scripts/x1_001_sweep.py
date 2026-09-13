@@ -49,11 +49,11 @@ def main():
     ap.add_argument("games", nargs="*", default=None)
     ap.add_argument("--frames", default=",".join(str(f) for f in DEFAULT_FRAMES))
     ap.add_argument("--flip", action="store_true",
-                    help="capture with the Flip Screen DIP ON. NO GAME SETS IT "
-                         "BY ITSELF -- every ordinary capture has spritectrl[0] "
-                         "bit 6 clear, so the flipped half of the sprite Y "
-                         "arithmetic is otherwise never compared against MAME "
-                         "at all. Captures land in debug/flip-<game>-f<frame>.")
+                    help="capture with the Flip Screen DIP ON. The Group A "
+                         "sets never set spritectrl[0] bit 6 by themselves, so "
+                         "without this the flipped sprite Y arithmetic goes "
+                         "unexercised. Captures land in debug/flip-<game>-f<frame>. "
+                         "scripts/flip_sweep.py is the whole-picture check.")
     ap.add_argument("--keep", action="store_true",
                     help="keep the capture directories (default: they are kept "
                          "anyway; this flag exists so the intent is explicit)")

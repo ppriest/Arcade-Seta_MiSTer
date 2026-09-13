@@ -59,7 +59,7 @@ for _, spec in ipairs(split(DIPS, ";")) do
             end
             for raw, name in pairs(fld.settings) do
                 if name == want_setting then
-                    fld:set_value(raw)
+                    fld.user_value = raw
                     print(string.format("SEED     %-20s = %-12s (raw 0x%x)",
                                         want_field, want_setting, raw))
                     -- tag, mask and defvalue come from MAME, not from a table

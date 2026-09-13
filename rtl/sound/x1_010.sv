@@ -1,52 +1,22 @@
-// Seta X1-010 — 16-voice PCM / wavetable sound generator.
+// X1-010: 16-voice PCM / wavetable sound, transcribed from MAME's
+// sound/x1_010.cpp (checked against scripts/x1_010_model.py by sim/x1_010_tb).
 //
-// Transcribed from src/devices/sound/x1_010.cpp. There is no existing FPGA
-// implementation of this chip anywhere, so MAME's C++ is the whole
-// specification; scripts/x1_010_model.py is a line-by-line transcription of the
-// same function and is what sim/x1_010_tb checks this against.
-//
-// THE CHIP
-//   16 voices, stereo, clocked at 16 MHz, one output sample every 512 clocks =
-//   31.25 kHz. 8 KB of RAM visible to the 68000 as 16-bit words, of which the
-//   chip reads only the LOW byte -- the high byte is a read-back shadow it
-//   ignores entirely (MAME's m_HI_WORD_BUF).
-//
-//     0x0000-0x007f   16 channels x 8 register bytes
-//     0x0080-0x0fff   envelope data
-//     0x1000-0x1fff   waveform data, 128 bytes per waveform, 8-bit signed
-//
-//   Register 0:  bit 7 frequency divider, bit 2 envelope one-shot,
-//                bit 1 mode (0 = PCM from ROM, 1 = waveform from RAM),
-//                bit 0 key on.
+// 16 MHz clock, one stereo sample per 512 clocks. 8 KB of word-wide RAM whose
+// low bytes the chip uses:
+//     0x0000-0x007f   16 channels x 8 registers
+//     0x0080-0x0fff   envelopes
+//     0x1000-0x1fff   waveforms, 128 signed bytes each
+// Register 0: bit 7 divider, bit 2 one-shot envelope, bit 1 waveform mode,
+// bit 0 key on.
 //   PCM:      r1 volume L:R, r2 frequency, r4 start>>12, r5 (0x100-end>>12)
-//   Waveform: r1 waveform number, r2/r3 pitch lo/hi, r4 envelope step,
-//             r5 envelope number; the VOLUME comes from the envelope byte,
-//             not from r1.
+//   Waveform: r1 waveform, r2/r3 pitch, r4 envelope step, r5 envelope; the
+//             volume is the envelope byte.
 //
-// THREE THINGS THAT ARE NOT GUESSABLE FROM THE REGISTER MAP
+// Key-on resets the channel's accumulators at the CPU write. PCM frequency 0
+// is replaced by 4, as MAME does (a hack there).
 //
-//   KEY-ON IS EDGE-TRIGGERED AT THE CPU WRITE, not sampled by the engine. MAME
-//   resets both accumulators inside write() when bit 0 of register 0 goes
-//   0 -> 1. An engine that instead resets when it *notices* key-on set drifts on
-//   any channel retriggered without an intervening key-off -- quietly, as a
-//   phase error rather than as silence.
-//
-//   IN WAVEFORM MODE THE VOLUME IS THE ENVELOPE BYTE. r1 selects the waveform.
-//   Reading r1 as a volume, as PCM mode does, is an easy and near-silent error.
-//
-//   `if (freq == 0) freq = 4` in PCM mode is a MAME HACK, commented as such in
-//   the source ("Meta Fox does write the frequency register, but this is a hack
-//   to make it work with the current setup. This is broken for Arbalester").
-//   Reproduced here so the two agree, and flagged so nobody later mistakes it
-//   for hardware behaviour. If a real board is ever measured, start here.
-//
-// TIMING
-//   The 16 channels are walked once per output sample. They run back to back
-//   rather than in fixed 32-cycle slots, because a PCM voice waits on an SDRAM
-//   round trip and a fixed slot would either waste the budget or silently drop
-//   a fetch. `dbg_overrun` counts passes that did not finish before the next
-//   sample tick, paired with `dbg_samples` so a zero can be told from "never
-//   ran" (LESSONS_LEARNED, "Pair every bad-event counter with a total").
+// Channels are processed back to back once per sample; dbg_overrun counts
+// passes still running at the next sample.
 
 `default_nettype none
 
@@ -54,10 +24,9 @@ module x1_010 (
 	input  wire         clk,
 	input  wire         reset,
 
-	// One pulse per chip clock. 16 MHz on every in-scope board.
-	input  wire         ce,
+	input  wire         ce,             // 16 MHz
 
-	// ---- CPU side: 0x2000 16-bit words ---------------------------------------
+	// CPU: 0x2000 words
 	input  wire         cpu_req,
 	input  wire         cpu_we,
 	input  wire  [12:0] cpu_addr,
@@ -65,19 +34,16 @@ module x1_010 (
 	input  wire         cpu_uds, cpu_lds,
 	output logic [15:0] cpu_rdata,
 
-	// ---- PCM sample ROM: req/valid, byte-wide, 1 MB --------------------------
-	// rom_req is a one-cycle pulse with rom_addr held until rom_valid.
+	// PCM sample ROM: rom_req pulses, rom_addr held until rom_valid
 	output logic        rom_req,
 	output logic [19:0] rom_addr,
 	input  wire         rom_valid,
 	input  wire  [7:0]  rom_data,
 
-	// ---- audio ---------------------------------------------------------------
 	output logic signed [15:0] audio_l,
 	output logic signed [15:0] audio_r,
 	output logic        audio_stb,
 
-	// ---- instrumentation -----------------------------------------------------
 	output logic [15:0] dbg_samples   = '0,
 	output logic [15:0] dbg_overrun   = '0,
 	output logic [15:0] dbg_rom_reads = '0
@@ -87,86 +53,22 @@ module x1_010 (
 
 	function automatic logic signed [15:0] sat16(input logic signed [31:0] v);
 		if (v > 32'sd32767)       sat16 = 16'sd32767;
-		// 16'sh8000, not -16'sd32768: the decimal form asks for the literal
-		// 32768 in a 16-bit SIGNED context, where the largest representable
-		// value is 32767, and Quartus is right to warn ("constant value
-		// overflow"). It happens to produce the intended 0x8000 anyway, which
-		// is exactly why it is worth writing the unambiguous form -- a warning
-		// that is always there is a warning nobody reads.
 		else if (v < -32'sd32768) sat16 = 16'sh8000;
 		else                      sat16 = v[15:0];
 	endfunction
 
-	// =====================================================================
-	// Register / envelope / waveform RAM
-	//
-	// Two byte-wide arrays rather than one 16-bit array: the engine only ever
-	// touches the low byte, so giving it its own port on a narrow array keeps
-	// the read-back shadow out of the audio path entirely.
-	//
-	// `regmem` is TRUE dual-port -- the CPU writes registers while the engine
-	// reads them, and the engine writes back the key-off bit. One read/write
-	// port each, which an M10K provides. LESSONS_LEARNED warns that asking for
-	// two independent READ addresses plus a write makes Quartus replicate the
-	// whole array; this is not that shape, but check `Block Memory Bits` per
-	// hierarchy in the fit report rather than assuming.
-	// =====================================================================
-	// ONE WRITE PORT, TWO READS -- a SIMPLE dual-port RAM, which an M10K
-	// provides directly.
-	//
-	// Getting here took two attempts. The engine also needs to clear a
-	// channel's key-on bit when a voice ends, which reads as a second write
-	// port, and a true dual-port RAM is what that implies. Quartus inferred
-	// neither shape: with two separate always blocks it built the 8 KB array
-	// out of logic, taking the design to 122,886 combinational nodes against
-	// the 83,820 the device has -- a 47% overshoot, reported only as
-	// "Can't fit design in device", with nothing naming the RAM. Folding both
-	// ports into one always block did not infer either.
-	//
-	// So the second write is removed instead. The sixteen key-on bits already
-	// exist in flops -- `keyon_state`, which the edge detector needs anyway --
-	// and that mirror is made the AUTHORITY for bit 0 of each channel's
-	// register 0. The engine clears it directly; the array is never written by
-	// anything but the CPU.
-	//
-	// The behaviour a game can observe is preserved exactly: a CPU read of a
-	// channel's register 0 substitutes the mirror's bit, so polling for a voice
-	// to finish still works, which is what MAME's write-back to m_reg provides.
+	// Register/envelope/waveform RAM: low bytes in regmem (CPU read/write port,
+	// engine read port), high bytes in a CPU-only shadow. Register 0's key-on
+	// bit lives in keyon_state, which the engine clears when a voice ends, so
+	// the RAM has a single writer; CPU reads of register 0 substitute it.
 	logic [7:0] regmem [0:8191];
 	logic [7:0] shadow [0:8191];
 
 	logic [7:0]  cpu_q, shadow_q, eng_q;
 	logic [12:0] eng_addr;
 
-	// Key-on edge, detected AT THE WRITE. cpu_addr is a WORD address and each
-	// channel's 8 registers occupy 8 consecutive words, so the channel is
-	// addr[6:3] and the register index addr[2:0].
-	//
-	// The comparison needs the CURRENT key-on bit. `cpu_q` is no use: it is a
-	// REGISTERED read holding whatever address was presented last cycle, so
-	// comparing against it misses every edge silently -- an earlier version of
-	// this module did that and no channel ever had its accumulators reset.
-	// THE WHOLE CPU INTERFACE IS REGISTERED ONE CYCLE, and that is a timing fix
-	// with a measurement behind it.
-	//
-	// With it combinational, the worst paths in the whole Phase 0 subsystem ran
-	//   TG68K's register file -> maincpu's data out -> this address decode ->
-	//   the key-on comparison -> a 32-bit accumulator clear
-	// all in one clock, at about -1.9 ns against a 10.4167 ns period. Relaxing
-	// the CPU further did not help, because by then the failing paths were no
-	// longer inside the CPU at all -- they ended here, on smp_offset[] and
-	// env_offset[].
-	//
-	// Registering just the key-on path took it to -1.169 ns, and the remaining
-	// failures were the SAME source landing on regmem's own BRAM inputs -- the
-	// identical path one step further down. So the whole interface is
-	// registered, write and read alike, and maincpu spends one more cycle on an
-	// io access to match. That costs nothing: the CPU is stalled for the whole
-	// bus cycle and steps only once every six clocks.
-	//
-	// Read and write share the registered address deliberately. A BRAM port has
-	// ONE address; writing from the registered copy while reading from the live
-	// one needs two, which is a second port this design does not have.
+	// The CPU interface is registered (timing); maincpu allows for it. The
+	// channel is addr[6:3], the register addr[2:0].
 	logic        kw_req, kw_we, kw_lds;
 	logic [12:0] kw_addr;
 	logic [15:0] kw_wdata;
@@ -185,12 +87,9 @@ module x1_010 (
 	logic [15:0] keyon_state = '0;
 	wire        keyon_edge = cpu_wr_reg0 && !keyon_state[wr_channel] && kw_wdata[0];
 
-	// The engine clears a channel's key-on bit when its voice ends.
 	logic        eng_keyoff;
 	logic  [3:0] eng_keyoff_ch;
 
-	// Port A: CPU read/write. Port B: engine read. Two always blocks, each a
-	// plain single-port template, which is what infers.
 	wire kw_we_lo = kw_req && kw_we && kw_lds;
 	always_ff @(posedge clk) begin
 		if (kw_we_lo) regmem[kw_addr] <= kw_wdata[7:0];
@@ -207,9 +106,6 @@ module x1_010 (
 		shadow_q <= shadow[kw_addr];
 	end
 
-	// Register 0's key-on bit comes from the mirror, not the array.
-	// The read-back substitution tracks the REGISTERED address, so it lines up
-	// with cpu_q, which is now read from kw_addr.
 	logic       rd_was_reg0;
 	logic [3:0] rd_channel;
 	always_ff @(posedge clk) begin
@@ -219,22 +115,12 @@ module x1_010 (
 	assign cpu_rdata = {shadow_q,
 	                    rd_was_reg0 ? {cpu_q[7:1], keyon_state[rd_channel]} : cpu_q};
 
-	// The key-on mirror, and the authority for bit 0. Both writers update it:
-	// the CPU, and the engine when a voice ends.
 	always_ff @(posedge clk) begin
 		if (cpu_wr_reg0)   keyon_state[wr_channel]   <= cpu_wdata[0];
 		else if (eng_keyoff) keyon_state[eng_keyoff_ch] <= 1'b0;
 	end
 
-	// =====================================================================
-	// ROM response capture
-	//
-	// The transport runs at `clk`, the engine steps on `ce`. A valid pulse
-	// landing between ce ticks would simply be missed, so it is latched here,
-	// outside the ce gate, and consumed inside. This is the same class as
-	// LESSONS_LEARNED's "Capture read data on the valid pulse -- nothing in the
-	// path latches it", made worse by the clock enable.
-	// =====================================================================
+	// ROM responses arrive on clk; the engine steps on ce. Latch them.
 	logic       rom_got;
 	logic [7:0] rom_hold;
 	always_ff @(posedge clk) begin
@@ -249,9 +135,6 @@ module x1_010 (
 		end
 	end
 
-	// =====================================================================
-	// The engine
-	// =====================================================================
 	typedef enum logic [3:0] {
 		E_IDLE, E_R0, E_R1, E_R2, E_R3, E_R4, E_R5, E_CALC,
 		E_ENVRD, E_WAVRD, E_ROMREQ, E_ROMWAIT, E_ACC, E_NEXT
@@ -267,12 +150,7 @@ module x1_010 (
 	logic [31:0] step, env_step;
 	logic [23:0] pcm_start, pcm_end;
 	logic        pass_busy;
-	// The mix emitted at a sample boundary is the one the PREVIOUS period
-	// computed -- a one-period pipeline, which is free in hardware and must
-	// not be emitted before there is anything in it. Without this the first
-	// sample after reset is an empty accumulator, and every later sample is
-	// off by one against a reference that starts at its first real sample.
-	logic        primed;
+	logic        primed;     // a sample period has completed since reset
 
 	logic [31:0] smp_offset [0:15];
 	logic [31:0] env_offset [0:15];
@@ -285,13 +163,7 @@ module x1_010 (
 	wire        one_shot   = r0[2];
 	wire        div        = r0[7];
 
-	// The counters carry NO reset, deliberately: one cleared by the reset under
-	// investigation reads zero and gets reported as a finding
-	// (LESSONS_LEARNED, "Never reset a debug counter with the reset you are
-	// investigating"). Their power-up value is the port declaration initialiser
-	// above -- an `initial` block would be a second driver and is rejected.
-	// They SATURATE rather than wrap: a wrapped 3 could mean "three times" or
-	// "65,539 times", and those lead to opposite conclusions.
+	// dbg_* counters saturate and are not reset.
 
 	always_ff @(posedge clk) begin
 		audio_stb  <= 1'b0;
@@ -313,7 +185,6 @@ module x1_010 (
 				env_offset[i] <= '0;
 			end
 		end else begin
-			// Key-on resets both accumulators, AT THE WRITE.
 			if (keyon_edge) begin
 				smp_offset[wr_channel] <= '0;
 				env_offset[wr_channel] <= '0;
@@ -322,11 +193,7 @@ module x1_010 (
 			if (ce) begin
 				if (tick == 10'd511) begin
 					tick <= 10'd0;
-					// MAME's units are data*vol*VOL_BASE against a full scale
-					// of 32768*256, so a 16-bit sample is acc*VOL_BASE/256.
-					// Saturate rather than wrap: sixteen channels at maximum
-					// exceed full scale, and a wrapping accumulator was a real
-					// defect on Psikyo.
+					// acc * VOL_BASE / 256, saturated
 					audio_l   <= sat16((acc_l * VOL_BASE) >>> 8);
 					audio_r   <= sat16((acc_r * VOL_BASE) >>> 8);
 					audio_stb <= primed;
@@ -344,26 +211,9 @@ module x1_010 (
 					tick <= tick + 10'd1;
 				end
 
-				// READ TIMING, and why there is no pipeline stage here.
-				//
-				// `eng_q <= regmem[eng_addr]` runs every clk, but the engine
-				// steps on `ce` -- one clk in CE_DIV. So an address set in one
-				// engine step has been read out CE_DIV-1 clocks before the
-				// next, and eng_q is already the byte for the address the
-				// PREVIOUS state set. Each state therefore captures its own
-				// byte and sets the next address; there is no wait state.
-				//
-				// The first version of this module carried an extra lead-in
-				// state, on the reasoning that a registered RAM needs its
-				// latency spent (LESSONS_LEARNED, "Give a registered RAM its
-				// full read latency"). That rule is right and does not apply
-				// here, and applying it anyway shifted every capture by one:
-				// r0 got register 1, r1 got register 2, and every channel read
-				// its mode and key-on bits out of its volume register. The
-				// mix was silent and no PCM voice ever requested a sample.
-				//
-				// THIS DEPENDS ON CE_DIV > 1. At CE_DIV == 1 the read would
-				// not have completed and the extra state WOULD be needed.
+				// eng_q holds the byte for the address set by the previous
+				// engine step (ce is one clk in several), so each state
+				// captures its byte and sets the next address.
 				case (st)
 					E_IDLE: ;
 
@@ -376,9 +226,6 @@ module x1_010 (
 
 					E_CALC: begin
 						st <= E_NEXT;                        // default: channel idle
-						// The mirror, not r0[0]: the array no longer carries a
-						// live key-on bit, since the engine's key-off updates
-						// only the mirror.
 						if (keyon_state[ch]) begin           // key on
 							if (!r0[1]) begin
 								// ---- PCM ----
@@ -404,16 +251,12 @@ module x1_010 (
 
 					// ---- waveform ----
 					E_ENVRD: begin
-						// One-shot key-off is checked BEFORE the envelope byte
-						// is used, exactly as MAME orders it.
 						if (one_shot && (env_delta >= 32'd128)) begin
 							eng_keyoff    <= 1'b1;
 							eng_keyoff_ch <= ch;
 							st            <= E_NEXT;
 						end else begin
-							// eng_q is the ENVELOPE byte, and in waveform mode
-							// that is where the volume comes from -- not r1,
-							// which selects the waveform.
+							// volume from the envelope byte
 							vol_l <= eng_q[7:4];
 							vol_r <= eng_q[3:0];
 							// wave = 0x1000 + (r1 << 7) + ((smp_offs >> 10) & 0x7f)
@@ -448,8 +291,6 @@ module x1_010 (
 					end
 
 					E_ACC: begin
-						// Both modes land here with `sample` holding the byte
-						// and vol_l/vol_r the volumes.
 						acc_l <= acc_l + $signed({{10{sample[7]}}, sample}) *
 						                 $signed({14'd0, vol_l});
 						acc_r <= acc_r + $signed({{10{sample[7]}}, sample}) *

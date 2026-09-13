@@ -1,82 +1,26 @@
-// Seta X1-012 tile layer generator, one scanline at a time.
+// X1-012 tile layer, rendered a scanline ahead into a double line buffer.
+// Reference: scripts/x1_012_model.py (MAME's video/x1_012.cpp).
 //
-// The golden reference is scripts/x1_012_model.py, which is a line-by-line
-// transcription of MAME's video/x1_012.cpp and is pixel-identical to MAME's
-// own render on 12 of 12 frames across drgnunit, stg, qzkklogy and qzkklgy2.
-// Everything here is written against that model, not against the C++ directly.
+// One 64x32 tilemap of 16x16 tiles (1024x512, wrapping). VRAM holds two
+// tilemaps; vctrl[2] bit 3 selects which (the second at word 0x1000). Per tile:
+//     code = vram[i] & 0x3fff, colour = vram[i + 0x800] & 0x1f,
+//     bit 15 FLIPX, bit 14 FLIPY (TILE_FLIPXY transposes them)
 //
-// WHAT THE CHIP IS
+// 4bpp (layout_tilemap): a tile row is four 16-bit chunks at w0, w0+8, w0+16,
+// w0+24 of the tile's 64 words, w0 = (y >= 8 ? 32 : 0) + (y & 7); the chunk at
+// w0+24 holds pixels 0..3. Pixel i of a chunk: pen[3] = chunk[15-i],
+// pen[2] = chunk[11-i], pen[1] = chunk[7-i], pen[0] = chunk[3-i].
+// 6bpp (layout_tilemap_6bpp): 192 bytes a tile, 3-byte chunks.
 //
-//   One tilemap, TILEMAP_SCAN_ROWS, 16x16 tiles, 64 columns by 32 rows --
-//   1024x512 pixels, wrapping in both axes. Each layer's VRAM holds TWO
-//   tilemaps and only one is displayed; vctrl[2] bit 3 picks it, and the second
-//   lives at word offset 0x1000.
-//
-//   Per tile, from the selected bank:
-//       code  = vram[i] & 0x3fff
-//       attr  = vram[i + 0x800],  colour = attr & 0x1f
-//   and the flip bits are bits 15 and 14 of the code word -- IN THAT ORDER.
-//   MAME writes TILE_FLIPXY((word & 0xc000) >> 14), and that macro TRANSPOSES
-//   its two bits:
-//       TILE_FLIPXY(xy) = ((xy & 2) >> 1) | ((xy & 1) << 1)
-//   with TILE_FLIPX = 1 and TILE_FLIPY = 2. So word bit 14 is FLIPY and bit 15
-//   is FLIPX, the opposite way round to what the name reads like. Reading it
-//   the natural way costs 2-5% of the pixels, only on frames that contain a
-//   flipped tile, which is why it survived three of four sets looking correct.
-//
-// THE TILE FETCH, which is the whole reason this module is not trivial
-//
-//   layout_tilemap packs the four bitplanes together, and one 16-pixel ROW of
-//   a tile is FOUR 16-BIT CHUNKS EIGHT WORDS APART inside the tile's 64 words:
-//
-//       w0 = (y >= 8 ? 32 : 0) + (y & 7)
-//       chunks at w0, w0 + 8, w0 + 16, w0 + 24
-//
-//   The chunk at w0+24 holds pixels 0..3, w0+16 holds 4..7, w0+8 holds 8..11
-//   and w0 holds 12..15 -- descending, because layout_tilemap's x offsets run
-//   in descending groups of four.
-//
-//   Within a chunk, pixel i of the four takes one bit from each plane, and the
-//   FIRST PLANE LISTED IS THE MOST SIGNIFICANT BIT of the pen:
-//
-//       pen[3] = chunk[15 - (i     )]
-//       pen[2] = chunk[15 - (i +  4)]
-//       pen[1] = chunk[15 - (i +  8)]
-//       pen[0] = chunk[15 - (i + 12)]
-//
-//   VERIFIED, not derived: this formula was checked against the model's own
-//   decoder over 1024 tile rows with zero mismatches before a line of this
-//   module was written. Phase 1's record is that every graphics layout reasoned
-//   out from byte order was wrong and every one tested against real data was
-//   right.
-//
-//   Four granule reads per tile row, and only 16 of each granule's 64 bits are
-//   used. That is wasteful and deliberate: a visible line spans at most 25
-//   tiles, so 100 reads sit well inside the same per-line budget the sprite
-//   engine lives on, and correctness comes before the download-time swizzle
-//   that would fold each row into one granule.
-//
-// WHAT IS NOT HERE
-//
-//   draw_tilemap_palette_effect -- blandia's second-palette trick. That lives
-//   in the mixer, because what it substitutes is the pixel ALREADY composited
-//   underneath, which this engine cannot see.
-//
-//   The colour-mode bit, vctrl[2] bit 4, is exported rather than acted on. It
-//   selects a second gfx decode, and on every game but blandia that decode
-//   differs only in a palette base the colortable maps to the same place --
-//   so there is nothing to do here. On blandia it changes the palette
-//   arithmetic, which happens in x1_011_index.sv.
+// vctrl[2] bit 4 (colour mode) is only exported; blandia's use of it and its
+// palette effect are in seta_video.sv / x1_011_index.sv.
 module x1_012 #(
 	parameter int LB_W = 11
 ) (
 	input  wire         clk,
 	input  wire         reset,
 
-	// ---- CPU side ----------------------------------------------------------
-	// Registered in, for the reason rtl/cpu/maincpu.sv's four-cycle access
-	// exists: a peripheral RAM hanging combinationally off the CPU's outputs
-	// was the critical path of the whole design twice over.
+	// CPU (registered in)
 	input  wire         vram_we,
 	input  wire  [12:0] vram_addr,          // word address into 0x2000 words
 	input  wire  [15:0] vram_wdata,
@@ -89,59 +33,48 @@ module x1_012 #(
 	input  wire         vctrl_uds, vctrl_lds,
 	output logic [15:0] vctrl_rdata,
 
-	// vctrl[2] bit 4, latched at vblank with the bank bit. See the header.
+	// vctrl[2] bit 4, latched at vblank
 	output logic        cmode = 1'b0,
 
-	// ---- configuration -----------------------------------------------------
 	input  wire signed [8:0] xoffs,         // set_xoffsets(flip, noflip)
 	input  wire signed [8:0] xoffs_flip,
 	input  wire         flipscr,
 	input  wire   [8:0] vis_dimy,           // visible_area height, 240
+	// flipped mirror size: 512 and 256
+	input  wire   [9:0] xextent,
+	input  wire   [8:0] yextent,
 	input  wire [LB_W-1:0] colorbase,       // the GFXDECODE_ENTRY base
-	// drawgfx.cpp: `code %= elements()`. NOT a mask -- see the note below.
+	// code %= elements(), not a mask
 	input  wire  [15:0] code_limit,
-	// layout_tilemap_6bpp. A tile is 192 bytes rather than 128 and a pen is
-	// six bits rather than four; see the fetch below.
 	input  wire         bpp6,
 
-	// ---- line engine -------------------------------------------------------
-	// VBLANK LATCH. The bank bit is sampled at vblank_rise, the same pulse the
-	// sprite engine takes its snapshot on, not read live
-	// per tile. Daioh flips vctrl[2] bit 3 at scanline 112 every frame and
-	// writes the newly selected bank during the following vblank; read live,
-	// lines 112-247 showed a bank one frame stale. MAME draws the whole frame
-	// at vblank from the bit's value then; this is the same thing.
+	// bank select and scroll are latched at vblank_rise, as MAME draws the frame
 	input  wire         vblank_rise,
 	input  wire         line_start,
 	input  wire   [8:0] line,
 	input  wire  [15:0] line_budget,
+	// tile row cache (Debug page)
+	input  wire         cache_en,
 	output logic        line_done,
 	output logic        busy,
 
-	// ---- tile ROM ----------------------------------------------------------
 	output logic        rom_req,
 	output logic [23:3] rom_addr,
 	input  wire         rom_valid,
 	input  wire  [63:0] rom_data,
 
-	// ---- line buffer readback ---------------------------------------------
 	input  wire   [8:0] lb_addr,
 	output logic [LB_W-1:0] lb_data,
 
-	output logic [15:0] dbg_lines   = '0,
-	output logic [15:0] dbg_tiles   = '0,
+	// per frame, latched at vblank: lines cut at the budget, rows served from the cache
+	output logic [15:0] dbg_cut     = '0,
+	output logic [15:0] dbg_hits    = '0,
 	output logic [15:0] dbg_overrun = '0,
-	// The last granule this engine received: the address it asked for and
-	// the 64 bits that came back. Compared against the ROM image offline,
-	// this separates "SDRAM holds the wrong bytes" from "the engine or the
-	// arbiter handed them to the wrong client".
+	// last granule received, for comparison with the ROM image
 	output logic [23:3] dbg_last_addr = '0,
 	output logic [63:0] dbg_last_data = '0
 );
 
-	// =====================================================================
-	// CPU-visible state
-	// =====================================================================
 	logic        v_we, v_uds, v_lds;
 	logic [12:0] v_addr;
 	logic [15:0] v_wdata;
@@ -167,8 +100,7 @@ module x1_012 #(
 	end
 	always_ff @(posedge clk) eng_vq <= vram[eng_vaddr];
 
-	// Three 16-bit control registers. vctrl[0] is scroll X, [1] scroll Y and
-	// [2] the bank and colour-mode bits.
+	// vctrl[0] scroll X, [1] scroll Y, [2] bank and colour mode
 	logic [15:0] vctrl [0:2];
 	always_ff @(posedge clk) begin
 		if (c_we && c_addr < 2'd3) begin
@@ -178,13 +110,6 @@ module x1_012 #(
 		vctrl_rdata <= vctrl[c_addr < 2'd3 ? c_addr : 2'd0];
 	end
 
-	// THE SCROLL REGISTERS ARE LATCHED HERE TOO, at the same vblank the sprite
-	// engine snapshots its RAM on. Read per line, a scroll written at scanline
-	// 112 took effect on that frame while the sprite list written by the same
-	// handler showed a frame later: the layers and the sprites came apart by a
-	// frame. MAME draws everything from the registers' values at vblank.
-	// (Caliber 50's per-scanline raster effect is not reproduced by this;
-	// docs/MAME_DIVERGENCE.md.)
 	logic       bank_sel = 1'b0;
 	logic [15:0] vctrl0_lat = '0, vctrl1_lat = '0;
 	always_ff @(posedge clk) if (vblank_rise) begin
@@ -195,44 +120,27 @@ module x1_012 #(
 	end
 	wire [12:0] bank_off = bank_sel ? 13'h1000 : 13'h0000;
 
-	// =====================================================================
-	// update_scroll, transcribed
-	//
+	// update_scroll:
 	//     x = vctrl[0] + 0x10 - xoffsets[flip]
 	//     y = vctrl[1] - (256 - vis_dimy) / 2
-	//     if (flip) { x = -x - 512; y = y - vis_dimy; }
-	//
-	// Latched once per line: nothing here changes within a line, and keeping
-	// the arithmetic off the per-pixel path is the same lesson the sprite
-	// engine's foreground hit test learned the expensive way.
-	// =====================================================================
 	wire signed [8:0] xo = flipscr ? xoffs_flip : xoffs;
 	wire [15:0] sx_base = vctrl0_lat + 16'h0010 - {{7{xo[8]}}, xo};
 	wire [15:0] sy_base = vctrl1_lat - {7'd0, (9'd256 - vis_dimy) >> 1};
 	// if (flip) { x = -x - 512; y = y - vis_dimy; }
-	//
-	// SCREEN FLIP IS NOT VERIFIED and is parked. This is the transcription of
-	// update_scroll's flipped branch and the map mirroring that goes with it,
-	// but the model it would be checked against fails the only flipped capture
-	// that exists by 29.6% -- and seta.cpp's own TODO says "drgnunit sprite/bg
-	// unaligned when screen flipped" and "tilemap flipping is also kludged in
-	// the video driver", so the reference is itself suspect. See
-	// docs/MAME_DIVERGENCE.md. sim/x1_012_tb refuses a flipped fixture.
-	//
-	// PER-TILE FLIP IS A DIFFERENT THING AND IS CORRECT: the tile word's
-	// flipx/flipy are exercised by 24 of 24 bench runs on frames that contain
-	// flipped tiles.
 	wire [15:0] scroll_x_raw = flipscr ? (16'd0 - sx_base - 16'd512) : sx_base;
 	wire [15:0] scroll_y_raw = flipscr ? (sy_base - {7'd0, vis_dimy}) : sy_base;
 
 	logic [9:0] scroll_x;
 	logic [8:0] scroll_y;
 	logic [8:0] cur_line;
+	logic       flip_l;                  // flipscr, latched per line
+	logic [9:0] xe_m1;                   // xextent - 1, registered
+	logic [8:0] ye_m1;
+	always_ff @(posedge clk) begin
+		xe_m1 <= xextent - 10'd1;
+		ye_m1 <= yextent - 9'd1;
+	end
 
-	// =====================================================================
-	// Line buffer, double buffered exactly as x1_001's is: the engine renders
-	// one line ahead into the bank the display is not reading.
-	// =====================================================================
 	logic [LB_W-1:0] lbuf0 [0:511];
 	logic [LB_W-1:0] lbuf1 [0:511];
 	logic            render_bank = 1'b0;
@@ -254,11 +162,8 @@ module x1_012 #(
 	always_ff @(posedge clk) disp_bank <= ~render_bank;
 	assign lb_data = disp_bank ? lb_q1 : lb_q0;
 
-	// =====================================================================
-	// The engine
-	// =====================================================================
 	typedef enum logic [3:0] {
-		S_IDLE, S_LATCH, S_TILE, S_TILE2, S_ATTR, S_ATTR2,
+		S_IDLE, S_LATCH, S_TILE, S_TILE2, S_ATTR, S_ATTR2, S_CACHE, S_CHECK,
 		S_FETCH, S_WAIT, S_FETCH2, S_WAIT2, S_BLIT, S_NEXT, S_DONE
 	} state_t;
 	state_t state = S_IDLE;
@@ -273,82 +178,52 @@ module x1_012 #(
 	logic [15:0] chunks [0:3];
 	logic [15:0] line_cycles;
 
-	// The tilemap row this scanline lands on, and the row within the tile.
-	// set_flip(TILEMAP_FLIPX | TILEMAP_FLIPY) mirrors the WHOLE 1024x512 pixmap
-	// about itself, and the scroll is applied to the mirrored map -- which the
-	// model does as
-	//     px = (1023 - (x + sx)) & 1023
-	//     py = (511  - (y + sy)) & 511
-	// so the same two subtractions land here, on the map coordinates rather
-	// than on the tile lookup, and everything downstream is unchanged.
-	wire  [8:0] map_y_u = cur_line + scroll_y;
-	wire  [8:0] map_y   = flipscr ? (9'd511 - map_y_u) : map_y_u;
+	// Map pixel for screen (x, y): (x + sx, y + sy); flipped,
+	// (xextent - 1 - x + sx, yextent - 1 - y + sy), the tiles drawn reversed.
+	wire  [8:0] map_y   = flip_l ? (ye_m1 + scroll_y - cur_line) : (cur_line + scroll_y);
 	wire  [4:0] map_row = map_y[8:4];
 	wire  [3:0] row_in  = map_y[3:0];
 
-	// The tilemap column for the current tile, and its index.
-	wire  [9:0] map_x_u = px + scroll_x;
-	wire  [9:0] map_x   = flipscr ? (10'd1023 - map_x_u) : map_x_u;
+	wire  [9:0] map_x   = flip_l ? (xe_m1 + scroll_x - px) : (px + scroll_x);
+	// flipped, the tile starts 15 - map_x[3:0] left of px
+	wire  [3:0] align   = flip_l ? ~map_x[3:0] : map_x[3:0];
+	wire        fx      = tile_fx ^ flip_l;
 	wire  [5:0] map_col = map_x[9:4];
 	wire [10:0] tile_ix = {map_row, map_col};      // TILEMAP_SCAN_ROWS
 
-	// The row inside the tile, after the tile's own vertical flip.
 	wire  [3:0] eff_row = tile_fy ? (4'd15 - row_in) : row_in;
 
-	// w0 = (y >= 8 ? 32 : 0) + (y & 7), then chunk c is at w0 + c*8.
 	wire  [5:0] w0      = {eff_row[3], 2'b00, eff_row[2:0]};
 	wire  [5:0] w_sel   = w0 + {chunk, 3'b000};
-	// 64 words per tile, and a granule is four words: the granule address is
-	// (code * 64 + word) >> 2, and the word within it selects 16 of the 64 bits.
-	// ONE CONDITIONAL SUBTRACT IS THE MODULO. A code is 14 bits and every
-	// element count in scope is over 8192, so a code can never be more than
-	// twice the limit and a single subtract reduces it exactly. zingzip's
-	// 6bpp layer is the one whose count -- 10922 -- is not a power of two,
-	// where a mask would have read past the end of the region into whatever
-	// SDRAM holds next.
-	//
-	// REGISTERED, one state after the code arrives. Combinationally, this
-	// compare and subtract fed the tile's byte base -- three more adds -- and
-	// then rom_addr, and the whole chain missed the 10.416 ns period by
-	// 1.25 ns. S_ATTR and S_ATTR2 are spare cycles between the code arriving
-	// and the first fetch, so the reduction takes one and the multiply the
-	// other; nothing downstream changes.
+	// granule = (code * 64 + word) >> 2. One conditional subtract is the
+	// modulo: every element count is over half the 14-bit code range
+	// (zingzip's 10922 is not a power of two). Registered (timing).
 	logic [15:0] tile_lim;
 	wire  [15:0] tile_lim_c = (tile_code >= code_limit)
 	                        ? (tile_code - code_limit) : tile_code;
 
 	wire [21:0] word_ix = {tile_lim[13:0], 6'd0} + {16'd0, w_sel};
 
-	// ---- 6bpp ---------------------------------------------------------------
-	// BYTE offsets, because 192 and 24 are not multiples of the 2-byte word the
-	// 4bpp path counts in. tile*192 = tile*128 + tile*64; chunk*24 =
-	// chunk*16 + chunk*8.
-	// tile * 192 = tile*128 + tile*64, registered for the same reason.
+	// 6bpp byte offsets: tile*192 = tile*128 + tile*64, registered
 	wire [13:0] code6   = tile_lim[13:0];
 	logic [22:0] tile_b6;
 	wire [22:0] tile_b6_c = {code6, 7'd0} + {1'b0, code6, 6'd0};
-	// 96*h + 3*(y&7). 96 is 64 + 32, not 64: the second half of the tile
-	// starts at 6*4*8*4 bits.
+	// 96*h + 3*(y & 7)
 	wire  [7:0] row_b6  = {eff_row[3], 6'd0} + {1'b0, eff_row[3], 5'd0}
 	                    + {3'd0, eff_row[2:0], 1'b0} + {5'd0, eff_row[2:0]};
 	wire  [6:0] chk_b6  = {chunk, 4'd0} + {1'b0, chunk, 3'd0};   // 24*chunk
 	wire [22:0] byte_ix = tile_b6 + {15'd0, row_b6} + {16'd0, chk_b6};
 
-	// The three bytes start at byte_ix and may cross into the next granule.
+	// three bytes from byte_ix, possibly across two granules
 	wire  [2:0] sub6     = byte_ix[2:0];
 	wire        strad6   = sub6 > 3'd5;
 
-	// A granule in ROM byte order: sdram.sv delivers four 16-bit words with
-	// word 0 in the low bits, and a word holds {odd byte, even byte}, so ROM
-	// byte i is simply bits [8i +: 8]. The 4bpp path says the same thing the
-	// long way round, by selecting a word and swapping its halves.
+	// ROM byte i of a granule
 	function automatic [7:0] gbyte(input [63:0] g, input [2:0] i);
 		gbyte = g[{i, 3'd0} +: 8];
 	endfunction
 
-	// Six planes, MSB first -- planeoffset[0] is the TOP bit of the pen, the
-	// same convention the 4bpp pen_of carries and the one the model scored
-	// 100% with against MAME's own render.
+	// six planes, MSB first
 	function automatic [5:0] pen6(input [23:0] v, input [1:0] i);
 		pen6 = { v[23 - {4'd0, i}],
 		         v[23 - ({4'd0, i} + 5'd4)],
@@ -365,7 +240,6 @@ module x1_012 #(
 		           w[15 - ({3'd0, i} + 4'd12)] };
 	endfunction
 
-	// The 16-bit word this granule read is for, in sdram.sv's order.
 	wire [15:0] rom_word = word_ix[1:0] == 2'd0 ? rom_data[15:0]  :
 	                       word_ix[1:0] == 2'd1 ? rom_data[31:16] :
 	                       word_ix[1:0] == 2'd2 ? rom_data[47:32] :
@@ -373,14 +247,44 @@ module x1_012 #(
 
 	logic [4:0] blit_px;         // 0..15 within the tile
 
-	// The 6bpp chunks, and the first granule of a straddling pair.
+	// 6bpp chunks, and the first granule of a straddling pair
 	logic [23:0] chunks6 [0:3];
 	logic [63:0] gran_lo;
+
+	// Tile row cache: the four chunks of a row depend only on the reduced code
+	// and the row, so a direct-mapped cache skips the fetches for repeated
+	// tiles (tile engines share an SDRAM port with the sprites and would
+	// otherwise run out of line time). Entries carry an epoch that advances on
+	// every reset release, so a newly loaded game never hits an old entry.
+	localparam int TC_N = 64;
+	logic [129:0] tcache [0:TC_N-1];          // {epoch 16, code 14, row 4, chunks 96}
+	logic [129:0] tc_q, tc_wdata;
+	logic   [5:0] tc_raddr, tc_waddr;
+	logic         tc_we;
+	logic  [15:0] tc_epoch = 16'd1;
+	logic         reset_q = 1'b0;
+	logic         from_cache;
+	logic  [15:0] cut_acc = '0, hit_acc = '0;
+	wire    [5:0] tc_idx = tile_lim[5:0] ^ tile_lim[11:6] ^ {eff_row, 2'b00};
+	always_ff @(posedge clk) begin
+		if (tc_we) tcache[tc_waddr] <= tc_wdata;
+		tc_q <= tcache[tc_raddr];
+	end
+	always_ff @(posedge clk) begin
+		reset_q <= reset;
+		if (reset_q && !reset) tc_epoch <= tc_epoch + 16'd1;
+	end
 
 	always_ff @(posedge clk) begin
 		lb_we    <= 1'b0;
 		rom_req  <= 1'b0;
 		line_done <= 1'b0;
+		tc_we    <= 1'b0;
+
+		if (vblank_rise) begin
+			dbg_cut  <= cut_acc;  cut_acc <= '0;
+			dbg_hits <= hit_acc;  hit_acc <= '0;
+		end
 
 		if (reset) begin
 			state       <= S_IDLE;
@@ -388,11 +292,11 @@ module x1_012 #(
 			line_cycles <= '0;
 		end else if (line_start) begin
 			if (state != S_IDLE) dbg_overrun <= dbg_overrun + 16'd1;
-			dbg_lines   <= dbg_lines + 16'd1;
 			render_bank <= ~render_bank;
 			cur_line    <= line;
 			scroll_x    <= scroll_x_raw[9:0];
 			scroll_y    <= scroll_y_raw[8:0];
+			flip_l      <= flipscr;
 			line_cycles <= '0;
 			col         <= 5'd0;
 			px          <= 10'd0;
@@ -402,12 +306,12 @@ module x1_012 #(
 
 			if (line_budget != 16'd0 && line_cycles >= line_budget
 			    && state != S_IDLE && state != S_DONE) begin
-				state <= S_DONE;
+				cut_acc <= cut_acc + 16'd1;
+				state   <= S_DONE;
 			end else
 			case (state)
 			S_IDLE: ;
 
-			// The scroll registers are latched; start the first tile.
 			S_LATCH: begin
 				eng_vaddr <= bank_off + {2'd0, tile_ix};
 				state     <= S_TILE;
@@ -416,7 +320,6 @@ module x1_012 #(
 			S_TILE:  state <= S_TILE2;                // RAM latency
 			S_TILE2: begin
 				tile_code <= eng_vq[13:0];
-				// TILE_FLIPXY transposes: bit 15 is FLIPX, bit 14 is FLIPY.
 				tile_fx   <= eng_vq[15];
 				tile_fy   <= eng_vq[14];
 				eng_vaddr <= bank_off + {2'd0, tile_ix} + 13'h800;
@@ -431,7 +334,26 @@ module x1_012 #(
 				tile_color <= eng_vq[4:0];
 				tile_b6    <= tile_b6_c;
 				chunk      <= 2'd0;
-				state      <= S_FETCH;
+				tc_raddr   <= tc_idx;
+				from_cache <= 1'b0;
+				state      <= cache_en ? S_CACHE : S_FETCH;
+			end
+
+			S_CACHE: state <= S_CHECK;                // RAM latency
+
+			S_CHECK: begin
+				if (tc_q[129:114] == tc_epoch && tc_q[113:100] == tile_lim[13:0]
+				    && tc_q[99:96] == eff_row) begin
+					chunks6[0] <= tc_q[23:0];   chunks6[1] <= tc_q[47:24];
+					chunks6[2] <= tc_q[71:48];  chunks6[3] <= tc_q[95:72];
+					chunks[0]  <= tc_q[15:0];   chunks[1]  <= tc_q[31:16];
+					chunks[2]  <= tc_q[47:32];  chunks[3]  <= tc_q[63:48];
+					from_cache <= 1'b1;
+					hit_acc    <= hit_acc + 16'd1;
+					blit_px    <= 5'd0;
+					state      <= S_BLIT;
+				end else
+					state <= S_FETCH;
 			end
 
 			S_FETCH: begin
@@ -440,7 +362,7 @@ module x1_012 #(
 				state    <= S_WAIT;
 			end
 
-			// The second granule of a straddling 6bpp chunk.
+			// second granule of a straddling 6bpp chunk
 			S_FETCH2: begin
 				rom_req  <= 1'b1;
 				rom_addr <= byte_ix[22:3] + 20'd1;
@@ -465,18 +387,7 @@ module x1_012 #(
 			S_WAIT: if (rom_valid) begin
 				dbg_last_addr <= rom_addr;
 				dbg_last_data <= rom_data;
-				// TWO CONVENTIONS, BOTH EASY TO GET BACKWARDS.
-				//
-				// A granule is four consecutive 16-bit words with WORD 0 IN THE
-				// LOW BITS -- rom_data[16*i +: 16] -- which is sdram.sv's order.
-				//
-				// And a word IN SDRAM is {odd byte, even byte}, while the tile
-				// data is big-endian in the ROM, so the halves arrive swapped
-				// and are swapped back here. Getting this wrong does not give
-				// noise: it gives a plausible picture with every pair of pixels
-				// exchanged, which reads as a layout bug. LESSONS_LEARNED
-				// already carries it once, as "a behavioural ROM in a bench
-				// must speak the transport's byte order".
+				// word 0 in the low bits; SDRAM words are {odd, even}, the ROM big-endian
 				chunks[chunk] <= { rom_word[7:0], rom_word[15:8] };
 				if (bpp6) begin
 					gran_lo <= rom_data;
@@ -495,40 +406,36 @@ module x1_012 #(
 				end
 			end
 
-			// Sixteen pixels, one per cycle. Chunk 3 holds pixels 0-3.
+			// sixteen pixels, one per cycle
 			S_BLIT: begin
+				// an SDRAM row enters the cache on the first pixel
+				if (blit_px == 5'd0 && cache_en && !from_cache) begin
+					tc_we    <= 1'b1;
+					tc_waddr <= tc_raddr;
+					tc_wdata <= {tc_epoch, tile_lim[13:0], eff_row,
+					             bpp6 ? {chunks6[3], chunks6[2], chunks6[1], chunks6[0]}
+					                  : {32'd0, chunks[3], chunks[2], chunks[1], chunks[0]}};
+				end
 				lb_we    <= 1'b1;
 				lb_waddr <= px[8:0] + {5'd0, blit_px[3:0]}
-				            - {5'd0, map_x[3:0]};   // align to the tile edge
-				// FLIPX REVERSES THE CHUNK INDEX AS WELL as the position
-				// within the chunk. Pixel j takes source pixel 15 - j, and
-				// since chunk 3 holds pixels 0..3 the source chunk for a
-				// flipped tile is j>>2, not 3 - (j>>2). Reversing only within
-				// the chunk gives four-pixel groups in the right order but the
-				// groups themselves in the wrong one -- which is why six of
-				// twenty-four frames failed, all of them by small counts, on
-				// exactly the frames that contain a flipped tile.
-				// SIX BITS OF PEN, so the colour steps by 64 rather than 16.
-				// The per-family index remaps the 6bpp games need on top of
-				// this live in the mixer, not here: this is the gfx_element's
-				// own (color, pen) pair, which is what MAME hands to them.
+				            - {5'd0, align};        // align to the tile edge
+				// flipped: source chunk j>>2, pixel 3 - (j & 3). 6bpp colour steps by 64.
 				lb_wdata <= bpp6
 				    ? colorbase + {tile_color, 6'd0}
-				      + {5'd0, pen6(chunks6[tile_fx ? blit_px[3:2]
+				      + {5'd0, pen6(chunks6[fx ? blit_px[3:2]
 				                                    : (2'd3 - blit_px[3:2])],
-				                    tile_fx ? (2'd3 - blit_px[1:0])
+				                    fx ? (2'd3 - blit_px[1:0])
 				                            : blit_px[1:0])}
 				    : colorbase + {2'd0, tile_color, 4'd0}
-				      + {7'd0, pen_of(chunks[tile_fx ? blit_px[3:2]
+				      + {7'd0, pen_of(chunks[fx ? blit_px[3:2]
 				                                     : (2'd3 - blit_px[3:2])],
-				                      tile_fx ? (2'd3 - blit_px[1:0])
+				                      fx ? (2'd3 - blit_px[1:0])
 				                              : blit_px[1:0])};
 				if (blit_px == 5'd15) state <= S_NEXT;
 				else blit_px <= blit_px + 5'd1;
 			end
 
 			S_NEXT: begin
-				dbg_tiles <= dbg_tiles + 16'd1;
 				if (col == 5'd24) state <= S_DONE;
 				else begin
 					col   <= col + 5'd1;

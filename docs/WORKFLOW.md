@@ -270,6 +270,12 @@ Get-Process vsim,vsimk | Select-Object Id,ProcessName,CPU,WorkingSet64,StartTime
 
 `taskkill //PID <n> //F` fails against these; `Stop-Process -Force` succeeds.
 
+`scripts/run_verilator.sh <tb>` runs a bench under Verilator 5 (`--binary --timing`, the MSYS2
+MinGW64 install at `E:\msys64`) from the file list in `sim/<tb>/verilator.files`. `rom_loader_tb`
+takes 11 s there and 4 minutes in ModelSim ASE, with the same result. Verilator is two-state and
+rejects some constructs ModelSim and Quartus accept (a zero-width cast in `sdram_arbiter` at N=1),
+so a bench is not ported until both simulators agree on it once. hwlock does not see Verilator.
+
 The rest of testbench discipline is in LESSONS_LEARNED's "Testbench discipline" section — read it
 before writing a new bench rather than after one gives a confident wrong answer.
 

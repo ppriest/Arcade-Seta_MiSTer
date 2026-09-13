@@ -47,12 +47,7 @@ This is SCREEN flip, not per-tile or per-sprite flip. Those are verified:
 tile flipx/flipy by `sim/x1_012_tb` across 24 runs on frames containing
 flipped tiles, sprite flips by `sim/x1_001_tb` across 90.
 
-`drgnunit` is a Phase 2 set, so the reference for screen flip is one MAME says
-is wrong. A flipped `drgnunit` capture differs by 29.6%, all in the tilemap;
-eight candidate mappings top out at 70.37% with three tied.
-
-*Unresolved and parked. `sim/x1_012_tb` refuses a flipped fixture. A PCB video
-may be the only usable reference.*
+*Replaced: see "Screen flip is the unflipped frame rotated 180 degrees" below.*
 
 ### `x1_010` zero-frequency substitution
 
@@ -346,6 +341,39 @@ to one ROM revision's RAM layout (the US 9/28/95 set; the prototypes' code
 is stated to be the same), and it can affect nothing the game does. The
 raw-value alternative (MAME's PORT_CROSSHAIR convention) cannot match the
 game's own reticle, because the calibration lives in the game.
+
+### Screen flip is the unflipped frame rotated 180 degrees
+
+The reference for flip screen is not MAME's render but the definition: a
+flipped frame is the unflipped frame rotated 180 degrees about the visible
+window. MAME is 128 px off on every flipped tile layer (64 on the 320-wide
+sets) and 8 lines off on flipped foreground sprites of the 240-line sets.
+
+How it was measured. `scripts/flip_sweep.py` captures each set with its flip
+DIP off and on at the same frame. Where the tile RAM matched between the two,
+the model's flipped layer, rotated, was compared with the unflipped one
+(`debug/flipcheck_layers.py`, `debug/flipcheck_sprites.py`, not committed).
+What the core now does:
+
+- **Tile layers** mirror about the 512x256 bitmap, with the horizontal scroll
+  inverted: screen (x, y) shows map pixel `(511 - x + sx, 255 - y + sy)`,
+  `sx`/`sy` being `update_scroll`'s flipped values. Current MAME's
+  `tilemap_t::draw` flips about the visible area (`x0 + x1 + 1`); `x1_012`'s
+  `-512` in `update_scroll` predates that.
+- **Layer `xoffs_flip`** that rotates exactly, where MAME's did not: madshark
+  -3 (MAME 0), wrofaero -4 (0), magspeed -2 (0), eightfrc -4 (0). eightfrc
+  writes the same flipped scroll to both layers at frame 900 where the
+  unflipped values differ by 16, so no single value fits every frame; -4 is
+  exact at frame 2000.
+- **Foreground `fg_yoffs_flip`** -0x0a for the 240-line sets (MAME -0x12);
+  the 224-line sets (madshark, eightfrc, oisipuzl) rotate with -0x12.
+- **Foreground `fg_xoffs_flip`**: daioh 2 (MAME 0), drgnunit -2 (2), qzkklgy2
+  2 (0), zingzip 1 (0), madshark 1 (0); madshark's `bg_xoffs_flip` 1 (0).
+
+Layer pairs rotate with 0 mismatching pixels on every set except eightfrc
+frame 900 and one daioh frame whose layer-1 RAM differed between the runs;
+sprite pairs rotate with 0 on every set where the two runs' sprite state
+matched. Not yet seen on hardware.
 
 ---
 

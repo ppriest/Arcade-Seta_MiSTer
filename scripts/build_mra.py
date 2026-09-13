@@ -834,7 +834,12 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
                  f'because the download is permuted with it. -->')
     lines.append(f'    <rom index="1"><part>{mod:02X}</part></rom>')
     lines.append('')
-    lines.append(f'    <rom index="0" zip="{esc(zips)}" md5="none">')
+    # FAST LOADING. address= makes the HPS copy this ROM straight into DDR3 at
+    # 0x30000000 instead of streaming it through ioctl a byte at a time;
+    # rtl/memory/rom_loader.sv then copies DDR3 into SDRAM, applying the
+    # swizzle and the sprite inversion the byte path applies. An .mra without
+    # the attribute still loads the slow way -- Seta.sv tells them apart.
+    lines.append(f'    <rom index="0" zip="{esc(zips)}" md5="none" address="0x30000000">')
     pos = 0
     for region in REGION_ORDER:
         base = bases[BASE_NAME[region]]

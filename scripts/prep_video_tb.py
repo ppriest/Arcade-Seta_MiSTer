@@ -65,6 +65,8 @@ CFG = [
     # ---- Phase 4: 6bpp layers and the palette address formation ----
     "l0_bpp6", "l1_bpp6",
     "l0_pal_mode", "l1_pal_mode", "l0_pal_bank", "l1_pal_bank",
+    # set_tilemaps_flip(1): oisipuzl
+    "tilemaps_flip",
 ]
 
 # rtl/video/x1_011_index.sv's mode encoding.
@@ -253,6 +255,7 @@ def main():
         "l1_pal_mode":   PAL_MODE[cfg.get("l1_pal_mode", "direct")],
         "l0_pal_bank":   cfg.get("l0_pal_bank", 0),
         "l1_pal_bank":   cfg.get("l1_pal_bank", 0),
+        "tilemaps_flip": cfg.get("tilemaps_flip", 0),
     }
     vals.update(geo)
     (OUT / "cfg.hex").write_text("".join(f"{vals[k]:08x}\n" for k in CFG))

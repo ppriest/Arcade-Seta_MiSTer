@@ -14,15 +14,10 @@
 //
 //============================================================================
 //
-// Framework glue only. Everything that is the GAME is in rtl/seta_core.sv;
-// this file owns hps_io, the PLL, the SDRAM pins, the video chain and the
-// assembly of the driver's input port words. Keeping the split sharp is what
-// lets sim/seta_core_tb run the whole game with no framework at all.
 //
-// Video chain: seta_core -> arcade_video (scandoubler, gamma) -> video_freak
-// (crop, integer scale, aspect) -> the framework, with screen_rotate_two
-// TAPPING the final output into a rotated HDMI framebuffer. The analog output
-// keeps the native raster either way.
+// Framework glue: hps_io, PLL, resets and fast ROM load, input assembly, the
+// gun and crosshair, debug probes and the video output chain. The game is
+// rtl/seta_core.sv.
 
 module emu
 (
@@ -43,9 +38,7 @@ assign HDMI_FREEZE = 0;
 assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 
-// The framebuffer's forced-blank input, a real port only because Seta.qsf
-// defines MISTER_FB=1 for the HDMI rotator. screen_rotate_two does not drive
-// it, so it is tied off here as every rotating core does.
+// MISTER_FB is defined for the rotator; the forced blank is unused.
 assign FB_FORCE_BLANK = 0;
 
 assign LED_DISK  = 0;
@@ -53,7 +46,6 @@ assign LED_POWER = 0;
 assign LED_USER  = ioctl_download;
 assign BUTTONS   = 0;
 
-// The X1-010 mixes to a signed stereo pair.
 wire signed [15:0] core_audio_l, core_audio_r;
 assign AUDIO_S   = 1;
 assign AUDIO_L   = core_audio_l;
@@ -62,19 +54,11 @@ assign AUDIO_MIX = 0;
 
 //////////////////////////////////////////////////////////////////
 
-// 384x240 with square-ish pixels. The three games on a 14.318181 MHz XTAL are
-// 304x240 and are not in this phase.
 wire [1:0] ar = status[122:121];
 
 wire  [1:0] game_rot;   // from seta_core, driven by the mod byte
 
-// ROTATION. Auto is the default and follows the driver's own ROT for the set
-// -- five of the eight Group A games are vertical, and coming up sideways until
-// someone finds the menu is not a sensible default. The explicit settings stay
-// for a cabinet that is already turned round, or a monitor that is not.
-//
-// game_rot comes from rtl/seta_board_cfg.sv: 0 = ROT0, 1 = ROT90, 2 = ROT270.
-// A ROT270 game needs the picture turned counter-clockwise to stand upright.
+// Rotation: Auto follows the set's ROT (seta_board_cfg.sv game_rot).
 wire [1:0] rot_sel   = status[64:63];
 wire       rotate_en = (rot_sel == 2'd0) ? (game_rot != 2'd0)
                      : (rot_sel != 2'd1);
@@ -82,24 +66,13 @@ wire       rotate_ccw = (rot_sel == 2'd0) ? (game_rot == 2'd2)
                       : (rot_sel == 2'd3);
 wire       flip_180   = status[65];
 
-// Aspect ratio. THE PHYSICAL SCREEN IS 4:3 -- these boards drive an ordinary
-// arcade monitor -- and 384x240 of active video on it means the pixels are NOT
-// square. 8:5 is the pixel-count ratio, which is what was here, and it renders
-// the picture too wide.
-//
-// When the output is rotated to portrait the original aspect becomes 3:4, so
-// the two swap with rotate_en. Arcade-Psikyo_MiSTer has the same pair, for
-// boards that are vertical rather than optionally rotated, and records that
-// leaving it at a hardcoded 4:3 is what made its Original/Full Screen toggle
-// look like it did nothing.
+// 4:3 screen (3:4 when rotated).
 wire [11:0] base_arx = rotate_en ? 12'd3 : 12'd4;
 wire [11:0] base_ary = rotate_en ? 12'd4 : 12'd3;
 
 `include "build_id.v"
 
-// The Debug page is hidden in the release revision. Every P1 line carries an
-// H1 prefix, so status_menumask bit 1 hides the whole page; the bits still
-// work if a .CFG sets them, only the MENU goes away.
+// The Debug page (H1) is hidden in the release revision.
 `ifdef DEBUG_ISSP
 localparam DEBUG_MENU_HIDE = 1'b0;
 `else
@@ -117,30 +90,22 @@ localparam CONF_STR = {
 	"O[75:71],Crop offset,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"O[46:44],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"-;",
-	// Gun games only (H2): where the ADC's X/Y inputs point, drawn on the
-	// core's output. P1 red, P2 blue.
+	"O[94],CRT adjust,Off,On;",
+	"H3O[99:95],CRT H-Size,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"H3O[106:100],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"H3O[112:107],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"H4O[113],CRT width,Native,Match 384;",
+	"-;",
+	// gun games (H2)
 	"H2O[86:85],Crosshair,Off,P1,P2,P1+P2;",
-	// HOW TO READ THE LEFT STICK, per player, because the two panels on one
-	// cabinet need not agree. Auto takes a fully deflected axis as a
-	// direction and anything less as a position; Aim always positions
-	// (a real analog stick); D-pad never does (an arcade panel whose
-	// encoder reports the stick as the left USB axis).
+	// left stick per player: Auto (full deflection acts as a d-pad, partial
+	// aims), Aim (always positions), D-pad (never)
 	"H2O[88:87],P1 stick,Auto,Aim,D-pad;",
 	"H2O[90:89],P2 stick,Auto,Aim,D-pad;",
 	"H2O[92:91],Mouse aims,P1,P2,Off;",
 	"H2-;",
-	// THE DIP PAGE. This one line is the whole of it: the framework reads the
-	// loaded .mra's <switches> block and renders a page from it. Without the
-	// line the switches are still DELIVERED -- they arrive as ioctl index 254
-	// and the defaults take effect -- so every game runs correctly configured
-	// and nothing looks wrong until somebody goes looking for the menu.
 	"DIP;",
 	"-;",
-	// A DEBUG PAGE, not a settings page. Every switch here answers a bring-up
-	// question without a rebuild, which is the practice docs/WORKFLOW.md
-	// carries over from Psikyo and Fuuki: on hardware the difference between
-	// "the sprite engine is dead" and "the palette is wrong" is one toggle,
-	// and finding it out by rebuilding costs half an hour each time.
 	"H1P1,Debug;",
 	"H1P1-;",
 	"H1P1O[80],Sprites,On,Off;",
@@ -148,15 +113,11 @@ localparam CONF_STR = {
 	"H1P1O[84],Tilemap 1,On,Off;",
 	"H1P1O[81],PCM sound,On,Off;",
 	"H1P1O[82],Pause CPU,Off,On;",
+	"H1P1O[93],Tile row cache,On,Off;",
 	"-;",
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
-	// THE SAME POSITIONAL RULE AS THE .mra's <buttons> LIST: entry i is
-	// joystick bit 4 + i. This line named five buttons, which put Start on
-	// bit 6 -- the bit the core reads as COIN1 -- and it has to be padded to
-	// hold Start, Coin, Pause and Service at 10, 11, 12 and 13. The unused
-	// four are named rather than left empty so the alignment is visible and
-	// does not depend on how the OSD treats a blank entry.
+	// entry i is joystick bit 4 + i, matching the .mra <buttons>
 	"J1,Button 1,Button 2,Button 3,Button 4,Button 5,Button 6,Start,Coin,Pause,Service;",
 	"jn,A,B,Start,Select,R;",
 	"v,0;",
@@ -195,7 +156,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({13'd0, ~gun_game, debug_menu_hide, 1'b0}),  // H1 Debug page, H2 crosshair
+	.status_menumask({11'd0, ~narrow_320, ~status[94], ~gun_game, debug_menu_hide, 1'b0}),  // H1 Debug, H2 gun, H3 CRT adjust, H4 320-wide
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -209,9 +170,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
 
-	// The .mra's <nvram index="4"> file: the framework sends it down after
-	// the ROM and reads it back when the core raises the request -- which
-	// seta_core does when zombraid has finished a save.
+		// .mra <nvram index="4"> file, read back on seta_core's request
 	.ioctl_upload(ioctl_upload),
 	.ioctl_upload_req(nvram_save),
 	.ioctl_upload_index(8'd4),
@@ -224,14 +183,8 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
-// 96 MHz: 6x the 16 MHz 68000, 12x the believed 8 MHz dot clock, and 6x the
-// X1-010's 16 MHz. Every clock enable in the core is an integer divide of it,
-// which is why this frequency and not a rounder one -- see docs/ROADMAP.md.
-//
-// outclk_1 is the same 96 MHz shifted 180 degrees and drives SDRAM_CLK. That
-// phase is carried over from Psikyo, where it is proven on real hardware; no
-// simulation can check it, because the chip model has no notion of phase. See
-// rtl/pll/pll_0002.v.
+// 96 MHz: every clock enable is an integer divide. outclk_1 is 96 MHz at 180
+// degrees for SDRAM_CLK.
 wire clk_sys, clk_sdram_shifted, clk_video, pll_locked;
 
 pll pll
@@ -250,38 +203,76 @@ assign SDRAM_CLK = clk_sdram_shifted;
 
 wire reset = RESET | status[0] | buttons[1] | ~pll_locked;
 
-// TWO RESETS, and mixing them up is the single most expensive mistake
-// available here. MiSTer holds core RESET asserted for the ENTIRE ROM
-// download, so anything in the MEMORY path gated by a reset that includes it
-// is dead for the whole transfer: not one write reaches the chip and every
-// later read returns power-up contents. Psikyo hit it; Fuuki's first bitstream
-// still shipped with it, and came up as a perfectly timed, entirely black
-// screen -- video timing is independent of memory, so the only symptom was
-// that nothing was ever drawn.
-wire core_reset = reset | ioctl_download;
+// core_reset holds the game; mem_reset keeps the memory path live during the
+// download, when MiSTer holds reset. The fast load holds the game in reset
+// until a ROM is in SDRAM (rom_loaded) and while the copy runs (ldr_active).
+wire ldr_active;
+reg  rom_loaded = 1'b0, dl_index0_seen = 1'b0, ldr_active_d = 1'b0;
+always @(posedge clk_sys) begin
+	ldr_active_d <= ldr_active;
+	if (ioctl_wr && ioctl_index == 16'd0)  dl_index0_seen <= 1'b1;   // the byte path wrote SDRAM
+	if (dl_index0_seen && !ioctl_download) rom_loaded     <= 1'b1;
+	if (ldr_active_d && !ldr_active)       rom_loaded     <= 1'b1;   // the copy finished
+end
+
+wire core_reset = reset | ioctl_download | ~rom_loaded | ldr_active;
 wire mem_reset  = reset & ~ioctl_download;
+
+// Fast ROM load (rtl/memory/rom_loader.sv). With address="0x30000000" on the
+// .mra's index-0 ROM the HPS loads DDR3 and the download has no ioctl_wr; the
+// copy starts on the next reset release. ldr_done stops later resets copying
+// again.
+reg  dl_active_d = 1'b0, ldr_pending = 1'b0, ldr_start = 1'b0;
+reg  ldr_done    = 1'b0, dl_seen_wr  = 1'b0;
+wire dl_index0 = ioctl_download && (ioctl_index == 16'd0);
+
+always @(posedge clk_sys) begin
+	ldr_start   <= 1'b0;
+	dl_active_d <= dl_index0;
+	if (dl_index0 && !dl_active_d)  dl_seen_wr <= 1'b0;   // a new index-0 load begins
+	else if (dl_index0 && ioctl_wr) dl_seen_wr <= 1'b1;   // ...and it is streaming bytes
+
+	if (dl_index0 && !dl_active_d) ldr_done <= 1'b0;
+
+	if (reset) begin
+		ldr_pending <= 1'b1;
+	end else if (ldr_pending && !ioctl_download && !ldr_active) begin
+		ldr_pending <= 1'b0;
+		if (!dl_seen_wr && !ldr_done) begin
+			ldr_start <= 1'b1;
+			ldr_done  <= 1'b1;
+		end
+	end
+end
+
+// the loader's side of the DDR3 mux
+wire        ldr_ddr_req, ldr_ddr_busy, ldr_ddr_valid;
+wire [27:0] ldr_ddr_addr;
+wire [63:0] ldr_ddr_rdata;
+wire [7:0]  ldr_DDRAM_BURSTCNT, ldr_DDRAM_BE;
+wire [28:0] ldr_DDRAM_ADDR;
+wire        ldr_DDRAM_RD, ldr_DDRAM_WE;
+wire [63:0] ldr_DDRAM_DIN;
+
+ddram_phy u_ldr_ddram (
+	.clk(clk_sys), .reset(reset),
+	.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(ldr_DDRAM_BURSTCNT),
+	.DDRAM_ADDR(ldr_DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
+	.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(ldr_DDRAM_RD),
+	.DDRAM_DIN(ldr_DDRAM_DIN), .DDRAM_BE(ldr_DDRAM_BE), .DDRAM_WE(ldr_DDRAM_WE),
+	.req(ldr_ddr_req), .we(1'b0), .addr(ldr_ddr_addr), .wdata(8'd0),
+	.busy(ldr_ddr_busy), .valid(ldr_ddr_valid), .rdata(ldr_ddr_rdata)
+);
 
 ///////////////////   .mra: mod byte and DIPs   //////////////////
 
-// `<rom index="1">` carries one byte naming the GAME. rtl/seta_board_cfg.sv
-// turns it into everything else, including which of maincpu.sv's memory maps
-// to use -- one index, one table, nothing that can disagree with itself.
+// <rom index="1">: the game (seta_board_cfg.sv)
 reg [7:0] mod_byte = 8'd0;
 always @(posedge clk_sys)
 	if (ioctl_wr && (ioctl_index == 16'd1)) mod_byte <= ioctl_dout;
 
-// `<switches>` arrives as index 254. THREE bytes are used, and which is which
-// is a decision this file and scripts/build_mra.py have to share:
-//
-//   sw[0]  the byte seta_dsw_r returns at OFFSET 0, i.e. the HIGH half of the
-//          driver's 16-bit DSW port -- "SW1" in its PORT_DIPLOCATION names
-//   sw[1]  the byte at offset 1, the LOW half -- "SW2"
-//   sw[2]  the DIP bits several games put in the COINS port's top nibble
-//          (thunderl's "Force 1 Life" and "Copyright", for instance)
-//
-// seta_dsw_r reads offset 0 as the high byte and offset 1 as the low one.
-// Backwards, the game reads the wrong DIP bank and misbehaves in ways that
-// look like anything except a byte order.
+// <switches> (index 254): sw[0] = DSW offset 0 (high byte, SW1), sw[1] =
+// offset 1 (SW2), sw[2] = DIP bits in the COINS port's top nibble.
 reg [7:0] sw[8];
 always @(posedge clk_sys)
 	if (ioctl_wr && (ioctl_index == 16'd254) && !ioctl_addr[24:3])
@@ -291,47 +282,13 @@ wire [15:0] dsw_in = {sw[0], sw[1]};
 
 ///////////////////////   INPUTS   ///////////////////////////////
 
-// Every port in this driver is IP_ACTIVE_LOW (0 = pressed) while hps_io's
-// joystick words are active HIGH, hence the inversion on each concatenation.
-//
-// The bit order is JOY_TYPE1_2BUTTONS from seta.cpp, which is NOT the usual
-// arcade order -- LEFT is bit 0 and RIGHT is bit 1, the opposite way round
-// from the MiSTer joystick word:
-//
-//     0 LEFT   1 RIGHT   2 UP   3 DOWN   4 B1   5 B2   6 unused   7 START
-//
-// MiSTer's joystick word is 0 = Right, 1 = Left, 2 = Down, 3 = Up, then
-// buttons from bit 4.
-//
-// START AND COIN ARE AT FIXED JOYSTICK BITS, and the .mra's <buttons> name
-// list is positional -- entry i is bit 4 + i -- so the two have to agree.
-// They did not: the core read COIN1 from bit 6 and START1 from bit 8 while the
-// .mra named bit 6 "Start" and bit 7 "Coin". On hardware, Start inserted a
-// coin and Coin did nothing.
-//
-//     bit  4  5  6  7  8  9  10     11    12     13
-//          B1 B2 -  -  -  -  Start  Coin  Pause  Service
-//
-// Those are Arcade-Psikyo_MiSTer's positions, which is why its six-button and
-// three-button sets both work. scripts/build_mra.py pads the name list to
-// match.
-// THE LAYOUT IS PER GAME, from seta_board_cfg.sv's input_layout. seta.cpp has
-// three joystick macros and three one-off panels among the sets in scope, and
-// assembling every one of them as JOY_TYPE1_2BUTTONS meant the five
-// three-button games could not press button 3 at all -- bit 6 was tied low --
-// and the four-answer-button games read their buttons off the joystick
-// directions.
-//
-//   0 JOY2    LRUD at 0-3, B1 B2 at 4-5, 6 unused
-//   1 JOY1    as JOY2 with 5 and 6 unused
-//   2 JOY3    as JOY2 plus BUTTON3 at 6
-//   3 PANEL4  B3 B4 B1 B2 at 0-3 -- atehate's default panel, and qzkklgy2
-//   4 PANEL5  PANEL4 plus BUTTON5 at 4 (qzkklogy's pause cheat)
-//   5 CARDS   magspeed: Card 1-4 at 0-3, B1 B2 at 4-5
-//
-// Bit 7 is START in all six. The MiSTer joystick word is 0 Right, 1 Left,
-// 2 Down, 3 Up, buttons 1-6 at 4-9, then Start 10, Coin 11, Pause 12,
-// Service 13 -- fixed positions the .mra's <buttons> list has to match.
+// Driver ports are active low. seta_port assembles P1/P2 per input_layout:
+//   0 JOY2   LRUD at 0-3 (LEFT bit 0, RIGHT bit 1), B1 B2 at 4-5
+//   1 JOY1   B1 only       2 JOY3   plus BUTTON3 at 6
+//   3 PANEL4 B3 B4 B1 B2 at 0-3    4 PANEL5 plus BUTTON5 at 4
+//   5 CARDS  magspeed Card 1-4 at 0-3, B1 B2 at 4-5
+// Bit 7 is START. MiSTer joystick: 0 R, 1 L, 2 D, 3 U, buttons 1-6 at 4-9,
+// Start 10, Coin 11, Pause 12, Service 13.
 function automatic [7:0] seta_port(input [31:0] j, input [2:0] layout);
 	case (layout)
 		3'd1:    seta_port = {j[10], 1'b0,  1'b0,  j[4],
@@ -351,24 +308,16 @@ endfunction
 
 wire [2:0] input_layout;
 wire       gun_game;
+wire       narrow_320;
 wire [35:0] gun_aim;
 
-// daioh's EXTRA port: P1 buttons 4-6 at bits 0-2, P2's at 3-5. Buttons 4, 5
-// and 6 are joystick bits 7, 8 and 9. Every other board leaves it undecoded.
+// daioh EXTRA: P1 buttons 4-6 at 0-2, P2 at 3-5
 wire [15:0] extra_in = ~{10'h000,
 	joystick_1[9], joystick_1[8], joystick_1[7],
 	joystick_0[9], joystick_0[8], joystick_0[7]};
 
-// THE MOUSE. hps_io hands over PS/2 packets: bit 24 toggles once per event,
-// [15:8] and [23:16] are the X and Y counts with their signs in [4] and
-// [5], and PS/2 counts Y POSITIVE UP. Nothing in the framework needed
-// adding -- the core simply never connected it.
-//
-// A mouse is relative by nature, so it ADDS to the held gun position (in
-// the gun block below) rather than replacing it, which is what a gun wants
-// and what a self-centring stick cannot give. Its buttons are the trigger
-// and the reload, ORed into the player's word here; gated on gun_game, so
-// no other set in the driver ever sees a mouse click.
+// PS/2 mouse (bit 24 toggles per packet; Y positive up) moves the aiming
+// player's gun relatively; its buttons are trigger and reload. Gun games only.
 reg         ps2_mouse_q;
 always @(posedge clk_sys) ps2_mouse_q <= ps2_mouse[24];
 wire        ms_ev = ps2_mouse[24] ^ ps2_mouse_q;
@@ -379,7 +328,6 @@ wire        ms_sel [0:1];
 assign ms_sel[0] = gun_game && (ms_who == 2'd0);
 assign ms_sel[1] = gun_game && (ms_who == 2'd1);
 
-// Bit 4 is BUTTON1 and bit 5 BUTTON2 in every layout seta_port builds.
 wire [31:0] joy_gun [0:1];
 assign joy_gun[0] = joystick_0 | (ms_sel[0] ? {26'd0, ps2_mouse[1], ps2_mouse[0], 4'd0} : 32'd0);
 assign joy_gun[1] = joystick_1 | (ms_sel[1] ? {26'd0, ps2_mouse[1], ps2_mouse[0], 4'd0} : 32'd0);
@@ -387,9 +335,7 @@ assign joy_gun[1] = joystick_1 | (ms_sel[1] ? {26'd0, ps2_mouse[1], ps2_mouse[0]
 wire [15:0] p1_in = ~{8'h00, seta_port(joy_gun[0], input_layout)};
 wire [15:0] p2_in = ~{8'h00, seta_port(joy_gun[1], input_layout)};
 
-// COINS: coin 1 and 2, service, tilt, and then whatever DIP bits the game puts
-// in the top nibble. sw[2] supplies those; where a game uses none of them the
-// `.mra` leaves it 0xf0 and nothing changes.
+// COINS, with sw[2] in the top nibble
 wire [15:0] coins_in = {
 	8'hff,
 	sw[2][7:4],
@@ -399,17 +345,7 @@ wire [15:0] coins_in = {
 	~joystick_0[11]     // 0 COIN1
 };
 
-// PAUSE. Edge-triggered toggle, not a level: the button is momentary, so a
-// level would only pause while held.
-//
-// Bit 12 is a function of the button lists above -- the .mra's <buttons> and
-// the OSD's J1 -- never a constant copied from another core. Both put Pause
-// there, and rtl/seta_core.sv already gates cpu_ce on pause_cpu, so this is
-// the whole of it.
-//
-// The OSD's own "Pause CPU" switch on the Debug page stays, ORed in: it is
-// the one that can be left on while poking at a frozen frame, where a toggle
-// button is awkward.
+// Pause: joystick bit 12 toggles; the Debug page's Pause CPU is ORed in.
 wire pause_btn = joystick_0[12] | joystick_1[12];
 reg  pause_btn_d, pause_toggle;
 always @(posedge clk_sys) begin
@@ -419,7 +355,7 @@ always @(posedge clk_sys) begin
 end
 wire pause_core = pause_toggle | status[82];
 
-// wits alone has four players; the other seven boards never read these.
+// P3/P4: wits only
 wire [15:0] p3_in = 16'hffff;
 wire [15:0] p4_in = 16'hffff;
 
@@ -428,49 +364,17 @@ wire [15:0] p4_in = 16'hffff;
 wire [7:0] core_r, core_g, core_b;
 wire       core_hs, core_vs, core_hb, core_vb, core_de, core_ce;
 
-// core_ce IS ONE clk_sys CYCLE WIDE, which is half a clk_video cycle -- a
-// clk_video edge can fall either side of it. Stretched to two clk_sys cycles,
-// exactly one clk_video edge samples it high, whichever parity it lands on.
-//
-// Without this the design still works or does not work DETERMINISTICALLY --
-// an 8 MHz pixel is 12 clk_sys cycles, an even number, so every enable lands
-// on the same parity and the video chain would see all of them or none. "None"
-// is a black screen with every register correct, which is a bad hour on
-// hardware; two cycles costs one flip-flop.
+// core_ce is one clk_sys cycle; stretched to two so exactly one clk_video
+// (48 MHz) edge samples it.
 reg core_ce_d;
 always @(posedge clk_sys) core_ce_d <= core_ce;
 wire core_ce_v = core_ce | core_ce_d;
 
-// ZOMBRAID'S GUNS. seta.cpp's GUNX/GUNY ports are 0..255, 0x80 at rest, X
-// PORT_REVERSE (full left reads 0xff); the game calibrates the ends itself
-// (its defaults are left 0xc0, right 0x40, top 0x48, bottom 0xa8), so the
-// scale only has to be monotonic. Two sources per player, held in the game's
-// units:
-//   * the left analog stick, ABSOLUTE: while deflected past a dead zone of
-//     8 the position is the stick, X = 0x7f - x, Y = 0x80 + y (hps_io's word
-//     is {y, x}, signed, up and left negative);
-//   * the d-pad, RELATIVE: two units a frame in the pressed direction,
-//     clamped at the ends, so a digital pad can aim at all. Right lowers X
-//     and down raises Y, in the reversed-X units above.
-// Releasing either leaves the position where it was, which is what a gun
-// does and what an analog stick snapping back to 0x80 would not.
-//
-// THE AXES ARE INDEPENDENT, AND A FULLY DEFLECTED AXIS IS A D-PAD.
-// Three kinds of controller reach this core and they say "left" three
-// different ways: a panel with a digital encoder sets joystick bit 1; a
-// panel behind a gamepad encoder (an arcade stick reporting as an Xbox 360
-// pad, say) sends NO direction bit and puts the stick on the analog axis
-// at full deflection; a real analog stick sends whatever it is pushed to.
-// Taking any analog deflection as a position made the second kind snap to
-// the screen edge and stick there, and the first kind reset the other axis
-// to centre on every press, both seen on hardware.
-//
-// So Auto takes saturation to mean "d-pad" -- an arcade stick is either
-// centred or hard over, never at 60% -- and anything between the dead zone
-// and saturation to mean "aim here". A real stick pushed all the way then
-// ramps to the edge rather than jumping to it, which is the one behaviour
-// Auto costs, and the OSD's per-player Aim / D-pad settings are the escape
-// when a controller does not fit the rule.
+// zombraid guns, per player, in the game's units (0..255, 0x80 centre, X
+// reversed). Held positions, moved by: the left stick absolutely (past a dead
+// zone of 8), a direction ramping two units a frame, or the mouse. Axes are
+// independent. In Auto a saturated axis counts as a direction (arcade sticks
+// on gamepad encoders).
 reg  [7:0] gun_x [0:1];
 reg  [7:0] gun_y [0:1];
 wire [31:0] gun_joy [0:1];
@@ -478,8 +382,7 @@ wire [15:0] gun_ana [0:1];
 assign gun_joy[0] = joystick_0;          assign gun_joy[1] = joystick_1;
 assign gun_ana[0] = joystick_l_analog_0; assign gun_ana[1] = joystick_l_analog_1;
 
-// hps_io's analog byte is signed, +x right and +y down. Magnitude, with
-// -128 reading as 128.
+// magnitude of hps_io's signed analog byte (-128 reads 128)
 function automatic [7:0] gun_mag(input [7:0] v);
 	gun_mag = v[7] ? (8'd0 - v) : v;
 endfunction
@@ -487,15 +390,13 @@ endfunction
 localparam [7:0] GUN_DEAD = 8'd8;    // below this the axis is at rest
 localparam [7:0] GUN_FULL = 8'd96;   // at or above it, the axis is a d-pad
 
-// One mouse count is one gun unit, clamped to the ends of the range.
+// add a mouse count, clamped
 function automatic [7:0] gun_step(input signed [9:0] d, input [7:0] v);
 	logic signed [10:0] s;
 	s = $signed({3'b000, v}) + {d[9], d};
 	gun_step = (s < 11'sd1) ? 8'd1 : (s > 11'sd254) ? 8'd254 : s[7:0];
 endfunction
 
-// Per player: which directions are being asked for (digital bit or an
-// analog axis this mode reads as one), and which axes carry a position.
 wire [1:0] gun_mode [0:1];
 assign gun_mode[0] = status[88:87];
 assign gun_mode[1] = status[90:89];
@@ -508,8 +409,7 @@ generate
 		wire [7:0] ay = gun_ana[gi][15:8];
 		wire       lx = gun_mag(ax) >= GUN_DEAD;    // off centre at all
 		wire       ly = gun_mag(ay) >= GUN_DEAD;
-		// Which deflections this mode reads as a direction: all of them in
-		// D-pad, none in Aim, the full ones in Auto.
+		// deflections read as a direction: all (D-pad), none (Aim), full (Auto)
 		wire       dx = (gun_mode[gi] == 2'd2) ? lx
 		              : (gun_mode[gi] == 2'd1) ? 1'b0
 		              : (gun_mag(ax) >= GUN_FULL);
@@ -530,13 +430,10 @@ always @(posedge clk_sys) begin
 		if (reset) begin
 			gun_x[g] <= 8'h80; gun_y[g] <= 8'h80;
 		end else if (ms_ev && ms_sel[g]) begin
-			// The mouse moves it, both axes at once: right and up in PS/2
-			// are right and up on the screen, and the gun's X runs the
-			// other way (PORT_REVERSE) while its Y runs downward.
+			// mouse: X reversed, Y down
 			gun_x[g] <= gun_step(-ms_dx, gun_x[g]);
 			gun_y[g] <= gun_step(-ms_dy, gun_y[g]);
 		end else begin
-			// X: a direction ramps, a partial deflection positions
 			if (gun_dir[g][0] | gun_dir[g][1]) begin
 				if (core_vb & ~core_vb_d) begin
 					if (gun_dir[g][0] && gun_x[g] > 8'd1)   gun_x[g] <= gun_x[g] - 8'd2;   // right
@@ -544,7 +441,6 @@ always @(posedge clk_sys) begin
 				end
 			end else if (gun_abs[g][0])
 				gun_x[g] <= 8'h7f - gun_ana[g][7:0];
-			// Y: the same, down positive
 			if (gun_dir[g][2] | gun_dir[g][3]) begin
 				if (core_vb & ~core_vb_d) begin
 					if (gun_dir[g][2] && gun_y[g] < 8'd254) gun_y[g] <= gun_y[g] + 8'd2;   // down
@@ -557,15 +453,8 @@ always @(posedge clk_sys) begin
 end
 wire [31:0] gun_ch = {gun_y[1], gun_x[1], gun_y[0], gun_x[0]};
 
-// THE CROSSHAIRS, where the GAME says the guns point. zombraid keeps its
-// calibrated aim per player in work RAM -- X at 0x20c4aa, Y at 0x20c4ac,
-// P2 at 0x20c4ae/0x20c4b0 -- and draws its own reticle sprites from those
-// words; seta_core reads them out as gun_aim. Measured against MAME
-// snapshots of the name-entry reticle at five gun positions
-// (scripts/gun_find.py): its centre is at column X and between rows 255-Y
-// and 254-Y, so the cross is drawn at (X, 255 - Y). Pixels are counted off
-// the core's own DE, so it lands in core space and rotates with the
-// picture; the visible area of the one gun game is 384 x 240.
+// Crosshairs at the game's calibrated aim (gun_aim, read from work RAM):
+// reticle centre at (X, 255 - Y) in core pixels, counted off DE.
 reg  [8:0] ovl_x, ovl_y;
 reg        core_hb_d;
 always @(posedge clk_sys) begin
@@ -605,14 +494,10 @@ wire [479:0] dbg_pc_ring;
 wire         dbg_pc_frozen;
 wire [23:3] dbg_l0_last_addr;
 wire [63:0] dbg_l0_last_data;
-wire [15:0] dbg_l0_lines, dbg_l0_tiles, dbg_l0_overrun;
-wire [15:0] dbg_l1_lines, dbg_l1_tiles, dbg_l1_overrun;
+wire [15:0] dbg_l0_cut, dbg_l0_hits, dbg_l0_overrun;
+wire [15:0] dbg_l1_cut, dbg_l1_hits, dbg_l1_overrun;
 
-// THE DOWNLOAD'S HIGH-WATER MARK, in 4096-byte units. An .mra that stops
-// short leaves the CPU fetching from SDRAM that was never written, which
-// looks exactly like a CPU fault and is not one. Unlike a trace buffer
-// this has no idle timeout, so a pause mid-download cannot look like the
-// end. Daioh's image is 11 MB, so a complete load must reach 0xB00.
+// download high-water mark, 4 KB units
 reg [13:0] dbg_dl_max4k = 14'd0;
 always @(posedge clk_sys) begin
 	if (ioctl_download && ioctl_wr && ioctl_addr[26:12] > {1'b0, dbg_dl_max4k})
@@ -633,19 +518,24 @@ seta_core seta_core
 
 	.game(mod_byte[4:0]),
 	.game_rot(game_rot), .input_layout(input_layout), .gun_game(gun_game),
+	.narrow_320(narrow_320),
 	.gun_aim(gun_aim),
 
 	.SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ),
 	.SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
 	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE),
 	.SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CKE(SDRAM_CKE),
-	// The physical clock pin is driven from the PLL above, not from here.
+	// driven by the PLL
 	.SDRAM_CLK(),
 
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
 	.ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
 	.ioctl_din(ioctl_din), .nvram_save(nvram_save),
+	.ldr_start(ldr_start), .ldr_active(ldr_active),
+	.ldr_ddr_req(ldr_ddr_req), .ldr_ddr_addr(ldr_ddr_addr),
+	.ldr_ddr_busy(ldr_ddr_busy), .ldr_ddr_valid(ldr_ddr_valid),
+	.ldr_ddr_rdata(ldr_ddr_rdata),
 
 	.p1_in(p1_in), .p2_in(p2_in), .coins_in(coins_in), .extra_in(extra_in),
 	.p3_in(p3_in), .p4_in(p4_in), .dsw_in(dsw_in),
@@ -655,6 +545,7 @@ seta_core seta_core
 	.en_spr(~status[80]),
 	.en_pcm(~status[81]),
 	.en_l0(~status[83]), .en_l1(~status[84]),
+	.tile_cache_en(~status[93]),
 
 	.video_r(core_r), .video_g(core_g), .video_b(core_b),
 	.video_hs(core_hs), .video_vs(core_vs),
@@ -669,9 +560,9 @@ seta_core seta_core
 	.dbg_pc_ring(dbg_pc_ring), .dbg_pc_frozen(dbg_pc_frozen),
 	.dbg_l0_last_addr(dbg_l0_last_addr),
 	.dbg_l0_last_data(dbg_l0_last_data),
-	.dbg_l0_lines(dbg_l0_lines), .dbg_l0_tiles(dbg_l0_tiles),
+	.dbg_l0_cut(dbg_l0_cut), .dbg_l0_hits(dbg_l0_hits),
 	.dbg_l0_overrun(dbg_l0_overrun),
-	.dbg_l1_lines(dbg_l1_lines), .dbg_l1_tiles(dbg_l1_tiles),
+	.dbg_l1_cut(dbg_l1_cut), .dbg_l1_hits(dbg_l1_hits),
 	.dbg_l1_overrun(dbg_l1_overrun),
 	.dbg_w_pal(dbg_w_pal),
 	.dbg_w_l0v(dbg_w_l0v),
@@ -693,35 +584,14 @@ seta_core seta_core
 	.dbg_nv_state(dbg_nv_state), .dbg_nv_saves(dbg_nv_saves)
 );
 
-// ---------------------------------------------------------------------------
-// THE PROBES ARE BUILT BY THE Seta_stp REVISION ONLY. `DEBUG_ISSP is set in
-// Seta_stp.qsf and nowhere else, so the release revision compiles them out
-// -- and with them the ring buffer, the counters and the JTAG hub they carry.
-// Same source, two revisions; see docs/WORKFLOW.md.
+// Probes: Seta_stp revision only (`DEBUG_ISSP).
 `ifdef DEBUG_ISSP
-// ---------------------------------------------------------------------------
-// JTAG READBACK. The counters above were wired out of the core from the start
-// and then went nowhere -- rtl/debug/ held the probe, files.qip compiled it,
-// and nothing instantiated it. On the first hardware run that meant the
-// instruments existed everywhere except where they were needed.
-//
-// PROBE LAYOUT, 128 bits. Keep scripts/read_issp.tcl's decode in step: a
-// shifted field reads as plausible nonsense rather than as an error.
-//
-//   [ 15:  0]  dbg_lines           scanlines the sprite engine started
-//   [ 31: 16]  dbg_sprites         sprites blitted
-//   [ 47: 32]  dbg_overrun         line_start while still rendering (a fault)
-//   [ 63: 48]  dbg_dropped         lines cut short by the per-line budget
-//   [ 79: 64]  dbg_worst_sprites   most sprites completed on one line
-//   [ 95: 80]  dbg_snd_samples     X1-010 output samples
-//   [111: 96]  dbg_snd_rom_reads   X1-010 PCM/wave fetches from SDRAM
-//   [119:112]  dbg_snd_overrun[7:0]  sample generated before the last finished
-//   [126:120]  dbg_irq_pending[7:1]
-//   [    127]  pll_locked
-//
-// The two sound counters are the ones that matter first: samples with no ROM
-// reads means the chip is running but starved, ROM reads with no samples means
-// the opposite, and both at zero means the CPU never programmed it.
+// Instance F, 128 bits (scripts/read_issp.tcl decodes):
+//   [ 15:  0]  dbg_lines           [ 31: 16]  dbg_sprites
+//   [ 47: 32]  dbg_overrun         [ 63: 48]  dbg_dropped
+//   [ 79: 64]  dbg_worst_sprites   [ 95: 80]  dbg_snd_samples
+//   [111: 96]  dbg_snd_rom_reads   [119:112]  dbg_snd_overrun[7:0]
+//   [126:120]  dbg_irq_pending     [    127]  pll_locked
 issp_probe #(.INSTANCE_ID("F"), .PROBE_W(128), .SOURCE_W(8)) u_issp (
 	.clk(clk_sys),
 	.probe({
@@ -739,93 +609,42 @@ issp_probe #(.INSTANCE_ID("F"), .PROBE_W(128), .SOURCE_W(8)) u_issp (
 	.source()
 );
 
-// PROBE LAYOUT, INSTANCE A -- the last twenty ROM reads before an
-// exception, 488 bits. Keep scripts/read_issp.tcl's decode in step.
-//
-//   [ 23:  0]  pc0      the newest ROM read (byte address)
-//   ...                 pc1..pc19 at 24-bit steps, oldest at [479:456]
-//   [480]      frozen   a fetch hit vectors 2..11 and the ring stopped
-//   [487:481]  spare
-//
-// Instruction fetches and ROM data reads are not distinguished; the
-// disassembly around the addresses says which is which.
+// Instance A, 488 bits: pc0 (newest) .. pc19 at 24-bit steps, [480] frozen.
 issp_probe #(.INSTANCE_ID("A"), .PROBE_W(488), .SOURCE_W(8)) u_issp_pc (
 	.clk(clk_sys),
 	.probe({7'd0, dbg_pc_frozen, dbg_pc_ring}),
 	.source()
 );
 
-// PROBE LAYOUT, INSTANCE B -- one granule layer 0 actually received.
-//
-//   [ 63:  0]  dbg_l0_last_data  the 64 bits that came back
-//   [ 84: 64]  dbg_l0_last_addr  the granule address asked for
-//   [108: 85]  dbg_last_vec      the last 68000 vector fetched
-//   [127:109]  spare
-//
-// The byte address in gfx2 is dbg_l0_last_addr * 8. Compare the data
-// against the ROM image at that offset: equal means SDRAM holds the
-// right bytes and the fault is in the engine, different means the
-// download or the arbiter put the wrong bytes there.
+// Instance B: [63:0] dbg_l0_last_data, [84:64] dbg_l0_last_addr (x8 = byte in
+// gfx2), [108:85] dbg_last_vec, [124:109] P1 gun position {y, x}.
 issp_probe #(.INSTANCE_ID("B"), .PROBE_W(128), .SOURCE_W(8)) u_issp_gran (
 	.clk(clk_sys),
-	// [124:109] the held P1 gun position {y, x}, in the game's units.
 	.probe({3'd0, gun_y[0], gun_x[0], dbg_last_vec, dbg_l0_last_addr, dbg_l0_last_data}),
 	.source()
 );
 
-// PROBE LAYOUT, INSTANCE C -- the two tilemap engines, 128 bits.
-// Keep scripts/read_issp.tcl's decode in step.
-//
-//   [ 15:  0]  dbg_l0_lines     lines layer 0 started
-//   [ 31: 16]  dbg_l0_tiles     tiles layer 0 blitted
-//   [ 47: 32]  dbg_l0_overrun   lines layer 0 did not finish in time
-//   [ 63: 48]  dbg_l1_lines
-//   [ 79: 64]  dbg_l1_tiles
-//   [ 95: 80]  dbg_l1_overrun
-//   [127: 96]  spare
-//
-// An overrun count near the line count means the layer is being starved
-// on the shared SDRAM port and most of its tiles never arrive -- which
-// is what a mostly-black screen with a few real tiles looks like.
+// Instance C: dbg_l0_cut, _hits, _overrun at [15:0], [31:16], [47:32]; layer 1
+// at [63:48], [79:64], [95:80]; [127:96] gun inputs (below).
 issp_probe #(.INSTANCE_ID("C"), .PROBE_W(128), .SOURCE_W(8)) u_issp_tile (
 	.clk(clk_sys),
 	.probe({
-		// WHAT THE HPS SENDS FOR EACH GUN, both players, because the gun
-		// input code is one loop over the two and P2 behaves differently
-		// from P1 on the same RTL -- so the difference is in the words, not
-		// in the logic. Five bits per analog axis is exactly what the dead
-		// zone tests, sign included.
-		//
-		//   [ 99: 96]  joystick_0[3:0]   P1 directions: R L D U
-		//   [103:100]  joystick_1[3:0]   P2 directions
-		//   [113:104]  P1 analog {y[7:3], x[7:3]}
-		//   [123:114]  P2 analog {y[7:3], x[7:3]}
-		//   [127:124]  spare
+		// [99:96] joystick_0[3:0], [103:100] joystick_1[3:0],
+		// [113:104] P1 analog {y[7:3], x[7:3]}, [123:114] P2
 		4'd0,
 		joystick_l_analog_1[15:11], joystick_l_analog_1[7:3],
 		joystick_l_analog_0[15:11], joystick_l_analog_0[7:3],
 		joystick_1[3:0], joystick_0[3:0],
-		dbg_l1_overrun, dbg_l1_tiles, dbg_l1_lines,
-		dbg_l0_overrun, dbg_l0_tiles, dbg_l0_lines
+		dbg_l1_overrun, dbg_l1_hits, dbg_l1_cut,
+		dbg_l0_overrun, dbg_l0_hits, dbg_l0_cut
 	}),
 	.source()
 );
 
-// PROBE LAYOUT, INSTANCE D -- where the CPU is, 128 bits.
-// Keep scripts/read_issp.tcl's decode in step.
-//
-//   [ 23:  0]  dbg_last_rom     byte address of the last program fetch
-//   [ 39: 24]  dbg_rom_fetches  program fetches issued
-//   [ 55: 40]  dbg_wram_writes  work RAM writes
-//   [ 71: 56]  dbg_io_reads     peripheral reads
-//   [ 85: 72]  dbg_dl_max4k     highest download address, in 4 KB units
-//   [109: 86]  dbg_last_io      address of the last peripheral read
-//   [    110]  OSD_STATUS       the framework's OSD is open
-//   [    111]  nv_armed         zombraid's battery-RAM write latch open
-//   [    112]  nv_dirty         a write inside the window since it opened
-//   [    113]  ioctl_upload     the HPS is reading the nvram file back
-//   [121:114]  dbg_nv_saves     save requests raised
-//   [127:122]  spare
+// Instance D: [23:0] dbg_last_rom, [39:24] dbg_rom_fetches, [55:40]
+// dbg_wram_writes, [71:56] dbg_io_reads, [85:72] dbg_dl_max4k, [109:86]
+// dbg_last_io, [110] OSD open, [111] nv_armed, [112] nv_dirty, [113]
+// ioctl_upload, [121:114] dbg_nv_saves.
 issp_probe #(.INSTANCE_ID("D"), .PROBE_W(128), .SOURCE_W(8)) u_issp_cpu (
 	.clk(clk_sys),
 	.probe({
@@ -841,21 +660,8 @@ issp_probe #(.INSTANCE_ID("D"), .PROBE_W(128), .SOURCE_W(8)) u_issp_cpu (
 	.source()
 );
 
-// PROBE LAYOUT, INSTANCE E -- CPU writes per video region, 128 bits.
-// Keep scripts/read_issp.tcl's decode in step.
-//
-//   [ 15:  0]  dbg_w_pal      palette writes
-//   [ 31: 16]  dbg_w_l0v      layer 0 VRAM writes
-//   [ 47: 32]  dbg_w_l1v      layer 1 VRAM writes
-//   [ 63: 48]  dbg_w_l0c      layer 0 control writes
-//   [ 79: 64]  dbg_w_l1c      layer 1 control writes
-//   [ 95: 80]  dbg_w_vregs    video register writes
-//   [111: 96]  dbg_w_sprc     sprite code/attribute writes
-//   [127:112]  dbg_w_x1snd    sound chip writes
-//
-// All zero means the CPU never reached the video hardware. Palette and
-// VRAM counting up while the screen stays black means it did, and the
-// fault is downstream.
+// Instance E, CPU writes per region: pal, l0v, l1v, l0c, l1c, vregs, sprc,
+// x1snd at 16 bits each from [15:0].
 issp_probe #(.INSTANCE_ID("E"), .PROBE_W(128), .SOURCE_W(8)) u_issp_io (
 	.clk(clk_sys),
 	.probe({
@@ -874,41 +680,39 @@ issp_probe #(.INSTANCE_ID("E"), .PROBE_W(128), .SOURCE_W(8)) u_issp_io (
 
 ///////////////////////   VIDEO   ////////////////////////////////
 
-// CLK_VIDEO and CE_PIXEL are OUTPUTS of arcade_video -- it drives CLK_VIDEO
-// from its own clk_video input -- so they must not be assigned here as well.
-// A second driver on CLK_VIDEO propagates back to clk_sys, and Quartus then
-// reports the error against the clock rather than against the line that
-// caused it.
+// CLK_VIDEO and CE_PIXEL are driven by arcade_video.
 wire vga_de_raw;
 
-// THE VIDEO CHAIN RUNS AT 48 MHz, NOT clk_sys.
+// The output chain runs at clk_video, 48 MHz (half clk_sys, same PLL): the
+// scandoubler/HQ2x blender does not meet timing at 96 MHz.
 //
-// arcade_video's scandoubler and HQ2x blender were the last thing in the whole
-// design still failing timing: -0.229 ns with TNS -3.273, every failing path
-// inside Hq2x|Blend, and not one path belonging to this core. That is vendored
-// framework logic, so it cannot be retimed here -- but it can be given a
-// slower clock. It needs about 10.65 ns; 48 MHz gives it 20.83.
-//
-// This is the fix Arcade-Psikyo_MiSTer's SDC names as the structurally correct
-// one, having tried and then REMOVED the obvious alternative: a setup-2
-// multicycle on the blender is not backed by the hardware, because
-// scandoubler.v force-asserts Blend's clock enable on hsync, so one transition
-// per scanline gets no second cycle. That trade is what "HQ2x intentionally
-// broken to close timing" means in other cores' release notes.
-//
-// 48 MHz is EXACTLY HALF of clk_sys, from the same PLL, so every clk_video
-// edge is also a clk_sys edge. There is no clock-domain crossing here, and no
-// SDC exception to write or audit.
+// CRT adjust and CRT width (rtl/video/seta_crt.sv); bypassed when both are off
+// or the scandoubler runs.
+wire [7:0] crt_r, crt_g, crt_b;
+wire       crt_hs, crt_vs, crt_hb, crt_vb, crt_on, crt_ce;
+
+seta_crt u_crt (
+	.clk(clk_sys), .ce(core_ce),
+	.adjust(status[94] & ~forced_scandoubler),
+	.wide(status[113] & narrow_320 & ~forced_scandoubler),
+	.hsize_idx(status[99:95]), .hpos_idx(status[106:100]), .vshift_idx(status[112:107]),
+	.r_in(ovl_r), .g_in(ovl_g), .b_in(ovl_b),
+	.hs_in(core_hs), .vs_in(core_vs), .hb_in(core_hb), .vb_in(core_vb),
+	.active(crt_on), .ce_out(crt_ce),
+	.r_out(crt_r), .g_out(crt_g), .b_out(crt_b),
+	.hs_out(crt_hs), .vs_out(crt_vs), .hb_out(crt_hb), .vb_out(crt_vb)
+);
+
 arcade_video #(.WIDTH(384), .DW(24), .GAMMA(1)) arcade_video
 (
 	.clk_video(clk_video),
-	.ce_pix(core_ce_v),
+	.ce_pix(crt_on ? crt_ce : core_ce_v),
 
-	.RGB_in({ovl_r, ovl_g, ovl_b}),
-	.HBlank(core_hb),
-	.VBlank(core_vb),
-	.HSync(core_hs),
-	.VSync(core_vs),
+	.RGB_in(crt_on ? {crt_r, crt_g, crt_b} : {ovl_r, ovl_g, ovl_b}),
+	.HBlank(crt_on ? crt_hb : core_hb),
+	.VBlank(crt_on ? crt_vb : core_vb),
+	.HSync(crt_on ? crt_hs : core_hs),
+	.VSync(crt_on ? crt_vs : core_vs),
 
 	.CLK_VIDEO(CLK_VIDEO),
 	.CE_PIXEL(CE_PIXEL),
@@ -922,8 +726,7 @@ arcade_video #(.WIDTH(384), .DW(24), .GAMMA(1)) arcade_video
 	.gamma_bus(gamma_bus)
 );
 
-// CROP_SIZE is the number of lines kept out of 240: 216 is exactly 5x on a
-// 1080-line display, 224 trims 8 lines top and bottom.
+// lines kept of 240: 216 (5x on 1080) or 224
 wire  [1:0] vcrop_sel = status[70:69];
 wire [11:0] crop_size = (vcrop_sel == 2'd1) ? 12'd216 :
                         (vcrop_sel == 2'd2) ? 12'd224 : 12'd0;
@@ -947,19 +750,14 @@ video_freak video_freak
 	.SCALE(status[68:66])
 );
 
-// HDMI rotation and 180 flip: a TAP, not a filter. The analog output keeps the
-// native raster while a rotated copy goes into DDR3 and the HPS framebuffer is
-// pointed at it.
-//
-// This is NOT the driver's "Flip Screen" DIP. That is the game redrawing
-// itself upside down through the sprite chip's own flip bit -- implemented in
-// rtl/video/x1_001.sv and checked only against the model, since no captured
-// frame has it set. This flip is the OUTPUT turned round, which is what a
-// cocktail cabinet or an upside-down monitor wants.
-//
-// Five of the eight Group A games are vertical: thunderl, thunderla, neobattl
-// and pairlove are ROT270 and blockcar is ROT90. The `.mra` sets Rotate on for
-// those and the direction accordingly.
+// HDMI rotation and flip: screen_rotate_two taps the output into DDR3 for the
+// HPS framebuffer; the analog output keeps the native raster. Not the game's
+// Flip Screen DIP.
+wire        rot_DDRAM_CLK, rot_DDRAM_WE, rot_DDRAM_RD;
+wire [7:0]  rot_DDRAM_BURSTCNT, rot_DDRAM_BE;
+wire [28:0] rot_DDRAM_ADDR;
+wire [63:0] rot_DDRAM_DIN;
+
 screen_rotate_two screen_rotate_two
 (
 	.CLK_VIDEO(CLK_VIDEO),
@@ -978,14 +776,23 @@ screen_rotate_two screen_rotate_two
 	.FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE),
 	.FB_VBL(FB_VBL), .FB_LL(FB_LL),
 
-	.DDRAM_CLK(DDRAM_CLK),
-	.DDRAM_BUSY(DDRAM_BUSY),
-	.DDRAM_BURSTCNT(DDRAM_BURSTCNT),
-	.DDRAM_ADDR(DDRAM_ADDR),
-	.DDRAM_DIN(DDRAM_DIN),
-	.DDRAM_BE(DDRAM_BE),
-	.DDRAM_WE(DDRAM_WE),
-	.DDRAM_RD(DDRAM_RD)
+	// DDR3 goes to the ROM loader while it runs (core in reset, no picture)
+	.DDRAM_CLK(rot_DDRAM_CLK),
+	.DDRAM_BUSY(DDRAM_BUSY | ldr_active),
+	.DDRAM_BURSTCNT(rot_DDRAM_BURSTCNT),
+	.DDRAM_ADDR(rot_DDRAM_ADDR),
+	.DDRAM_DIN(rot_DDRAM_DIN),
+	.DDRAM_BE(rot_DDRAM_BE),
+	.DDRAM_WE(rot_DDRAM_WE),
+	.DDRAM_RD(rot_DDRAM_RD)
 );
+
+assign DDRAM_CLK      = ldr_active ? clk_sys            : rot_DDRAM_CLK;
+assign DDRAM_BURSTCNT = ldr_active ? ldr_DDRAM_BURSTCNT : rot_DDRAM_BURSTCNT;
+assign DDRAM_ADDR     = ldr_active ? ldr_DDRAM_ADDR     : rot_DDRAM_ADDR;
+assign DDRAM_DIN      = ldr_active ? ldr_DDRAM_DIN      : rot_DDRAM_DIN;
+assign DDRAM_BE       = ldr_active ? ldr_DDRAM_BE       : rot_DDRAM_BE;
+assign DDRAM_WE       = ldr_active ? ldr_DDRAM_WE       : rot_DDRAM_WE;
+assign DDRAM_RD       = ldr_active ? ldr_DDRAM_RD       : rot_DDRAM_RD;
 
 endmodule

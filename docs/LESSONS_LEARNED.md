@@ -1228,6 +1228,10 @@ what you wrote can exist.
   fitted, so the wrapped bit pattern was still right), which is why one bug and not four. Make
   every operand of a signed comparison explicitly signed and wide enough not to overflow, and
   distrust "it works" where a coordinate has simply not gone negative yet.
+- **[Seta] A ternary with one unsigned branch is unsigned too.** Vendored `crt_adjust.sv` had
+  `hoff_s = mode ? $signed(hoffset) : {(AW+2){1'b0}}`: the zero literal made the result unsigned, so
+  H-Position -N zero-extended to 512 - N and the picture left the line: every value below
+  zero blanks the screen. Found by a bench that asked for a negative offset (`sim/seta_crt_tb`).
 - **[Fuuki] A debug gate that keys off the load path dies when the load path changes.** The trace
   sources and the memory walker were gated on `dl_done`, set by seeing `ioctl_wr` with index 0.
   Adding the fast DDR ROM load -- where the HPS DMAs straight into DDR3 and NO ioctl write ever
@@ -1308,6 +1312,11 @@ wrong. Prefer stimulus the design already accepts.
 
 ## Driving MAME as a reference generator (Lua)
 
+- **[Seta] Set a DIP with `field.user_value = raw`, not `field:set_value(raw)`.** `set_value` is
+  the field's pressed state: any non-zero argument selects the non-default setting. It worked for
+  thunderl's Flip Screen (default 0) and inverted wits' (default 0x200 = Off), so "Off" captured
+  flipped. Check the capture's own register (here spritectrl[0] bit 6) rather than trusting the
+  request.
 - **[Fuuki] Keep every MAME Lua subscription in a variable that outlives the call.**
   `emu.add_machine_frame_notifier` and `install_write_tap` return subscription objects, and
   dropping the return value lets the garbage collector reclaim them, after which the callback
@@ -1754,3 +1763,79 @@ against writes that land anyway (a write during the copy goes to the copy too,
 and the cursor holds for that cycle). The bench now writes behind the cursor
 and requires the snapshot to hold it; with the write-through disabled it loses
 96 of 96 words.
+
+### [Seta] Read the interrupt vectors before trusting a board's interrupt config
+
+Mobile Suit Gundam restarted after a short while in play. The board arm had
+been given seta_interrupt_1_and_2 -- IRQ 1 at line 240, IRQ 2 at line 112 --
+which is what most two-layer configs use. msgundam's machine config has no
+scanline timer at all: vblank asserts IRQ 2 until a write to 0x400000, and
+the uPD71054C at 0xd00000 asserts IRQ 4 until a write to 0x400004.
+
+The program ROM said what the wrong config risked, in four vectors: the
+level-1 autovector points at 0x734, shared with bus error, address error and
+illegal instruction, and 0x734 is `bra.w $4e4`, the reset entry. The IRQ 4
+handler, which never ran, is the sound driver's tick.
+
+WHAT THIS DID NOT PROVE: that the extra IRQ 1 caused the reboot. The main loop
+runs at mask 1, and a scan of the program found no instruction that lowers it
+to 0, so the held IRQ 1 was probably never taken. The reboot had already
+stopped before the change, and the SDRAM read fault -- which sent other games
+through their illegal-instruction vector, 0x734 here too -- is the likelier
+cause. The vector table showed the path existed; it took a scan for what
+drives SR to say whether the game could ever reach it.
+
+Two things to take from it. A vector that shares its target with the error
+vectors is a vector the game does not expect to be taken -- dump the table
+before deciding a board's interrupts. And an acknowledge address that is also
+an input port must acknowledge on writes only: the generic decode fires on
+reads for thunderl's ipl1_ack_r, and on this board that would have cancelled
+the vblank interrupt every time the game read the joystick.
+
+### [Seta] Decode the RAM a power-on test walks, even the RAM nothing else uses
+
+Extreme Downhill's boot screen drew a tiled pattern where MAME is black, and
+said WORK, OBJECT, COLOR and VIDEO RAM OK. Its RAM test fills a region with
+0xAA, verifies, then 0x55, then 0x00. extdwnhl_map puts 48 KB of plain RAM
+behind each VRAM and 64 KB behind sprite code; the core decoded 16 KB. So
+pass 1's verify read zero at 0x808000 and the test gave up before the clear,
+leaving 0xAAAA in both layers. The screen said OK anyway -- the result byte
+is pushed to a work-RAM stack around five calls with interrupts on, and a
+lost failure bit is the likely reason, not verified.
+
+How it was pinned without probes (the board ran the release build): every
+background colour in the hardware screenshot was an exact match for MAME's
+palette at colour 10 of both layers, which is 0xAAAA & 0x1f; the RTL rendered
+MAME's own RAM at that frame with 0 mismatches, so the rendering was right
+and the state was not. Two things that cost time first: a bench fed another
+game's board config because the prep script had stopped before writing it
+(check fixture timestamps, not just that the run printed), and an assumed
+vregs of 0 when the game writes 1 on frame 0.
+
+The fix mirrors the extra addresses onto the existing arrays rather than
+storing them: the test fills a constant and verifies afterwards, which a
+mirror passes, and a MAME write tap to frame 3000 shows nothing else writes
+there. Real storage was about 90 M10K blocks the device lacks.
+
+### [Seta] Check flip screen against the rotation, not against the emulator
+
+Flip screen was implemented from `update_scroll` and never checked, because no
+flipped reference existed until the DIP capture fix above. The first pass then
+matched the RTL to MAME's flipped renders, and hardware showed the tilemaps
+128 px off: MAME's own flip is wrong for these drivers (its tilemap code now
+mirrors about the visible area; `x1_012`'s `-512` was written against the
+bitmap). The reference is the definition -- the unflipped frame rotated 180
+degrees -- and captures of the same frame with the DIP off and on make it
+checkable exactly. docs/MAME_DIVERGENCE.md has the result.
+
+The same work found that flip moves parked sprites into the picture. Unused
+entries sit at one Y on lines nobody sees; flipped, that Y lands on the top
+eight visible lines, 131 entries on each for blockcar. Fetching and blitting
+each ran the line out of time before the floating tilemap, drawn last. The
+sprite bench passed because it has no budget. A one-entry ROM row cache and
+skipping all-zero rows fixed blockcar; zingzip parks about 200 entries with
+real tile codes there and still loses some of that stale strip.
+
+oisipuzl was a wiring gap: `tilemaps_flip` was decoded but never reached the
+layers, and the game runs with the sprite flip bit set, so its layers were
+flipped.

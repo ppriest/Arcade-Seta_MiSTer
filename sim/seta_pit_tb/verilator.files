@@ -1,0 +1,2 @@
+rtl/cpu/seta_pit.sv
+sim/seta_pit_tb/tb_seta_pit.sv

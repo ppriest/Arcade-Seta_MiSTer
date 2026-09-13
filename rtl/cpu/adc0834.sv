@@ -1,36 +1,7 @@
-// National ADC0834 -- the four-channel serial ADC behind Zombie Raid's guns.
-//
-// The 68000 bit-bangs it through one register (zombraid_state::gun_w):
-//   bit 0  CLK    bit 1  DI    bit 2  /CS
-// and reads DO back as bit 0 of another (gun_r). MAME models the part in
-// machine/adc083x.cpp and this is that state machine, transcribed, for the
-// 0834's three multiplexer bits (SGL/DIF, ODD/SIGN, SELECT1).
-//
-// A conversion, as the game drives it:
-//   /CS falls                      -> WAIT_FOR_START, DO high
-//   CLK rises with DI=1            -> start bit; SHIFT_MUX, bit 0
-//   CLK rises x3                   -> SGL, ODD, SEL1 captured from DI
-//   CLK falls                      -> MUX_SETTLE: sample the channel, DO low,
-//                                     then OUTPUT_MSB_FIRST from bit 7
-//   CLK falls x8                   -> DO = result bit 7 .. 0
-//   CLK rises                      -> WAIT_FOR_SE -> OUTPUT_LSB_FIRST, bit 1
-//   CLK falls x7                   -> DO = result bit 1 .. 7
-//   CLK falls                      -> FINISHED -> IDLE, DO low
-//   /CS rises at any point         -> IDLE, DO high
-//
-// The channel: single-ended (SGL=1) reads ch[ODD + 2*SEL1]; differential
-// reads ch[p] - ch[p^1], clamped at zero -- MAME's conversion() with the
-// inputs scaled 0..255 and VREF at full scale, so the 8-bit result IS the
-// channel value. The game only ever uses single-ended reads of the four
-// gun axes (GUNX1, GUNY1, GUNX2, GUNY2 on CH0..CH3).
-//
-// ORDER WITHIN ONE WRITE. gun_w calls cs_write, then di_write, then
-// clk_write, so a clock edge in the same word as a /CS edge is evaluated
-// AFTER the /CS edge has moved the state, and with the new DI. The
-// next-state block below does the same: the /CS step first, then the clock
-// step on its result. All three bits land in one register write, hundreds
-// of clk_sys cycles apart, so a one-cycle edge detect on the latched value
-// is exact.
+// ADC0834 serial ADC behind Zombie Raid's guns: MAME's adc083x.cpp state
+// machine for the 0834. The 68000 bit-bangs CLK (bit 0), DI (bit 1) and /CS
+// (bit 2) in one register write and reads DO. Within a write the /CS step is
+// applied before the clock step, as MAME's gun_w orders them.
 
 `default_nettype none
 
@@ -62,8 +33,8 @@ module adc0834 (
 	wire clk_rise = ~sclk_q &  sclk;
 	wire clk_fall =  sclk_q & ~sclk;
 
-	// MAME's conversion(), for the 0834: positive = CH0 + ODD + 2*SEL1;
-	// differential pairs with its neighbour, clamped at 0.
+	// conversion(): single-ended ch[ODD + 2*SEL1]; differential minus its
+	// neighbour, clamped at 0.
 	wire [1:0] pos_ch = {sel1, odd};
 	wire [7:0] chv [0:3];
 	assign chv[0] = ch0; assign chv[1] = ch1; assign chv[2] = ch2; assign chv[3] = ch3;

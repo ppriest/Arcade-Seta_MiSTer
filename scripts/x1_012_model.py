@@ -77,7 +77,7 @@ def _sprite_cfg(**over):
     """A Phase 1 sprite config with this family's machine_config values."""
     cfg = dict(GAMES["thunderl"])
     cfg.update(
-        fg_xoffs=(2, 2), fg_yoffs=(-0x12, 0x0e),
+        fg_xoffs=(2, 2), fg_yoffs=(-0x0a, 0x0e),   # flip: see x1_001_model._GROUP_A
         bg_xoffs=(0, 0), bg_yoffs=(0x1, -0x1),
         gfx_colorbase=0x000, total_color_codes=32,
         palette_entries=512,
@@ -186,7 +186,7 @@ SIXBPP_GAMES = {
     # of the colortable keeps MAME's identity default, so layer 2 is direct
     # with the palette base its GFXDECODE carries.
     "zingzip": _6bpp_cfg(
-        rot=270, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=4,
+        rot=270, fg_xoffs=(1, 0), l0_bpp=6, l1_bpp=4,   # flip: rotates 180
         l0_xoffsets=(-2, -1), l1_xoffsets=(-2, -1),
         l0_pal_mode="masked", l0_pal_bank=0x400,
         l1_pal_mode="direct", l1_colorbase=0x200),
@@ -194,30 +194,41 @@ SIXBPP_GAMES = {
         rot=0, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=4,
         l0_xoffsets=(-2, -2), l1_xoffsets=(-2, -2),
         l0_pal_mode="masked", l0_pal_bank=0x400,
-        l1_pal_mode="direct", l1_colorbase=0x200),
+        l1_pal_mode="direct", l1_colorbase=0x200,
+        visarea=(0, 319, 8, 247)),
+    # extdwnhl: set_visarea(0*8, 40*8-1, 1*8, 31*8-1) -- 320 wide, like
+    # oisipuzl; rtl/seta_board_cfg.sv sets narrow_320 for both sets.
     # sokonuke runs extdwnhl's machine_config outright.
     "sokonuke": _6bpp_cfg(
         rot=0, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=4,
         l0_xoffsets=(-2, -2), l1_xoffsets=(-2, -2),
         l0_pal_mode="masked", l0_pal_bank=0x400,
-        l1_pal_mode="direct", l1_colorbase=0x200),
+        l1_pal_mode="direct", l1_colorbase=0x200,
+        visarea=(0, 319, 8, 247)),
     # madshark calls no set_xoffsets at all.
+    # set_visarea(0*8, 48*8-1, 2*8, 30*8-1): 224 lines, short_224 in the RTL.
     "madshark": _6bpp_cfg(
-        rot=270, fg_xoffs=(0, 0), l0_bpp=6, l1_bpp=6,
+        rot=270, fg_xoffs=(1, 0), bg_xoffs=(1, 0), l0_bpp=6, l1_bpp=6,   # flip: rotates 180
+        fg_yoffs=(-0x12, 0x0e),                     # 224 lines: MAME's flip value rotates
+        l0_xoffsets=(-3, 0), l1_xoffsets=(-3, 0),   # flip value: see rtl/seta_board_cfg.sv
         l0_pal_mode="plain", l1_pal_mode="plain",
-        l0_pal_bank=0x400, l1_pal_bank=0x200),
+        l0_pal_bank=0x400, l1_pal_bank=0x200,
+        visarea=(0, 383, 16, 239)),
 }
 
 
 TWO_LAYER_GAMES = {
     # All four use set_fg_xoffsets(0, 0) and both layers at set_xoffsets(-2,-2).
     # daioh is 16 MHz verified from PCB.
-    "daioh":    _two_layer_cfg(rot=270, fg_xoffs=(0, 0)),
+    "daioh":    _two_layer_cfg(rot=270, fg_xoffs=(2, 0)),   # flip: rotates 180
     "rezon":    _two_layer_cfg(rot=0,   fg_xoffs=(0, 0)),
     # wrofaero does NOT call set_xoffsets, so both layers keep the device
     # default {0, 0} rather than daioh's and rezon's (-2, -2).
+    # (flip, noflip): the flip values rotate a flipped frame exactly, where
+    # MAME's do not -- see rtl/seta_board_cfg.sv. Same for magspeed, eightfrc
+    # and madshark.
     "wrofaero": _two_layer_cfg(rot=270, fg_xoffs=(0, 0),
-                               l0_xoffsets=(0, 0), l1_xoffsets=(0, 0)),
+                               l0_xoffsets=(-4, 0), l1_xoffsets=(-4, 0)),
     "msgundam": _two_layer_cfg(rot=0, fg_xoffs=(0, 0)),
     # kamenrid and magspeed carve both tile regions out of one "user1" region
     # with ROM_COPY, so their tiles are 0x40000 and 0x80000 rather than 1-2 MB.
@@ -227,7 +238,7 @@ TWO_LAYER_GAMES = {
     # past the 8 bytes _TWO_LAYER_TAPS covers, so mame_capture.py taps wider
     # for it; the captured frame writes 1, which swaps the layers.
     "magspeed": _two_layer_cfg(rot=0, fg_xoffs=(0, 0),
-                               l0_xoffsets=(0, -2), l1_xoffsets=(0, -2)),
+                               l0_xoffsets=(-2, -2), l1_xoffsets=(-2, -2)),
     # oisipuzl: set_visarea(0, 40*8-1, 2*8, 30*8-1) -- 320x224, narrower and
     # shorter than the 384x240 the rest of the group uses.
     #
@@ -235,6 +246,7 @@ TWO_LAYER_GAMES = {
     # independently of the sprites -- see tilemaps_flip below. Nothing else in
     # Group C has either.
     "oisipuzl": _two_layer_cfg(rot=0, fg_xoffs=(1, 1),
+                               fg_yoffs=(-0x12, 0x0e),
                                l0_xoffsets=(-1, -1), l1_xoffsets=(-1, -1),
                                visarea=(0, 319, 16, 239),
                                tilemaps_flip=1),
@@ -242,21 +254,22 @@ TWO_LAYER_GAMES = {
     # sprite offsets differ -- and no set_xoffsets on either layer.
     # eightfrc: set_visarea(0, 48*8-1, 2*8, 30*8-1) -- 384x224.
     "eightfrc": _two_layer_cfg(rot=90, fg_xoffs=(4, 3),
-                               l0_xoffsets=(0, 0), l1_xoffsets=(0, 0),
+                               fg_yoffs=(-0x12, 0x0e),
+                               l0_xoffsets=(-4, 0), l1_xoffsets=(-4, 0),
                                visarea=(0, 383, 16, 239)),
 }
 
 
 LAYER_GAMES = {
     # set_fg_xoffsets(2, 2), set_xoffsets(-2, -2)
-    "drgnunit": _sprite_cfg(rot=0),
+    "drgnunit": _sprite_cfg(rot=0, fg_xoffs=(-2, 2)),   # flip: rotates 180
     # stg: set_fg_xoffsets(0, 0). Layer offsets inherited.
     "stg":      _sprite_cfg(rot=270, fg_xoffs=(0, 0)),
     # qzkklogy: set_fg_xoffsets(1, 1), set_xoffsets(-1, -1)
     "qzkklogy": _sprite_cfg(rot=0, fg_xoffs=(1, 1), l0_xoffsets=(-1, -1)),
     # qzkklgy2: set_fg_xoffsets(0, 0), set_xoffsets(-3, -1) -- the one set
     # whose flip and noflip layer offsets actually differ.
-    "qzkklgy2": _sprite_cfg(rot=0, fg_xoffs=(0, 0), l0_xoffsets=(-3, -1)),
+    "qzkklgy2": _sprite_cfg(rot=0, fg_xoffs=(2, 0), l0_xoffsets=(-3, -1)),   # flip: rotates 180
 }
 
 
@@ -417,6 +430,8 @@ def _draw(cfg, layer, bmp, vis_dimy, flip, opaque, base=None):
     pm, colors = layer.pixmap()
     sx, sy = layer.scroll(vis_dimy, flip)
     w, h = cfg["screen_w"], cfg["screen_h"]
+    vx0, vx1, vy0, vy1 = cfg["visarea"]
+    xe, ye = cfg.get("flip_extent", (512, 256))
     # PER LAYER, not one for the whole game. daioh's GFXDECODE_ENTRYs put
     # sprites at 0, layer 0 at 0x400 and layer 1 at 0x200 of 512*3 entries.
     if base is None:
@@ -427,7 +442,10 @@ def _draw(cfg, layer, bmp, vis_dimy, flip, opaque, base=None):
         row = bmp[y]
         for x in range(w):
             if flip:
-                px, py = (1023 - (x + sx)) & 1023, (511 - (y + sy)) & 511
+                # Mirrored about the 512x256 bitmap, horizontal scroll
+                # inverted: a flipped frame is the unflipped one rotated 180
+                # degrees. Current MAME uses the visible area, 128 px off.
+                px, py = (xe - 1 - x + sx) & 1023, (ye - 1 - y + sy) & 511
             else:
                 px, py = (x + sx) & 1023, (y + sy) & 511
             o = py * 1024 + px
@@ -470,7 +488,7 @@ def render2(cfg, l0, l1, spr, vis_dimy, flip, vregs):
             sprites()
             _draw(cfg, l0, bmp, vis_dimy, lflip, False, cfg['l0_colorbase'])
         else:
-            _draw(cfg, l0, bmp, vis_dimy, flip, False, cfg['l0_colorbase'])
+            _draw(cfg, l0, bmp, vis_dimy, lflip, False, cfg['l0_colorbase'])
             sprites()
     else:                               # layer 0 underneath
         _draw(cfg, l0, bmp, vis_dimy, lflip, True, cfg['l0_colorbase'])
@@ -478,7 +496,7 @@ def render2(cfg, l0, l1, spr, vis_dimy, flip, vregs):
             sprites()
             _draw(cfg, l1, bmp, vis_dimy, lflip, False, cfg['l1_colorbase'])
         else:
-            _draw(cfg, l1, bmp, vis_dimy, flip, False, cfg['l1_colorbase'])
+            _draw(cfg, l1, bmp, vis_dimy, lflip, False, cfg['l1_colorbase'])
             sprites()
     if order & 4:
         raise NotImplementedError(
@@ -512,35 +530,11 @@ def render(cfg, vram, vctrl, tiles, spr, vis_dimy, flip,
         row = bmp[y]
         for x in range(w):
             if flip:
-                # FLIP SCREEN IS NOT SOLVED. This branch is wrong and is left
-                # here so the shape is visible, not because it works.
-                #
-                # Every frame this model was verified against has flip screen
-                # CLEAR -- 12 of 12 pixel-identical, all unflipped. The first
-                # flipped capture ever taken for this family (drgnunit f900,
-                # spritectrl[0] = 0x50, via mame_capture.py --dip) puts 29.6%
-                # of the pixels wrong, and bucketing them by whether the sprite
-                # pass drew them gives ZERO wrong under sprites and all 27,309
-                # in the tilemap. So the sprite flip is right and this is not.
-                #
-                # Eight candidate mappings scored against MAME's own render:
-                #     70.37%  1023-(x+sx), 511-(y+sy)        <- this one
-                #     70.37%  1023-x+sx, 511-y+sy
-                #     70.37%  mirror x only
-                #     70.35%  x-sx-512, mirror y
-                #     70.25%  x-sx-512, y-sy-256   (draw_tilemap_palette_effect)
-                #     65.12%  mirror y only
-                #     48.87%  x-sx, y-sy
-                #     46.67%  x+sx, y+sy           (no flip at all)
-                # Three different mappings tie at the top and "mirror x only"
-                # scores the same as a full mirror, which means the y term is
-                # not discriminating -- so the error is not in this expression.
-                #
-                # NEXT HYPOTHESIS, untested: MAME's set_flip(TILEMAP_FLIPX |
-                # TILEMAP_FLIPY) also inverts EACH TILE'S OWN flip bits, not
-                # just the map indexing. None of the eight candidates touched
-                # tile_info's flipx/flipy, and that is where to look next.
-                px, py = (1023 - (x + sx)) & 1023, (511 - (y + sy)) & 511
+                # As _draw.
+                vx0, vx1, vy0, vy1 = cfg["visarea"]
+                xe, ye = cfg.get("flip_extent", (512, 256))
+                px, py = ((xe - 1 - x + sx) & 1023,
+                          (ye - 1 - y + sy) & 511)
             else:
                 px, py = (x + sx) & 1023, (y + sy) & 511
             o = py * 1024 + px

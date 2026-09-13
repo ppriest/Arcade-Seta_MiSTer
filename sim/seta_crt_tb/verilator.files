@@ -1,0 +1,4 @@
+rtl/video/seta_video_timing.sv
+rtl/video/crt_adjust.sv
+rtl/video/seta_crt.sv
+sim/seta_crt_tb/tb_seta_crt.sv

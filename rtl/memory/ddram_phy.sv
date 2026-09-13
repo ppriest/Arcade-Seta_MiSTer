@@ -1,28 +1,13 @@
-// Single-port wrapper around MiSTer's real DDRAM_* interface.
+// MiSTer DDRAM_* behind a req/valid/busy client interface, one transaction at
+// a time, burst count 1. Reads return an 8-byte granule; writes one byte.
 //
-// Vendored from Arcade-Psikyo_MiSTer, where the protocol was verified against
-// a working reference (MiSTer-devel/TSConf_MiSTer's ddram.sv) rather than
-// derived from the documentation alone. Unchanged except for this header.
-//
-// Presents a req/valid client interface, matching this project's convention
-// for latency-agnostic external memory ports: one transaction in flight at a
-// time, no arbitration of its own.
-//
-//   READ:  8-byte-aligned granule in, full 64-bit DDRAM_DOUT out (`addr`'s
-//          low 3 bits are ignored).
-//   WRITE: single BYTE in (`wdata`), `addr` selects the lane via DDRAM_BE.
-//
-// DDRAM_BURSTCNT is always 1 -- no multi-beat bursting. Here the only client
-// is the ROM loader, whose copy is bounded by DDR3 latency per granule; wider
-// bursts are the obvious throughput improvement if the copy ever needs one.
+// From Arcade-Fuuki_MiSTer (562c3de), via Arcade-Psikyo_MiSTer.
 
 module ddram_phy (
 	input  logic clk,
 	input  logic reset,
 
-	// physical DDRAM interface (sys/emu_ports.vh) -- DDRAM_CLK is driven
-	// separately at the top level (assign DDRAM_CLK = clk;), not by this
-	// module, matching the reference's own convention.
+	// DDRAM_CLK is driven at the top level
 	input  logic         DDRAM_BUSY,
 	output logic [7:0]  DDRAM_BURSTCNT,
 	output logic [28:0] DDRAM_ADDR,
@@ -33,7 +18,6 @@ module ddram_phy (
 	output logic [7:0]  DDRAM_BE,
 	output logic         DDRAM_WE,
 
-	// client interface
 	input  logic         req,      // pulse: start a transaction (only while !busy)
 	input  logic         we,       // 0 = 8-byte-granule read, 1 = single-byte write
 	input  logic [27:0] addr,     // byte offset from the 0x30000000 HPS extra-RAM base

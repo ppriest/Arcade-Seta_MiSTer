@@ -1,170 +1,46 @@
-// Seta X1-001A / X1-002A — sprites, and the "floating tilemap" made of sprites.
+// X1-001A / X1-002A sprites and the sprite-built "floating tilemap", one
+// scanline ahead into a double line buffer. Reference: scripts/x1_001_model.py
+// (MAME's video/x1_001.cpp), checked by sim/x1_001_tb.
 //
-// Transcribed from src/devices/video/x1_001.cpp. scripts/x1_001_model.py is a
-// line-by-line transcription of the same file and is what sim/x1_001_tb checks
-// this against; that model in turn reproduces MAME's own render of 24 captured
-// frames across eight sets, pixel for pixel, so the chain from the C++ to here
-// is closed at both ends.
+// draw_background: 16 columns x 32 tiles from spritecode[0x400..], per-column
+// scroll. draw_foreground: up to 512 sprites from spritecode[0x000..], entry 0
+// on top. This engine walks front to back (foreground from entry 0, then the
+// background columns in reverse) and the line buffer's written bit makes the
+// first writer win; a line out of time (line_budget) drops the bottom-most.
 //
-// TWO INDEPENDENT THINGS SHARE THE CHIP
-//   draw_background renders 16 columns x 32 sprites out of spritecode[0x400..]
-//   with per-column scroll -- games use it as a background layer -- and
-//   draw_foreground renders up to 512 ordinary sprites out of
-//   spritecode[0x000..]. Background first, so foreground is on top; foreground
-//   walks HIGH INDEX FIRST so entry 0 ends up on top of that. There is no
-//   per-sprite priority anywhere in the chip, so a line buffer written
-//   back-to-front, skipping the transparent pen, reproduces the order exactly.
+// Per scanline L, MAME's four wrap copies reduce to:
+//   fg: covered iff ((L + Y) & 0xff) < 16, Y = (sy + fg_yoffs) & 0xff
+//   bg: row r = (L - S0) >> 4, S0 = -(scrolly + bg_yoffs)
+//   x:  (sx + xoffs) & 0x1ff on a 512-wide buffer
 //
-// THE TWO HALVES POSITION Y OPPOSITELY, and this is not a tidying opportunity.
-//   foreground:  y = max_y - ((sy + fg_yoffs) & 0xff), max_y = screen HEIGHT
-//                (256 here, not the 240 visible)
-//   background:  y = (-(scrolly + bg_yoffs) + (offs/2)*16) & 0xff, with no
-//                reflection at all
-//   Per scanline, with each sprite also drawn 256 lines higher, that becomes
-//     fg: covered iff ((L + Y) & 0xff) < 16, row = (L + Y) & 0x0f
-//     bg: covered iff ((L - S) & 0xff) < 16, row = (L - S) & 0x0f, and since
-//         the 16 rows of a column are 16 pixels apart over exactly 256 lines,
-//         EXACTLY ONE of them lands on any given line: r = ((L - S0) >> 4).
-//   Both forms are asserted against the four-copy original in
-//   x1_001_model.py's selftest, over all 256x256 combinations.
+// Bank: (ctrl2 ^ (~ctrl2 << 1)) & 0x40, i.e. bits 6 and 5 of spritectrl[1]
+// equal. setac_eof (buffer_sprites) copies half to half at vblank when bit 5
+// is clear, through the engine's read port. The engine renders from a snapshot
+// of the RAMs taken late in vblank (snap_start); a CPU write during the copy
+// holds it.
 //
-// THE ENGINE WALKS FRONT TO BACK, WHICH IS THE REVERSE OF MAME'S ORDER, and
-//   the line buffer carries a written bit so the FIRST writer of a pixel wins.
-//   That is the same picture -- MAME's back-to-front overwrite and this
-//   front-to-back first-wins are duals -- but it is not the same behaviour when
-//   the engine RUNS OUT OF TIME.
+// A sprite row is one ROM granule after gfx_swizzle.sv: rom_data words are
+// half1 xh=0, half1 xh=1, half2 xh=0, half2 xh=1, low to high.
 //
-//   It runs out of time routinely. The chip walks all 512 foreground entries
-//   every line, and a game using 40 of them leaves the other 472 holding one
-//   stale y, so they all land on the same sixteen scanlines: measured over 24
-//   captures, the busiest line of EVERY ONE carries between 155 and 544
-//   sprites, gameplay frames included. 512 sprites in a 512-dot line at 8 MHz
-//   is 12 clk_sys cycles each. The real chip has a limit too -- a 32-bit
-//   sprite ROM bus at 16 MHz is exactly 512 rows of 8 bytes per 64 us line
-//   with nothing spare, and x1_001.cpp's own comment says "Draw up to 512
-//   sprites, mjyuugi has glitches if you draw them all".
-//
-//   Back-to-front with a time cutoff drops the sprites not reached yet, which
-//   are the LOWEST indices -- the ones the chip draws last and therefore puts
-//   ON TOP. Front-to-back drops the bottom-most instead, which is what an
-//   overflowing sprite chip does. line_budget sets the cutoff and dbg_dropped
-//   counts what it cost.
-//
-// THE FOUR WRAP COPIES COLLAPSE. MAME draws every sprite at (x, y), (x-512, y),
-//   (x, y-256) and (x-512, y-256). Modulo a 512-wide line buffer and the
-//   per-line y test above, those four are one draw at (x & 0x1ff) -- also
-//   asserted in the model's selftest rather than assumed here.
-//
-// THE BANK EXPRESSION IS NOT `ctrl2 & 0x40`. `(ctrl2 ^ (~ctrl2 << 1)) & 0x40`
-//   expands to bit6 XOR (NOT bit5), i.e. true when BITS 6 AND 5 AGREE. It is
-//   copied verbatim below. thunderl's control bytes are `10 6c 00 ff` -- both
-//   set -- so it draws from spritecode[0x1000] and, bit 5 being set, never
-//   buffers; an implementation that read the expression as bit 6 alone would
-//   draw an empty screen. LESSONS_LEARNED, "Copy a driver's register
-//   expression including its operators".
-//
-// GRAPHICS FETCH: ONE 64-BIT GRANULE PER SPRITE ROW.
-//   layout_sprites is RGN_FRAC(1,2) 4bpp -- the region splits in half and each
-//   half carries two bit planes, a tile being 64 bytes per half laid out as
-//   byte = 32*yh + 16*xh + 2*yl + p, MSB the leftmost pixel. In MAME's layout a
-//   16-pixel ROW is four 16-bit words sitting 16 bytes and half a region apart:
-//   four addresses, four different SDRAM granules, four round trips. Measured,
-//   that was ~56 of the ~90 clk_sys cycles a sprite cost, and it capped the
-//   engine at 68 sprites per line against the 512 the chip walks.
-//
-//   rtl/memory/gfx_swizzle.sv permutes the region's WORD ADDRESSES at download
-//   time so a row is eight contiguous, 8-byte-aligned bytes. The whole address
-//   calculation here then collapses to the granule at {tile, yh, yl}, and the
-//   four words arrive in one read:
-//       rom_data[15:0]  half1 xh=0      rom_data[31:16] half1 xh=1
-//       rom_data[47:32] half2 xh=0      rom_data[63:48] half2 xh=1
-//   Word order within a granule is sdram.sv's: g_data[16*i] is the word at the
-//   LOWEST byte address, which sdram_narrow_bridge.sv documents and indexes
-//   with addr[2:1].
-//
-// SPRITE BUFFERING -- setac_eof, added for Phase 2
-//
-//   void x1_001_device::setac_eof()
-//   {
-//       int const ctrl2 = m_spritectrl[1];
-//       if (~ctrl2 & 0x20)
-//       {
-//           if (ctrl2 & 0x40)
-//               std::copy_n(&m_spritecode[0x1000], 0x800, &m_spritecode[0x0000]);
-//           else
-//               std::copy_n(&m_spritecode[0x0000], 0x800, &m_spritecode[0x1000]);
-//       }
-//   }
-//
-//   Gated on BIT 5 CLEAR, direction on bit 6. No Group A game wires it, and
-//   measured on the Phase 2 captures drgnunit and stg have bit 5 SET -- so the
-//   copy never runs for them either. Only qzkklogy and qzkklgy2 buffer, and
-//   they do it every frame. buffer_sprites keeps it off everywhere else.
-//
-//   IT USES THE ENGINE'S READ PORT, not the CPU's. The code RAM already has
-//   two read ports -- one for the CPU, one for the engine -- and adding a
-//   third would stop Quartus inferring block RAM for 8192 words and build it
-//   out of logic instead. The engine is idle during vblank, which is exactly
-//   when the copy runs, so its port is free.
-//
-//   WHERE THIS DIVERGES FROM MAME, stated rather than discovered later: MAME's
-//   copy is instantaneous at the vblank edge. This one takes 2048 cycles --
-//   about 21 us at 96 MHz -- and holds the write port for that time, so a CPU
-//   write into the DESTINATION half during those first 21 us of vblank is
-//   overwritten by the copy where MAME would keep it. The window is small and
-//   the alternative is a second write port on a RAM this size.
-//
-// NOT IMPLEMENTED HERE, DELIBERATELY
-//   * m_bgflag, which makes the background opaque, is written by exactly one
-//     memory map in seta.cpp -- crazyfgt_map, which is out of scope. The input
-//     exists so the omission is visible rather than silent.
-//
-// FLIP SCREEN is implemented, and is checked against the model only. No
-//   captured frame has it set (every Group A capture reads ctrl0 = 0x10, bit 6
-//   clear), so the path is a transcription that agrees with another
-//   transcription -- unlike the unflipped path, which is checked against
-//   MAME's own render.
+// m_bgflag (opaque background) is an input only; no in-scope map writes it.
 
 `default_nettype none
 
 module x1_001 #(
-	// Palette index width. Group A needs 10 bits (pairlove's gfx colorbase is
-	// 0x200, and a sprite reaches 0x200 + 31*16 + 15 = 0x3ff); Group C's
-	// palette runs to 1536 entries. 11 bits covers both.
+		// palette index width
 	parameter int LB_W = 11
 ) (
 	input  wire         clk,
 	input  wire         reset,
 
-	// =====================================================================
-	// CPU side. Three separate blocks, because seta.cpp maps them separately
-	// and on several boards far apart.
-	//
-	// REGISTERED ONE CYCLE IN AND ONE OUT, the same shape x1_010.sv ended up
-	// with after Phase 0's timing work: a peripheral hanging combinationally
-	// off the CPU data bus puts the CPU's slowest register output in series
-	// with this decode and a RAM setup, which measured -1.169 ns there. One
-	// register stage is cheaper than a multicycle and needs no audit.
-	//
-	// This comment described the intent for a while before the code did. The
-	// first whole-core build's critical path ran the TG68K register file
-	// straight into a peripheral RAM's data input, which is exactly what the
-	// paragraph above says not to do -- the input registers below were simply
-	// never written. A comment is not a constraint.
-	//
-	// maincpu.sv spends three cycles on an io access and captures the read in
-	// the third, so the extra stage is free: the address reaches the array in
-	// the second cycle and the data is back in time for the third.
-	// =====================================================================
+	// CPU side, registered in (maincpu reads in the third io cycle)
 	input  wire         code_we,
 	input  wire  [12:0] code_addr,      // word address into 0x2000 words
 	input  wire  [15:0] code_wdata,
 	input  wire         code_uds, code_lds,
 	output logic [15:0] code_rdata,
 
-	// spriteylow is a BYTE array in MAME (0x300 of them) that the CPU sees as
-	// words; spriteylow_w16 takes only ACCESSING_BITS_0_7, so the high byte is
-	// not stored anywhere and reads back as zero.
+	// spriteylow: bytes; the high byte of a word write is dropped
 	input  wire         ylow_we,
 	input  wire   [9:0] ylow_addr,
 	input  wire   [7:0] ylow_wdata,
@@ -175,10 +51,7 @@ module x1_001 #(
 	input  wire   [7:0] ctrl_wdata,
 	output logic  [7:0] ctrl_rdata,
 
-	// =====================================================================
-	// Board configuration. Every one of these is a machine_config call or a
-	// GFXDECODE field in seta.cpp, not a tuning knob.
-	// =====================================================================
+	// board configuration (machine_config / GFXDECODE)
 	input  wire signed [8:0] fg_xoffs,      // set_fg_xoffsets(flip, noflip)
 	input  wire signed [8:0] fg_xoffs_flip,
 	input  wire signed [8:0] fg_yoffs,      // set_fg_yoffsets(flip, noflip)
@@ -191,11 +64,10 @@ module x1_001 #(
 	input  wire   [8:0] spritelimit,        // m_spritelimit, 0x1ff
 	input  wire   [3:0] transpen,           // m_transpen, 0
 	input  wire         bgflag_opaque,      // m_bgflag & 0x80 -- always 0 in scope
-	// screen_vblank_seta_buffer_sprites, on the RISING edge of vblank.
+	// screen_vblank_seta_buffer_sprites
 	input  wire         buffer_sprites,
 	input  wire         vblank_rise,
-	// When to take the snapshot the engine renders from: late in vblank,
-	// after the game's handler has had the blanking interval to write.
+	// snapshot, late in vblank
 	input  wire         snap_start,
 	input  wire [LB_W-1:0] colorbase_fg,    // gfx colorbase + m_colorbase*16
 	input  wire [LB_W-1:0] colorbase_bg,    // gfx colorbase alone
@@ -203,91 +75,50 @@ module x1_001 #(
 	input  wire   [8:0] vis_max_y,          // visible_area().max_y
 	input  wire [LB_W-1:0] backdrop,        // the bitmap.fill() before drawing
 	input  wire  [15:0] code_mask,          // tiles-per-half minus one
-	// Cycles the engine may spend on one line before it gives up and displays
-	// what it has. 0 disables the cutoff, which is what the model comparison
-	// runs with -- the model has no time limit either, so a bench that capped
-	// the engine would be diffing two different pictures.
+	// per-line cycle limit; 0 = none (model comparison)
 	input  wire  [15:0] line_budget,
 
-	// =====================================================================
-	// Line engine. Pulse line_start with the line to PREPARE; the result
-	// lands in the buffer the video side is not reading.
-	// =====================================================================
+	// line_start names the line to render into the undisplayed buffer
 	input  wire         line_start,
 	input  wire   [8:0] line,
 	output logic        line_done,
 	output logic        busy,
 
-	// ---- graphics ROM: one 64-bit granule per sprite row --------------------
-	// rom_req is a one-cycle pulse with rom_addr held until rom_valid, which is
-	// sdram_narrow_bridge.sv's contract and the OPPOSITE of the arbiter's.
-	// rom_addr is a GRANULE address -- 8-byte units -- because a swizzled
-	// sprite row is exactly one granule and never straddles two.
+	// sprite ROM: rom_req pulses, rom_addr (a granule) held until rom_valid
 	output logic        rom_req,
 	output logic [23:3] rom_addr,
 	input  wire         rom_valid,
 	input  wire  [63:0] rom_data,
 
-	// ---- line buffer readback ----------------------------------------------
 	input  wire   [8:0] lb_addr,
 	output logic [LB_W-1:0] lb_data,
-	// Whether a sprite actually wrote this dot. The line buffer already
-	// carries the bit -- it is what makes front-to-back drawing work, first
-	// writer wins -- and it was simply not brought out. Phase 2 needs it: a
-	// tilemap layer is drawn OPAQUE underneath and the sprites go over, so the
-	// mixer picks the sprite pixel only where there is one.
+	// a sprite wrote this dot
 	output logic        lb_hit,
-	// m_spritegen->is_flipped(). seta_layers_update takes the TILE LAYER's
-	// flip from the sprite chip, not from a register of its own, so it has to
-	// leave here.
+	// is_flipped(); the tile layers take their flip from it
 	output wire         flipscr_out,
 
-	// ---- instrumentation ---------------------------------------------------
-	// Every bad-event counter is paired with a total, so a zero can be told
-	// from "never ran" (LESSONS_LEARNED, "Pair every bad-event counter with a
-	// total"). Port-declaration initialisers, no reset: an `initial` block
-	// would be a second driver and Quartus rejects it -- see
-	// rtl/debug/debug_counter.sv.
+	// counters: port initialisers, saturating, not reset
 	output logic [15:0] dbg_lines   = '0,
 	output logic [15:0] dbg_sprites = '0,   // sprites blitted, saturating
 	output logic [15:0] dbg_fetches = '0,   // ROM words read, saturating
 	output logic [15:0] dbg_overrun = '0,   // lines still rendering at the next start
-	// The two numbers the line budget is judged on, measured in the RTL rather
-	// than in a testbench's $time -- these also go on the OSD debug page, where
-	// $time does not exist. A line is 512 dots at a believed 8 MHz dot clock =
-	// 6144 clk_sys cycles at 96 MHz.
+	// worst line in clk_sys cycles (a line is 6144)
 	output logic [15:0] dbg_worst_line    = '0,   // clk_sys cycles, line_start to done
 	output logic [15:0] dbg_worst_sprites = '0,   // sprites blitted in one line
 	output logic [15:0] dbg_dropped       = '0    // lines cut short by line_budget
 );
 
-	// =====================================================================
-	// Chip RAM
-	//
-	// One write port and one read port each -- a SIMPLE dual-port RAM, which
-	// an M10K provides directly. The CPU's own read shares its write port
-	// rather than asking for a third address: x1_010.sv's provenance records
-	// what the other shape costs here, which was an 8 KB array built out of
-	// logic and the design missing the device by 47%.
-	// =====================================================================
+	// Chip RAM: one write and one read port each (block RAM inference).
 	logic [15:0] codemem [0:8191];
 	logic  [7:0] ylowmem [0:1023];
 	logic  [7:0] ctrlmem [0:3];
 
-	// THE SNAPSHOT. The engine renders from copies of the three RAMs taken
-	// at vblank, not from the RAMs the CPU writes. Daioh and Eight Forces
-	// rewrite the whole sprite list in their scanline-112 handler -- the Y
-	// list at 113-117, control at 117, codes from 119 to past 200 -- while
-	// the raster is inside the picture (scripts/mame_capture.py --wlog).
-	// Rendered live, the lines above the write showed the old list and the
-	// lines below the new one: a tear across the middle of every frame.
-	// MAME draws the frame at vblank from whatever the list holds then, and
-	// a PCB shows no tear, so the chip does the equivalent. Copied AFTER
-	// setac_eof's half-copy, so a buffered game snapshots the buffered list.
+	// Snapshot copies the engine renders from, taken after any setac_eof copy.
+	// Games rewrite the list mid-frame (daioh, eightfrc at line 112); MAME draws
+	// at vblank.
 	logic [15:0] codesh [0:8191];
 	logic  [7:0] ylowsh [0:1023];
 	logic  [7:0] ctrlsh [0:3];
-	// The live RAMs' read-port data, for setac_eof and the snapshot copy.
 	logic [15:0] live_code_q;
 	logic  [7:0] live_ylow_q;
 
@@ -296,8 +127,6 @@ module x1_001 #(
 	logic [15:0] eng_code_q;
 	logic  [7:0] eng_ylow_q;
 
-	// The input register stage. Everything the CPU drives is captured here and
-	// nothing downstream sees the raw ports.
 	logic        c_we, c_uds, c_lds;
 	logic [12:0] c_addr;
 	logic [15:0] c_wdata;
@@ -315,24 +144,14 @@ module x1_001 #(
 		k_we <= ctrl_we; k_addr <= ctrl_addr; k_wdata <= ctrl_wdata;
 	end
 
-	// ctrl2 gates and directs the buffering copy as well as selecting the
-	// bank, so it is declared before both uses.
-	// MAME's setac_eof reads m_spritectrl[1] -- the SECOND byte, the same one
-	// the drawer's bank expression reads. It was taken from ctrlmem[2] here,
-	// which Mobile Suit Gundam holds at 0xff: bit 5 set, so the copy never
-	// ran, and the drawer read the bank nothing had filled. Live, not the
-	// snapshot: the copy happens at the vblank itself.
+	// spritectrl[1], live: setac_eof reads it at vblank
 	wire [7:0] eof_ctrl = ctrlmem[1];
 
-	// ---- setac_eof --------------------------------------------------------
+	// setac_eof
 	logic        eof_busy = 1'b0;
 	logic [10:0] eof_i;
 	logic        eof_dir;              // ctrl2 bit 6: 1 = 0x1000 -> 0x0000
-	// WORD offsets, as m_spritecode is a u16 array: the halves are 0x1000
-	// words apart (bit 12). Written as bit 11 and the other way round, no
-	// game that copies had ever rendered -- Dragon Unit's family sets bit 5
-	// and never copies; Mobile Suit Gundam copies 0x0000 -> 0x1000 and the
-	// drawer reads 0x1000+, which nothing filled: no sprites at all.
+	// word offsets: the halves are 0x1000 apart
 	logic        eof_wr;
 	logic [12:0] eof_waddr;
 
@@ -344,14 +163,13 @@ module x1_001 #(
 		if (reset) begin
 			eof_busy <= 1'b0;
 		end else if (!eof_busy) begin
-			// ~ctrl2 & 0x20 -- bit 5 CLEAR means buffer.
+			// ~ctrl2 & 0x20
 			if (vblank_rise && buffer_sprites && !eof_ctrl[5]) begin
 				eof_busy <= 1'b1;
 				eof_dir  <= eof_ctrl[6];
 				eof_i    <= 11'd0;
 			end
 		end else begin
-			// The word read on the previous cycle is written this one.
 			eof_wr    <= 1'b1;
 			eof_waddr <= eof_dst;
 			if (eof_i == 11'h7ff) eof_busy <= 1'b0;
@@ -359,34 +177,12 @@ module x1_001 #(
 		end
 	end
 
-	// ---- the snapshot copy ------------------------------------------------
-	// 8192 code words then 1024 Y bytes, one a cycle: 9216 cycles, under two
-	// scanlines, and held until any setac_eof copy has finished. The engine
-	// reads the half-written snapshot meanwhile, on lines nobody sees.
-	// Control is sampled at the start.
-	//
-	// WHEN, AND WHAT THE CPU IS DOING MEANWHILE. Taken at vblank_rise this
-	// copy started on the same line as the games' vblank interrupt, so it
-	// walked the sprite list while the handler rewrote it: the records below
-	// the cursor came from the new frame and the ones above it from the old,
-	// and a sprite drew with another sprite's tile or flip. It showed only
-	// while the CPU was running -- paused, there was nothing to race with --
-	// and worst on the sets that write the most list in that handler
-	// (Mad Shark). Two things fix it, and both are needed:
-	//
-	//   * snap_start fires FIVE LINES BEFORE the frame wraps instead, so the
-	//     handler has the whole blanking interval to finish first;
-	//   * a CPU write during the copy takes the shadow's write port and
-	//     holds the copy for that cycle, so the word it is on is re-read
-	//     after the write rather than before it. The shadow is then the live
-	//     RAM as of the moment the copy ends, not a mixture of two frames.
-	//     The 68000 cannot write oftener than one cycle in twenty-four here,
-	//     so the hold costs a few per cent of a copy that has a line and a
-	//     half of margin.
+	// Snapshot: 8192 code words then 1024 Y bytes, one a cycle, after setac_eof.
+	// A CPU write during the copy holds it for that cycle, so the word is re-read
+	// after the write.
 	logic        snap_pending = 1'b0, snap_busy = 1'b0;
 	logic [13:0] snap_i, snap_wi;
 	logic        snap_wr_code, snap_wr_ylow;
-	// A CPU write takes the shadow's write port, so the copy stands still.
 	wire         snap_hold = snap_busy && ((c_we && (c_uds || c_lds)) || y_we);
 	always_ff @(posedge clk) begin
 		snap_wr_code <= 1'b0;
@@ -397,9 +193,6 @@ module x1_001 #(
 		end else begin
 			if (snap_start) snap_pending <= 1'b1;
 			if (snap_busy) begin
-				// The word read on the previous cycle is written this one --
-				// unless the CPU is writing, in which case the copy stands
-				// still and this word is read again next cycle.
 				if (!snap_hold) begin
 					snap_wi      <= snap_i;
 					snap_wr_code <= (snap_i < 14'd8192);
@@ -414,18 +207,12 @@ module x1_001 #(
 				ctrlsh[0] <= ctrlmem[0]; ctrlsh[1] <= ctrlmem[1];
 				ctrlsh[2] <= ctrlmem[2]; ctrlsh[3] <= ctrlmem[3];
 			end
-			// The control bytes are four registers rather than a RAM, so a
-			// write during the copy simply goes to both.
+			// control bytes are flops: a write during the copy goes to both
 			if (snap_busy && k_we) ctrlsh[k_addr] <= k_wdata;
 		end
 	end
 
-	// ONE WRITE ADDRESS, MUXED -- not two branches writing different addresses.
-	// Written the obvious way, with the copy in an if and the CPU in the else,
-	// this RAM stops inferring as block RAM and Quartus builds 8192 words out
-	// of logic: the fit came back with 128,660 combinational nodes against the
-	// device's 83,820. Same rule as LESSONS_LEARNED's "a true dual-port RAM
-	// must be ONE always block with both ports in it".
+	// one muxed write address, one always block (block RAM inference)
 	wire [12:0] cw_addr = eof_wr ? eof_waddr  : c_addr;
 	wire [15:0] cw_data = eof_wr ? live_code_q : c_wdata;
 	wire        cw_lo   = eof_wr ? 1'b1 : (c_we && c_lds);
@@ -437,15 +224,11 @@ module x1_001 #(
 		code_rdata <= codemem[c_addr];
 	end
 
-	// The live RAM's read port serves setac_eof's copy and the snapshot; the
-	// engine reads the snapshot.
 	wire [12:0] live_rd_addr = eof_busy ? eof_src : snap_i[12:0];
 	always_ff @(posedge clk) live_code_q <= codemem[live_rd_addr];
 	always_ff @(posedge clk) eng_code_q  <= codesh[eng_code_addr];
 
-	// THE SHADOW'S WRITE PORT, muxed: the copy has it except on a cycle the
-	// CPU writes, which takes it and holds the copy. One port, one always
-	// block, for the reason the live RAM's comment gives.
+	// shadow write port: the copy's, except on a CPU write
 	wire        shc_cpu    = snap_busy && c_we;
 	wire [12:0] shc_addr   = shc_cpu ? c_addr  : snap_wi[12:0];
 	wire [15:0] shc_data   = shc_cpu ? c_wdata : live_code_q;
@@ -473,31 +256,14 @@ module x1_001 #(
 		ctrl_rdata <= ctrlmem[k_addr];
 	end
 
-	// The four control bytes are read continuously rather than through a port:
-	// the engine needs all of them at once, and a four-entry array is flops
-	// however it is written.
-	// The engine's view of the control registers is the snapshot's; ctrl2
-	// above stays live because setac_eof reads it at the vblank itself.
+	// the engine uses the snapshot's control bytes
 	wire [7:0] ctrl0 = ctrlsh[0];
 	wire [7:0] ctrl1 = ctrlsh[1];
 	wire [7:0] ctrl2 = ctrlsh[2];
 	wire [7:0] ctrl3 = ctrlsh[3];
 
-	// =====================================================================
-	// Line buffers: two of 512, written by the engine, read by the video side.
-	// 512 rather than the 384 visible, because a sprite's x wraps modulo 512
-	// and the off-screen part has to land somewhere harmless.
-	// =====================================================================
-	// Each entry is { written, pen }. Walking front to back, the FIRST writer
-	// of a pixel wins, so one bit replaces what would otherwise be a stored
-	// sprite index and a comparator.
-	//
-	// ONE READ PORT AND ONE WRITE PORT EACH, still -- a simple dual-port RAM,
-	// which an M10K provides. The engine's read-modify-write and the video
-	// side's readback never happen on the SAME buffer at the same time (the
-	// engine renders into one while the video reads the other), so the read
-	// address is a mux, not a second port. Asking for two read addresses is
-	// what made Quartus replicate x1_010's register file into logic.
+	// Two 512-entry line buffers of {written, pen}. The engine renders into one
+	// while the video reads the other, so each needs one read address (muxed).
 	localparam int LBE = LB_W + 1;
 	logic [LBE-1:0] lbuf0 [0:511];
 	logic [LBE-1:0] lbuf1 [0:511];
@@ -521,17 +287,12 @@ module x1_001 #(
 		if (lb_we && render_bank) lbuf1[lb_waddr] <= lb_wdata;
 		lb_q1 <= lbuf1[rd1];
 	end
-	// The video side reads whichever buffer the engine is not writing. Delayed
-	// by one cycle to line up with the registered RAM output above.
+	// video reads the buffer not being rendered, a cycle late for the RAM
 	always_ff @(posedge clk) disp_bank <= ~render_bank;
 	assign lb_data = disp_bank ? lb_q1[LB_W-1:0] : lb_q0[LB_W-1:0];
 	assign lb_hit  = disp_bank ? lb_q1[LB_W]     : lb_q0[LB_W];
-	// ...and the engine probes the one it IS writing.
 	wire [LBE-1:0] blit_q = render_bank ? lb_q1 : lb_q0;
 
-	// =====================================================================
-	// Control-register decode
-	// =====================================================================
 	wire        use_bank = ((ctrl1 ^ (~ctrl1 << 1)) & 8'h40) != 8'h00;
 	wire [12:0] bank_off = use_bank ? bank_size : 13'd0;
 	wire        flipscr  = ctrl0[6];
@@ -547,9 +308,6 @@ module x1_001 #(
 	wire  [3:0] startcol   = (ctrl0[0] ? 4'd4 : 4'd0) + (ctrl0[1] ? 4'd8 : 4'd0);
 	wire [15:0] upper      = {ctrl3, ctrl2};
 
-	// =====================================================================
-	// The engine
-	// =====================================================================
 	typedef enum logic [4:0] {
 		S_IDLE,
 		S_CLEAR,
@@ -571,24 +329,14 @@ module x1_001 #(
 	logic  [7:0] bg_scrolly, bg_scrollx;
 	logic  [3:0] bg_r, bg_row;
 
-	// The foreground scan is PIPELINED: one entry issued per cycle, and the
-	// entry under test trails the address by TWO -- eng_ylow_addr is a
-	// register, so an address set at the end of cycle k is only presented to
-	// the RAM during k+1 and its data is only readable in k+2. Scanning 512
-	// entries two cycles each would cost 1024 of a line's ~6100 clk_sys
-	// cycles, which is most of the sprite budget on its own.
-	//
-	// issue_* is the address side, d1_*/d2_* the two delay stages. Every stage
-	// carries a valid bit so the tail of the scan drains correctly, and so a
-	// hit -- which abandons the two entries in flight and re-primes below
-	// them -- cannot leave a stale index looking testable.
+	// Foreground scan pipeline: one entry issued per cycle; its Y byte is
+	// tested two cycles later (d2). On a hit the two in flight are rescanned.
 	logic  [9:0] issue_i, d1_i, d2_i;
 	logic        issue_v, d1_v, d2_v;
 	logic  [9:0] fg_hit_i;
 	logic  [3:0] fg_row;
 
-	// The sprite currently being drawn, all fields already resolved.
-	// 16 bits: setac_gfxbank_callback adds bank * 0x4000 to a 14-bit code.
+	// sprite being drawn; 16-bit tile (gfxbank adds bank * 0x4000)
 	logic [15:0] spr_tile;
 	logic        spr_flipx;
 	logic  [3:0] spr_row;            // AFTER flipy
@@ -600,31 +348,25 @@ module x1_001 #(
 	logic [63:0] row;                  // one sprite row, all four plane words
 	logic  [4:0] blit_px;
 
-	// The blit is a two-stage pipeline because the line buffer needs a
-	// READ-MODIFY-WRITE: front-to-back means the first writer of a pixel wins,
-	// so each write has to see whether one already happened. blit_raddr probes
-	// at stage 0 and blit_q answers two cycles later, so the pen and address
-	// are carried along beside it. No intra-sprite hazard exists -- the 16
-	// pixels of one sprite are 16 distinct addresses.
+	// Blit: read-modify-write on the line buffer (first writer wins), probe at
+	// stage 0, write at stage 2.
 	logic [8:0] p1_x, p2_x;
 	logic [3:0] p1_pen, p2_pen;
 	logic       p1_v, p2_v;
 
-	// ---- the row's granule -------------------------------------------------
-	// Swizzled, a row's eight bytes start at tile*128 + yh*64 + yl*8, so the
-	// granule index is just {tile, yh, yl}. No offsets, no half base, no
-	// per-word arithmetic -- that is the whole point of gfx_swizzle.sv.
+	// swizzled row granule: {tile, yh, yl}
 	wire [23:3] row_granule = {1'b0, (spr_tile & code_mask), spr_row};
 
-	// ---- pixel extraction ---------------------------------------------------
-	// planeoffset is { RGN_FRAC(1,2)+8, RGN_FRAC(1,2)+0, 8, 0 } and MAME's
-	// planeoffset[0] is the MOST significant bit of the pen. The +8 selects the
-	// odd byte of the pair, which the ROM loader put in the HIGH half of the
-	// word (sdram_download pairs {odd, even}, even byte low). So per pixel:
-	//     pen[3] = half2 odd byte      pen[2] = half2 even byte
-	//     pen[1] = half1 odd byte      pen[0] = half1 even byte
-	// Backwards, this produces artwork in the wrong colours rather than noise,
-	// which is why the model asserts the byte layout structurally.
+	// One-entry row cache: repeated rows (parked entries all use one tile) skip
+	// the ROM fetch.
+	logic        rc_v = 1'b0;
+	logic [23:3] rc_addr;
+	logic [63:0] rc_data;
+	// an all-zero row draws nothing when pen 0 is transparent
+	wire         row_blank = (transpen == 4'd0) && !(spr_is_bg && bgflag_opaque);
+
+	// pen[3] = half2 odd byte, pen[2] = half2 even, pen[1] = half1 odd,
+	// pen[0] = half1 even (planeoffset order; SDRAM words are {odd, even})
 	wire  [3:0] src_x = spr_flipx ? (4'd15 - blit_px[3:0]) : blit_px[3:0];
 	wire  [2:0] bitn  = 3'd7 - src_x[2:0];
 	wire [15:0] wa    = src_x[3] ? row[31:16] : row[15:0];    // half1, this xh
@@ -633,29 +375,10 @@ module x1_001 #(
 	                      wa[{1'b1, bitn}], wa[{1'b0, bitn}] };
 	wire  [8:0] blit_x = spr_x + {5'd0, blit_px[3:0]};
 
-	// ---- foreground scanline test ------------------------------------------
-	// sy = spriteylow[i]; with flip screen, sy = 2*screen_h - sy - vis_max_y - 1
-	// first (MAME: max_y - sy + (height - (visarea.max_y + 1)), max_y = height).
-	// Then Y = (sy + fg_yoffs) & 0xff and the line is covered iff
-	// ((L + Y) & 0xff) < 16.
-	// PRE-ADDED, because everything here except the RAM byte is constant for
-	// the whole scan. Written the obvious way -- fg_sy, then + fgy, then
-	// + cur_line -- this is three 8-bit adders in series hanging off the
-	// spriteylow RAM's output, and the second whole-core build's fifteen worst
-	// paths were all exactly that: from ylowmem's port B out, through Add2,
-	// Add3 and Add4, into fg_hit_i and eng_code_addr. -1.751 ns, and by then
-	// the TG68K was no longer the critical path at all.
-	//
-	// All of it is mod-256, so the regrouping is exact:
-	//     unflipped: fg_d = cur_line + fgy + sy
-	//     flipped:   fg_d = cur_line + fgy + 2*screen_h - vis_max_y - 1 - sy
-	// which is fg_base +/- sy with fg_base holding every term but sy. One
-	// adder off the RAM instead of three.
-	//
-	// fg_base is registered and safe to be a cycle behind: cur_line is latched
-	// at line_start and S_CLEAR then runs 512 cycles before S_FG_SCAN can
-	// evaluate anything, and flipscr, fgy, screen_h and vis_max_y do not move
-	// within a line.
+	// Foreground hit, pre-added (timing), mod 256:
+	//     fg_d = cur_line + fgy + sy                               unflipped
+	//     fg_d = cur_line + fgy + 2*screen_h - vis_max_y - 1 - sy  flipped
+	// fg_base is registered once per line.
 	logic [7:0] fg_base;
 	always_ff @(posedge clk)
 		fg_base <= flipscr
@@ -667,10 +390,8 @@ module x1_001 #(
 	                             : (fg_base + eng_ylow_q);
 	wire        fg_hit = (fg_d[7:4] == 4'd0);
 
-	// ---- background scanline test ------------------------------------------
-	// S0 = -(scrolly + bg_yoffs); row r of the column sits at S0 + 16r, or at
-	// 0xf0 - (S0 + 16r) with flip screen. Either way exactly one r lands on
-	// this line, and both the row and which r fall out of one subtraction.
+	// background row: S0 + 16r, or 0xf0 - (S0 + 16r) flipped; exactly one r
+	// covers the line
 	wire  [7:0] bg_S0 = -(bg_scrolly + bgy[7:0]);
 	wire  [7:0] bg_f  = cur_line[7:0] - bg_S0;              // unflipped
 	wire  [7:0] bg_e  = cur_line[7:0] - 8'hf0 + bg_S0;      // flipped
@@ -682,13 +403,10 @@ module x1_001 #(
 	wire [12:0] bg_code_addr = {4'd0, bg_ent_i, bg_offs} + 13'h400 + bank_off;
 	wire [12:0] bg_attr_addr = {4'd0, bg_ent_i, bg_offs} + 13'h600 + bank_off;
 
-	// ---- x for each half ----------------------------------------------------
-	// foreground: sx = (attr & 0xff) - (attr & 0x100), i.e. attr[8:0] read as
-	// two's complement; then (sx + xoffs) & 0x1ff.
+	// fg sx = attr[8:0] as signed, then (sx + xoffs) & 0x1ff
 	wire signed [9:0] fg_sx = $signed({eng_code_q[8], eng_code_q[8:0]});
 	wire        [8:0] fg_px = fg_sx[8:0] + fgx[8:0];
-	// background: sx = scrollx + xoffs + (offs & 1) * 16, minus 256 if this
-	// column's high bit is set in spritectrl[2..3].
+	// bg sx = scrollx + xoffs + (offs & 1) * 16, less 256 if the column's upper bit is set
 	wire        [8:0] bg_px = {1'b0, bg_scrollx} + bgx[8:0]
 	                        + (bg_sub ? 9'd16 : 9'd0)
 	                        + (upper[bg_col[3:0]] ? 9'h100 : 9'd0);
@@ -707,13 +425,11 @@ module x1_001 #(
 
 		if (reset) begin
 			state       <= S_IDLE;
+			rc_v        <= 1'b0;   // a new ROM may be loaded under a reset
 			render_bank <= 1'b0;
 			line_cycles <= 16'd0;
 		end else if (line_start) begin
-			// A line_start while still rendering is a real fault, not a
-			// rounding error: the previous line's buffer is incomplete and
-			// half of it will be displayed. Counted, and the new line still
-			// starts -- dropping it would hide the same fault differently.
+			// counted; the new line starts anyway
 			if (state != S_IDLE) dbg_overrun <= sat_inc(dbg_overrun);
 			dbg_lines   <= sat_inc(dbg_lines);
 			render_bank <= ~render_bank;
@@ -725,13 +441,7 @@ module x1_001 #(
 		end else begin
 			if (state != S_IDLE) line_cycles <= sat_inc(line_cycles);
 
-			// OUT OF TIME. Stop where we are and display what has been drawn.
-			// Front to back, that leaves the topmost sprites and drops the
-			// bottom-most, which is what an overflowing sprite chip does; the
-			// same cutoff on a back-to-front renderer would drop the ones on
-			// top. Never cut during S_CLEAR -- a half-cleared buffer shows the
-			// previous frame's line, which is worse than any sprite dropout and
-			// looks like a completely different fault.
+			// out of time: stop and display what is drawn (never mid-clear)
 			if (line_budget != 16'd0 && line_cycles >= line_budget
 			    && state != S_IDLE && state != S_CLEAR && state != S_DONE) begin
 				dbg_dropped <= sat_inc(dbg_dropped);
@@ -741,29 +451,19 @@ module x1_001 #(
 
 			S_IDLE: ;
 
-			// ---- fill the render buffer with the backdrop pen ---------------
-			// screen_update_seta_no_layers does bitmap.fill(0x1f0) before
-			// drawing anything, and 0x1f0 is a real palette entry, not black.
+			// fill with the backdrop pen (bitmap.fill(0x1f0))
 			S_CLEAR: begin
 				lb_we    <= 1'b1;
 				lb_waddr <= clr_addr[8:0];
 				lb_wdata <= {1'b0, backdrop};      // nothing written here yet
 				clr_addr <= clr_addr + 10'd1;
 				if (clr_addr == 10'd511) begin
-					// FRONT TO BACK: foreground entry 0 is the topmost thing on
-					// the screen, so it is drawn first and every later write to
-					// one of its pixels is discarded. The floating tilemap sits
-					// under all of it and comes afterwards, its columns in
-					// reverse -- MAME draws column 0 first and lets later
-					// columns overwrite it.
 					issue_i <= 10'd0;
 					state   <= S_FG_PRIME;
 				end
 			end
 
-			// ---- background: this column's scroll pair ----------------------
-			// scrollram = &m_spriteylow[0x200]
-			// scrolly = scrollram[col*0x10];  scrollx = scrollram[col*0x10 + 4]
+			// background column: scrolly = ylow[0x200 + col*0x10], scrollx = +4
 			S_BG_S0: begin
 				eng_ylow_addr <= 10'h200 + {2'd0, bg_col[3:0], 4'd0};
 				state <= S_BG_S1;
@@ -777,8 +477,6 @@ module x1_001 #(
 				state      <= S_BG_S3;
 			end
 			S_BG_S3: begin
-				// bg_scrolly landed last cycle, so bg_sel_r/bg_sel_row are
-				// valid now; bg_scrollx is this cycle's read.
 				bg_scrollx <= eng_ylow_q;
 				bg_r       <= bg_sel_r;
 				bg_row     <= bg_sel_row;
@@ -786,9 +484,6 @@ module x1_001 #(
 				state      <= S_BG_E0;
 			end
 
-			// bg_r/bg_sub are registered, so the address they form is only
-			// valid the cycle after they are written -- hence a state whose
-			// whole job is to issue it.
 			S_BG_E0: begin
 				eng_code_addr <= bg_code_addr;
 				state <= S_BG_E1;
@@ -798,8 +493,6 @@ module x1_001 #(
 				state <= S_BG_E2;
 			end
 			S_BG_E2: begin
-				// eng_code_q is the CODE word; the attribute arrives next
-				// cycle, which is why the fields below split across two states.
 				spr_tile  <= {2'b00, eng_code_q[13:0]};   // code &= 0x3fff, no bank
 				spr_flipx <= eng_code_q[15] ^ flipscr;
 				spr_row   <= (eng_code_q[14] ^ flipscr) ? (4'd15 - bg_row) : bg_row;
@@ -808,7 +501,6 @@ module x1_001 #(
 				state     <= S_FETCH;
 			end
 
-			// ---- foreground: scan spriteylow, one entry per cycle ------------
 			S_FG_PRIME: begin
 				eng_ylow_addr <= issue_i;
 				d1_i  <= issue_i;  d1_v <= 1'b1;
@@ -818,9 +510,7 @@ module x1_001 #(
 				state <= S_FG_SCAN;
 			end
 			S_FG_SCAN: begin
-				// eng_ylow_q is ylow[d2_i] this cycle. The shift happens
-				// regardless; the hit test below reads the OLD d2_*, which is
-				// what lines up with it.
+				// eng_ylow_q is ylow[d2_i]; the test reads the old d2_*
 				eng_ylow_addr <= issue_i;
 				d1_i <= issue_i;  d1_v <= issue_v;
 				d2_i <= d1_i;     d2_v <= d1_v;
@@ -835,8 +525,6 @@ module x1_001 #(
 					eng_code_addr <= {3'd0, d2_i} + bank_off;
 					state         <= S_FG_E0;
 				end else if (!issue_v && !d1_v && !d2_v) begin
-					// Foreground exhausted; the floating tilemap is next, its
-					// columns walked in reverse so the topmost is drawn first.
 					bg_col <= numcol - 5'd1;
 					state  <= (numcol == 5'd0) ? S_DONE : S_BG_S0;
 				end
@@ -846,21 +534,14 @@ module x1_001 #(
 				state <= S_FG_E1;
 			end
 			S_FG_E1: begin
-				// the CODE word
 				spr_tile  <= {2'b00, eng_code_q[13:0]};
 				spr_flipx <= eng_code_q[15] ^ flipscr;
 				spr_row   <= (eng_code_q[14] ^ flipscr) ? (4'd15 - fg_row) : fg_row;
 				state     <= S_FG_E2;
 			end
 			S_FG_E2: begin
-				// the ATTRIBUTE word: colour in 15:11, x in 8:0, and the gfx
-				// bank in 10:9. setac_gfxbank_callback -- the only callback any
-				// in-scope game installs -- is
-				//     bank = (color & 0x06) >> 1;
-				//     code = (code & 0x3fff) + bank * 0x4000;
-				// with `color` being x_pointer[i] >> 8, so bits 10:9 here. The
-				// tile index is therefore 16 bits wide, and code_mask wraps it
-				// to the region the way gfx_element does.
+				// attribute: colour 15:11, x 8:0, gfx bank 10:9
+				// (setac_gfxbank_callback: code += ((color & 6) >> 1) * 0x4000)
 				spr_tile  <= {eng_code_q[10:9], spr_tile[13:0]};
 				spr_x     <= fg_px;
 				spr_cbase <= colorbase_fg
@@ -869,32 +550,35 @@ module x1_001 #(
 				state     <= S_FETCH;
 			end
 
-			// ---- fetch one 16-pixel row: four 16-bit words -------------------
 			S_FETCH: begin
-				// The background's colour comes from the SAME word position as
-				// the foreground's but takes colorbase_bg -- draw_background
-				// adds no m_colorbase. Latched here because S_BG_E2 needed
-				// eng_code_q for the code word.
+				// background colour uses colorbase_bg
 				if (spr_is_bg)
 					spr_cbase <= colorbase_bg
 					           + {{(LB_W - 9){1'b0}}, eng_code_q[15:11], 4'd0};
-				rom_req <= 1'b1;
-				state   <= S_FWAIT;
+				blit_px <= 5'd0;
+				p1_v <= 1'b0; p2_v <= 1'b0;
+				if (rc_v && rc_addr == row_granule) begin
+					row   <= rc_data;
+					state <= (row_blank && rc_data == 64'd0)
+					         ? (spr_is_bg ? S_NEXT_BG : S_NEXT_FG) : S_BLIT;
+				end else begin
+					rom_req <= 1'b1;
+					state   <= S_FWAIT;
+				end
 			end
 			S_FWAIT: begin
 				if (rom_valid) begin
 					dbg_fetches <= sat_inc(dbg_fetches);
 					row     <= rom_data;
-					blit_px <= 5'd0;
-					p1_v <= 1'b0; p2_v <= 1'b0;
-					state   <= S_BLIT;
+					rc_v    <= 1'b1;
+					rc_addr <= row_granule;
+					rc_data <= rom_data;
+					state   <= (row_blank && rom_data == 64'd0)
+					           ? (spr_is_bg ? S_NEXT_BG : S_NEXT_FG) : S_BLIT;
 				end
 			end
 
-			// ---- blit 16 pixels, transparent pen skipped ---------------------
-			// 16 pixels issued, then two cycles to drain the read pipeline.
-			// Stage 0 probes the line buffer, stage 2 writes it if the pixel is
-			// not the transparent pen AND nothing has claimed it yet.
+			// 16 pixels, then two cycles to drain the pipeline
 			S_BLIT: begin
 				blit_raddr <= blit_x;
 				p1_x <= blit_x;  p1_pen <= pen;     p1_v <= (blit_px < 5'd16);
@@ -915,7 +599,6 @@ module x1_001 #(
 				end
 			end
 
-			// ---- iteration ---------------------------------------------------
 			S_NEXT_BG: begin
 				if (bg_sub) begin
 					bg_sub <= 1'b0;
@@ -928,10 +611,7 @@ module x1_001 #(
 				end
 			end
 			S_NEXT_FG: begin
-				// Resume BELOW the hit. The two entries that were in flight
-				// when it fired were never tested, and re-priming here retests
-				// them -- two cycles per drawn sprite, against the 1024 a
-				// two-cycle scan would have cost every line.
+				// resume after the hit
 				if (fg_hit_i == {1'b0, spritelimit}) begin
 					bg_col <= numcol - 5'd1;
 					state  <= (numcol == 5'd0) ? S_DONE : S_BG_S0;

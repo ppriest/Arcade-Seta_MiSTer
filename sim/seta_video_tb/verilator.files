@@ -1,0 +1,9 @@
+rtl/video/seta_pal_pkg.sv
+rtl/memory/gfx_swizzle.sv
+rtl/video/seta_palette.sv
+rtl/video/seta_video_timing.sv
+rtl/video/x1_001.sv
+rtl/video/x1_011_index.sv
+rtl/video/x1_012.sv
+rtl/video/seta_video.sv
+sim/seta_video_tb/tb_seta_video.sv

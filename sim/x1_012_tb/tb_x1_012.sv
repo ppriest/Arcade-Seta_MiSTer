@@ -7,11 +7,9 @@
 // sprites have their own bench, and the composite of the two is what gets
 // compared against MAME's own render.
 //
-// WHAT THIS DOES NOT COVER YET: flip screen. update_scroll's flipped branch
-// and the tilemap's whole-map mirroring are not implemented in x1_012.sv, and
-// every Phase 2 capture has flipscr clear -- so a pass here says nothing about
-// them either way. The bench refuses a flipped fixture rather than reporting a
-// green it has not earned.
+// WHAT THIS DOES NOT COVER: flip screen. The bench refuses a flipped fixture;
+// flipped layers are checked against MAME through sim/seta_video_tb by
+// scripts/flip_sweep.py.
 `timescale 1ns / 1ps
 
 module tb_x1_012;
@@ -60,15 +58,18 @@ module tb_x1_012;
 		.vctrl_we(vctrl_we), .vctrl_addr(vctrl_addr), .vctrl_wdata(vctrl_wdata),
 		.vctrl_uds(1'b1), .vctrl_lds(1'b1), .vctrl_rdata(),
 		.xoffs(xoffs), .xoffs_flip(xoffs_flip), .flipscr(flipscr),
+		// Only used flipped, and this bench refuses a flipped fixture: flip is
+		// covered end to end by scripts/flip_sweep.py through sim/seta_video_tb.
+		.xextent(10'd384), .yextent(9'd256),
 		.vis_dimy(vis_dimy), .colorbase(colorbase), .code_limit(code_limit),
 		.bpp6(bpp6),
 		.vblank_rise(vblank_rise),
-		.line_start(line_start), .line(line), .line_budget(16'd0),
+		.line_start(line_start), .line(line), .line_budget(16'd0), .cache_en(1'b1),
 		.line_done(line_done), .busy(busy),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
 		.lb_addr(lb_addr), .lb_data(lb_data),
-		.dbg_lines(), .dbg_tiles(), .dbg_overrun()
+		.dbg_cut(), .dbg_hits(), .dbg_overrun()
 	);
 
 	// ---- the tile ROM ------------------------------------------------------
@@ -197,11 +198,10 @@ module tb_x1_012;
 
 		void'($value$plusargs("ROMLAT=%d", rom_latency));
 
-		// FLIP SCREEN IS NOT IMPLEMENTED in x1_012.sv -- neither update_scroll's
-		// flipped branch nor the whole-map mirroring. Refuse rather than report
-		// a pass that would mean nothing.
+		// Flip screen is checked through sim/seta_video_tb by
+		// scripts/flip_sweep.py; this bench's prep has no flipped reference.
 		if (flipscr) begin
-			$display("SKIP: flip screen is set in this fixture and x1_012.sv does not implement it yet -- a pass would be vacuous");
+			$display("SKIP: flip screen is set in this fixture -- use scripts/flip_sweep.py");
 			$finish;
 		end
 

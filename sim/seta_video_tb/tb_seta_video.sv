@@ -31,6 +31,7 @@ module tb_seta_video;
 	localparam int CE_DIV    = 12;              // -> 8 MHz dot clock
 	localparam int LB_W      = 11;
 	localparam int PAL_MAX   = 2048;   // blandia's reachable entries fit; see seta_core.sv
+	localparam int PAL_IMG   = 4096;   // blandia CAPTURES 3072; Verilator rejects a file larger than the array
 	localparam int GFX_WORDS = 1 << 22;         // gundhara's 8 MB region,
 	                                            // the largest in the driver
 	localparam int MAX_PIX   = 384 * 256;
@@ -58,7 +59,8 @@ module tb_seta_video;
 	               // Phase 4: the 6bpp layers and their palette formation.
 	               C_L0BPP6 = 42, C_L1BPP6 = 43,
 	               C_L0PMODE = 44, C_L1PMODE = 45,
-	               C_L0PBANK = 46, C_L1PBANK = 47;
+	               C_L0PBANK = 46, C_L1PBANK = 47,
+	               C_TMFLIP = 48;
 	localparam int C_PALENT = 30;
 
 	// ---- DUT ----------------------------------------------------------------
@@ -93,7 +95,7 @@ module tb_seta_video;
 	// Same granule convention as the sprite ROM above: four 16-bit words, word
 	// i in bits [16*i +: 16], and gfx2/gfx3.hex are already in SDRAM byte
 	// order. Two independent models because the two layers fetch at once.
-	localparam int TILE_WORDS = 1 << 20;
+	localparam int TILE_WORDS = 1 << 21;   // 4 MB: extdwnhl gfx2, zombraid 3 MB
 	logic [15:0] gfx2rom [0:TILE_WORDS-1];
 	logic [15:0] gfx3rom [0:TILE_WORDS-1];
 
@@ -113,10 +115,10 @@ module tb_seta_video;
 			t0_busy <= 1'b1; t0_hold <= tile_addr; t0_cnt <= rom_latency;
 		end else if (t0_busy) begin
 			if (t0_cnt <= 1) begin
-				tile_data <= { gfx2rom[{t0_hold[20:3], 2'd3}],
-				               gfx2rom[{t0_hold[20:3], 2'd2}],
-				               gfx2rom[{t0_hold[20:3], 2'd1}],
-				               gfx2rom[{t0_hold[20:3], 2'd0}] };
+				tile_data <= { gfx2rom[{t0_hold[21:3], 2'd3}],
+				               gfx2rom[{t0_hold[21:3], 2'd2}],
+				               gfx2rom[{t0_hold[21:3], 2'd1}],
+				               gfx2rom[{t0_hold[21:3], 2'd0}] };
 				tile_valid <= 1'b1; t0_busy <= 1'b0;
 			end else t0_cnt <= t0_cnt - 1;
 		end
@@ -129,10 +131,10 @@ module tb_seta_video;
 			t1_busy <= 1'b1; t1_hold <= tile1_addr; t1_cnt <= rom_latency;
 		end else if (t1_busy) begin
 			if (t1_cnt <= 1) begin
-				tile1_data <= { gfx3rom[{t1_hold[20:3], 2'd3}],
-				                gfx3rom[{t1_hold[20:3], 2'd2}],
-				                gfx3rom[{t1_hold[20:3], 2'd1}],
-				                gfx3rom[{t1_hold[20:3], 2'd0}] };
+				tile1_data <= { gfx3rom[{t1_hold[21:3], 2'd3}],
+				                gfx3rom[{t1_hold[21:3], 2'd2}],
+				                gfx3rom[{t1_hold[21:3], 2'd1}],
+				                gfx3rom[{t1_hold[21:3], 2'd0}] };
 				tile1_valid <= 1'b1; t1_busy <= 1'b0;
 			end else t1_cnt <= t1_cnt - 1;
 		end
@@ -167,7 +169,8 @@ module tb_seta_video;
 		.backdrop(cfgv[C_BACKDROP][LB_W-1:0]),
 		.code_mask(cfgv[C_CODEMASK][15:0]),
 		.line_budget(cfgv[C_BUDGET][15:0]),
-		.en_l0(1'b1), .en_l1(1'b1),
+		// +NOCACHE turns x1_012's tile row cache off, to show it changes no pixel.
+		.en_l0(1'b1), .en_l1(1'b1), .tile_cache_en(!$test$plusargs("NOCACHE")),
 		.l0_bpp6(cfgv[C_L0BPP6][0]), .l1_bpp6(cfgv[C_L1BPP6][0]),
 		.l0_pal_mode(cfgv[C_L0PMODE][2:0]), .l1_pal_mode(cfgv[C_L1PMODE][2:0]),
 		.has_pal2(cfgv[C_PALENT] > 16'd1536),
@@ -210,7 +213,7 @@ module tb_seta_video;
 		.l1_code_limit(cfgv[C_L1MASK][15:0]),
 		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
-		.vregs(cfgv[C_VREGS][7:0]),
+		.vregs(cfgv[C_VREGS][7:0]), .tilemaps_flip(cfgv[C_TMFLIP][0]),
 		.vga_r(vga_r), .vga_g(vga_g), .vga_b(vga_b),
 		.vga_hs(vga_hs), .vga_vs(vga_vs), .vga_hb(vga_hb), .vga_vb(vga_vb),
 		.vga_de(vga_de), .vga_ce(vga_ce),
@@ -265,7 +268,7 @@ module tb_seta_video;
 	logic [15:0] codeimg [0:8191];
 	logic  [7:0] ylowimg [0:1023];
 	logic  [7:0] ctrlimg [0:3];
-	logic [15:0] palimg  [0:PAL_MAX-1];
+	logic [15:0] palimg  [0:PAL_IMG-1];
 
 	int vis_x0, vis_x1, vis_y0, vis_y1, vis_w, vis_h, pal_entries;
 	int bad = 0, checked = 0, frame = 0;
@@ -357,7 +360,7 @@ module tb_seta_video;
 		for (i = 0; i < 8192; i++)      codeimg[i] = 16'hxxxx;
 		for (i = 0; i < 1024; i++)      ylowimg[i] = 8'hxx;
 		for (i = 0; i < 4; i++)         ctrlimg[i] = 8'hxx;
-		for (i = 0; i < PAL_MAX; i++)   palimg[i]  = 16'h0;
+		for (i = 0; i < PAL_IMG; i++)   palimg[i]  = 16'h0;
 		for (i = 0; i < 64; i++)        cfgv[i]    = 32'h0;
 
 		// $readmemh resolves against the SIMULATOR's CWD; run_sim.sh runs from
@@ -431,6 +434,10 @@ module tb_seta_video;
 
 		$display("");
 		$display("  pixels presented %0d (expected %0d)", got_count, vis_w * vis_h);
+		$display("  tile row cache   %s, hits this frame so far l0 %0d / l1 %0d (last frame %0d / %0d)",
+		         $test$plusargs("NOCACHE") ? "OFF" : "on",
+		         dut.u_l0.hit_acc, dut.u_l1.hit_acc, dut.u_l0.dbg_hits, dut.u_l1.dbg_hits);
+		$display("  lines cut        l0 %0d / l1 %0d this frame so far", dut.u_l0.cut_acc, dut.u_l1.cut_acc);
 		if (got_count != vis_w * vis_h) begin
 			$display("FAIL: the active window is the wrong size -- htotal/vtotal or the visarea does not match the fixture");
 			$finish;

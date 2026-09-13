@@ -52,8 +52,11 @@ end
 -- reporting PASS. So every failure below is fatal and named.
 --
 -- fld.settings maps the RAW field value to the setting's name -- for
--- thunderl's Flip Screen, {[0]="Off", [512]="On"} -- and fld:set_value takes
--- that raw value. Probed on MAME 0.286 rather than assumed.
+-- thunderl's Flip Screen, {[0]="Off", [512]="On"} -- and fld.user_value takes
+-- that raw value. NOT fld:set_value: that is the field's pressed state, and any
+-- non-zero argument selects the non-default setting. It happened to work for
+-- thunderl (default 0, On 512) and inverted wits (default 512 = Off): "Off"
+-- captured flipped. Probed on MAME 0.286 (debug/dipprobe).
 local function fail(msg)
     local f = io.open(OUT .. "/lua_error.txt", "w")
     if f then f:write(msg .. "\n"); f:close() end
@@ -79,7 +82,7 @@ for _, spec in ipairs(split(DIPS, ";")) do
             end
             for raw, name in pairs(fld.settings) do
                 if name == want_setting then
-                    fld:set_value(raw)
+                    fld.user_value = raw
                     print(string.format("DIP      %-20s = %-12s (raw 0x%x)",
                                         want_field, want_setting, raw))
                     applied = true

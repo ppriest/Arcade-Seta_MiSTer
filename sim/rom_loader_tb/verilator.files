@@ -1,0 +1,10 @@
+rtl/memory/gfx_swizzle.sv
+rtl/memory/rom_loader.sv
+rtl/memory/sdram/sdram.sv
+rtl/memory/sdram_arbiter.sv
+rtl/memory/sdram_download.sv
+rtl/memory/sdram_narrow_bridge.sv
+rtl/memory/sdram_phy.sv
+rtl/memory/seta_sdram_top.sv
+sim/common/sdram_chip_model_wide.sv
+sim/rom_loader_tb/tb_rom_loader.sv

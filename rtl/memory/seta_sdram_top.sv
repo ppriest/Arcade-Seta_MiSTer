@@ -1,124 +1,32 @@
-// SDRAM backend: every ROM the core reads at runtime, on one physical chip.
+// SDRAM: every ROM the core reads at runtime, on one chip through sdram.sv's
+// three fixed-priority ports (port 0 preempts 1, 1 preempts 2):
+//   port 0  sprite and tile graphics   (arbiter, 3 clients)
+//   port 1  X1-010 samples             (byte bridge)
+//   port 2  CPU program, ROM download   (word bridge + download)
 //
-// ---------------------------------------------------------------------------
-// PORT ASSIGNMENT, AND WHY IT IS THE ONLY BANDWIDTH KNOB THERE IS.
+// Address map, per layout (bases below; scripts/build_mra.py reads the
+// localparams, so every .mra loads to these offsets):
+//   A  maincpu 0, gfx1 1M (2 MB), x1snd 3M
+//   B  maincpu 0, gfx1 1M (1 MB), gfx2 2M, x1snd 4M
+//   C  maincpu 0, gfx1 2M (4 MB), gfx2 6M, gfx3 8M, x1snd 10M
+//   D  gfx1 2M, gfx2 4M (4 MB), gfx3 8M, x1snd 10M      6bpp sets
+//   E  gfx1 2M (8 MB), gfx2 10M, gfx3 12M, x1snd 16M    gundhara
+//   F  gfx1 2M, gfx2 4M, gfx3 7M, x1snd 10M (4 MB)      zombraid
 //
-// sdram.sv drives ONE physical chip. Its three "ports" are logical and
-// time-multiplexed onto it with FIXED PRIORITY -- port 0 always preempts port
-// 1, which always preempts port 2. So "use another port" buys no parallel
-// bandwidth; the only thing to tune is which client sits behind which
-// priority slot.
-//
-//   Port 0   sprite graphics                     (arbiter, 1 client)
-//   Port 1   X1-010 PCM sample fetch             (arbiter, 1 client)
-//   Port 2   main CPU program fetch + download   (arbiter, 1 client + dl)
-//
-// Sprites take the top slot because in Phase 1 they have the only hard
-// deadline: the engine has one scanline to build a line and dropped sprites
-// are visible. The X1-010 next -- a real deadline but a tiny one, one byte per
-// voice per sample step at 31.25 kHz. The CPU sits last on purpose: starving
-// it makes the game run slower, which degrades gracefully, where starving
-// either of the others does not.
-//
-// THIS ASSIGNMENT IS FOR GROUP A AND WILL CHANGE. When the X1-012 tilemap
-// engine arrives it has a harder deadline than sprites -- a late tilemap
-// granule corrupts the scanline being drawn with no buffer of slack, where the
-// sprite engine renders a line ahead. Fuuki puts tilemaps at port 0 and
-// sprites at port 1 for exactly that reason. Re-partition then, WITH A
-// MEASUREMENT: Psikyo's first re-partition measured worse, not better.
-//
-// The download shares port 2 and takes absolute priority within it, which
-// costs nothing because it only runs before anything is drawn.
-// ---------------------------------------------------------------------------
-//
-// ADDRESS MAP. This module is the authority; every `.mra` must load to these
-// same offsets, and scripts/build_mra.py generates them from this table.
-//
-// One map per LAYOUT, not one map sized for the largest game. A single map
-// sized for gundhara's 8 MB of sprites would make thunderl's `.mra` pad out to
-// that base and ship megabytes of filler for a 1.5 MB game. Group A is the
-// only layout defined here; the tilemap layouts arrive with the phases that
-// need them, sized against real games rather than invented now.
-//
-//   LAYOUT_A -- Group A, no tilemap layers
-//     maincpu  0x000000  1 MB   (atehate is 1 MB, every other set is smaller)
-//     gfx1     0x100000  2 MB   (atehate; thunderl and wits are 0.5 MB)
-//     x1snd    0x300000  1 MB   (every Group A set)
-//     total             4 MB
-//
-//   LAYOUT_B -- Group B, one 4bpp tilemap layer
-//     maincpu  0x000000  1 MB   (all four sets are 0.75 MB)
-//     gfx1     0x100000  1 MB   (all four)
-//     gfx2     0x200000  2 MB   (qzkklgy2; the other three are 1 MB)
-//     x1snd    0x400000  1 MB   (all four)
-//     total             5 MB
-//
-//   LAYOUT_C -- Group C, two 4bpp tilemap layers
-//     maincpu  0x000000  2 MB   (rezon, wrofaero, msgundam)
-//     gfx1     0x200000  4 MB   (msgundam; daioh is 2 MB, rezon 1 MB)
-//     gfx2     0x600000  2 MB   (daioh)
-//     gfx3     0x800000  2 MB   (daioh)
-//     x1snd    0xa00000  2 MB   (eightfrc; daioh and rezon are 1 MB)
-//     total            12 MB
-//
-//   Every size is the largest MEASURED across the sets in that group, from the
-//   ROM_START records. The spread inside Group C is wide -- msgundam has four
-//   times rezon's sprite ROM and daioh four times its tiles -- so a layout
-//   sized from any one game would be wrong for the others.
-//
-//   X1SND MOVES BETWEEN THE LAYOUTS. gfx2 is 2 MB because qzkklgy2's is --
-//   measured from the ROM_START records, not assumed from its three siblings,
-//   which are 1 MB each. Sizing it at 1 MB would have overlapped x1snd with
-//   the top half of qzkklgy2's tiles and broken exactly one game's graphics
-//   and sound together.
-//
-//   Sizes come from the records rather than being rounded up for comfort:
-//   scripts/build_mra.py reads this map out of THIS FILE, so a region declared
-//   larger than it needs pads every .mra by the difference.
-//
-// ---------------------------------------------------------------------------
-// THE SPRITE LAYOUT PERMUTATION HAPPENS HERE, on the way in.
-//
-// rtl/memory/gfx_swizzle.sv turns MAME's RGN_FRAC(1,2) sprite region into one
-// where a 16-pixel row is a single 64-bit granule. It is a pure WORD-address
-// permutation -- the plane bit is the low bit of both the source and the
-// destination byte address -- so it is applied to `ioctl_addr` BEFORE
-// sdram_download.sv sees it, and that module is untouched.
-//
-// That the permutation preserves bit 0 is what makes this safe:
-// sdram_download coalesces byte pairs by checking `ioctl_addr[0]` and that
-// consecutive bytes share a word. Both survive, because the two bytes of a
-// source word still land in one destination word.
+// On the way in, the sprite region's word addresses are permuted
+// (gfx_swizzle.sv) and, for ROMREGION_INVERT, its bytes inverted.
 
 `default_nettype none
 
 module seta_sdram_top (
 	input  wire clk,
 
-	// MASKED OFF DURING THE DOWNLOAD. The caller must pass
-	//
-	//     reset & ~ioctl_download
-	//
-	// and NOT the framework's RESET, because MiSTer holds core RESET asserted
-	// for the ENTIRE ROM download. Anything in the memory path gated by a
-	// reset that includes it is dead for the whole transfer: the download FSM
-	// sits in idle while the HPS delivers every byte, not one write reaches
-	// the chip, and every later read returns power-up contents.
-	//
-	// This is not hypothetical. Psikyo hit it, LESSONS_LEARNED records it
-	// ("Never hold the memory path in the core reset"), Fuuki's equivalent
-	// module carries the same warning in its header -- and Fuuki's first
-	// bitstream still shipped with plain `reset` wired here. It presented as a
-	// correct raster that was 100% black, because video timing is independent
-	// of memory and so the only symptom was that nothing was ever drawn.
+	// reset & ~ioctl_download: MiSTer holds reset for the whole download
 	input  wire reset,
 
-	// SDRAM power-up initialisation, SEPARATE from `reset` on purpose. This
-	// drives the chip's init sequence and must NOT be asserted by a core reset
-	// or a download -- pass `~pll_locked`.
+	// ~pll_locked; SDRAM initialisation only
 	input  wire init,
 
-	// ---- SDRAM pins ---------------------------------------------------------
 	output wire [12:0] SDRAM_A,
 	inout  wire [15:0] SDRAM_DQ,
 	output wire        SDRAM_DQML,
@@ -131,7 +39,6 @@ module seta_sdram_top (
 	output wire        SDRAM_CKE,
 	output wire        SDRAM_CLK,
 
-	// ---- HPS ROM download ---------------------------------------------------
 	input  wire        ioctl_download,
 	input  wire [15:0] ioctl_index,
 	input  wire        ioctl_wr,
@@ -139,29 +46,17 @@ module seta_sdram_top (
 	input  wire  [7:0] ioctl_dout,
 	output wire        ioctl_wait,
 
-	// ---- per-game configuration ---------------------------------------------
-	// Words in one RGN_FRAC half of "gfx1", i.e. the region size in bytes over
-	// four. Per GAME, not per layout: Group A's sprite regions run from
-	// thunderl's 0.5 MB to atehate's 2 MB, and the permutation depends on
-	// where the halves split. Comes from the same board table that supplies
-	// the sprite engine's code_mask, which is derived from the same number.
+	// words in one RGN_FRAC half of gfx1 (region bytes / 4), per game
 	input  wire [22:0] gfx_half_words,
 
-	// ---- main CPU program fetch ---------------------------------------------
 	input  wire        cpu_req,
 	input  wire [23:1] cpu_addr,      // word address within "maincpu"
 	output wire        cpu_valid,
 	output wire [15:0] cpu_data,
 
-	// ---- sprite graphics: one 64-bit granule per row ------------------------
-	// LAYOUT_B puts a tilemap region at 0x200000 and shrinks the swizzle
-	// window to match. One bit, because the two layouts in scope differ only
-	// in that.
-	// 0 = LAYOUT_A (Group A), 1 = LAYOUT_B (Group B), 2 = LAYOUT_C (Group C).
+	// 0..5 = LAYOUT_A..F
 	input  wire  [2:0] layout,
-	// ROMREGION_INVERT on gfx1: every byte of the sprite region is inverted on
-	// the way in. A .mra ships the ROM as dumped, so this is where MAME's
-	// region flag is applied.
+	// ROMREGION_INVERT on gfx1
 	input  wire        gfx1_invert,
 
 	input  wire        spr_req,
@@ -169,34 +64,34 @@ module seta_sdram_top (
 	output wire        spr_valid,
 	output wire [63:0] spr_data,
 
-	// Tile graphics, LAYOUT_B only. Shares the sprite phy: both are per-line
-	// graphics fetches with the same deadline, and the tilemap asks for at
-	// most 100 granules a line against the sprite engine's several hundred.
+	// tile graphics, layer 0
 	input  wire        tile_req,
 	input  wire [23:3] tile_addr,     // granule address within "gfx2"
 	output wire        tile_valid,
 	output wire [63:0] tile_data,
 
-	// The second tile layer, LAYOUT_C only.
+	// layer 1
 	input  wire        tile1_req,
 	input  wire [23:3] tile1_addr,    // granule address within "gfx3"
 	output wire        tile1_valid,
 	output wire [63:0] tile1_data,
 
-	// ---- X1-010 PCM samples --------------------------------------------------
 	input  wire        snd_req,
-	// 22 bits, not 20: eightfrc and blandia have 2 MB of samples and
-	// zombraid 4 MB, reached through the X1-010's bank register.
+	// 22 bits: up to 4 MB through the X1-010 bank
 	input  wire [21:0] snd_addr,      // byte address within "x1snd"
 	output wire        snd_valid,
-	output wire  [7:0] snd_data
+	output wire  [7:0] snd_data,
+
+	// fast ROM load (rom_loader.sv); Seta.sv starts it
+	input  wire        ldr_start,
+	output wire        ldr_active,      // copying: Seta.sv holds the core in reset
+	output wire        ldr_ddr_req,
+	output wire [27:0] ldr_ddr_addr,
+	input  wire        ldr_ddr_busy,
+	input  wire        ldr_ddr_valid,
+	input  wire [63:0] ldr_ddr_rdata
 );
 
-	// =====================================================================
-	// LAYOUT_A. See the header.
-	// =====================================================================
-	// LAYOUT_C moves everything, so the bases are per layout rather than one
-	// set with exceptions.
 	localparam logic [25:0] BASE_MAINCPU   = 26'h000_0000;
 	localparam logic [25:0] BASE_GFX1_AB   = 26'h010_0000;   // 2 MB in A, 1 MB in B
 	localparam logic [25:0] BASE_GFX1_C    = 26'h020_0000;   // 4 MB
@@ -205,24 +100,19 @@ module seta_sdram_top (
 	localparam logic [25:0] BASE_GFX3_C    = 26'h080_0000;   // 2 MB
 	localparam logic [25:0] BASE_X1SND_C   = 26'h0a0_0000;
 
-	// LAYOUT_D -- the 6bpp sets except gundhara: zingzip, extdwnhl, sokonuke,
-	// jjsquawk, madshark. gfx2 is 4 MB because extdwnhl's is.
+	// LAYOUT_D: zingzip, extdwnhl, sokonuke, jjsquawk, madshark
 	localparam logic [25:0] BASE_GFX1_D    = 26'h020_0000;   // 2 MB
 	localparam logic [25:0] BASE_GFX2_D    = 26'h040_0000;   // 4 MB
 	localparam logic [25:0] BASE_GFX3_D    = 26'h080_0000;   // 2 MB
 	localparam logic [25:0] BASE_X1SND_D   = 26'h0a0_0000;   // 1 MB
 
-	// LAYOUT_E -- gundhara alone. 8 MB of sprites, the largest in the driver;
-	// sized into LAYOUT_D it would have made every other 6bpp .mra ship 11 MB
-	// of padding.
+	// LAYOUT_E: gundhara
 	localparam logic [25:0] BASE_GFX1_E    = 26'h020_0000;   // 8 MB
 	localparam logic [25:0] BASE_GFX2_E    = 26'h0a0_0000;   // 2 MB
 	localparam logic [25:0] BASE_GFX3_E    = 26'h0c0_0000;   // 4 MB
 	localparam logic [25:0] BASE_X1SND_E   = 26'h100_0000;   // 1 MB
 
-	// LAYOUT_F -- zombraid alone: 3 MB in each tile region and 4 MB of
-	// samples, the largest sample region in the driver. Sized to its
-	// ROM_START exactly, no slack in any region.
+	// LAYOUT_F: zombraid
 	localparam logic [25:0] BASE_GFX1_F    = 26'h020_0000;   // 2 MB
 	localparam logic [25:0] BASE_GFX2_F    = 26'h040_0000;   // 3 MB
 	localparam logic [25:0] BASE_GFX3_F    = 26'h070_0000;   // 3 MB
@@ -242,11 +132,7 @@ module seta_sdram_top (
 	                          layout_e ? BASE_GFX2_E :
 	                          layout_d ? BASE_GFX2_D :
 	                          layout_c ? BASE_GFX2_C : BASE_GFX2_B;
-	// x1snd sits above gfx2, which is only present in LAYOUT_B. BOTH VALUES
-	// ARE localparams so scripts/build_mra.py can still read the map out of
-	// this file -- it parses localparam declarations, and a bare wire would
-	// have hidden the layout from the .mra generator, which is the one place
-	// that must agree with it exactly.
+	// localparams, not wires, so build_mra.py can read them
 	localparam logic [25:0] BASE_X1SND_A = 26'h030_0000;
 	localparam logic [25:0] BASE_X1SND_B = 26'h040_0000;
 	wire   [25:0] BASE_X1SND = layout_f ? BASE_X1SND_F :
@@ -254,10 +140,6 @@ module seta_sdram_top (
 	                           layout_d ? BASE_X1SND_D :
 	                           layout_c ? BASE_X1SND_C :
 	                           layout_b ? BASE_X1SND_B : BASE_X1SND_A;
-	// The swizzle window. In LAYOUT_B gfx1 is only 1 MB, but permuting a 2 MB
-	// window there would reach into gfx2 -- which must NOT be swizzled, because
-	// layout_tilemap is RGN_FRAC(1,1) and its rows are already four chunks in
-	// one region rather than two halves. So the window follows the layout.
 	wire   [25:0] BASE_GFX3 = layout_f ? BASE_GFX3_F :
 	                          layout_e ? BASE_GFX3_E :
 	                          layout_d ? BASE_GFX3_D : BASE_GFX3_C;
@@ -268,9 +150,7 @@ module seta_sdram_top (
 	                          layout_c ? 26'h040_0000 :
 	                          layout_b ? 26'h010_0000 : 26'h020_0000;
 
-	// =====================================================================
-	// Download: swizzle the sprite region's word addresses on the way in.
-	// =====================================================================
+	// Download: permute the sprite region's word addresses.
 	wire in_gfx1 = (ioctl_addr[25:0] >= BASE_GFX1)
 	            && (ioctl_addr[25:0] <  BASE_GFX1 + SIZE_GFX1);
 
@@ -283,25 +163,13 @@ module seta_sdram_top (
 		.word_out(swz_out)
 	);
 
-	// Bit 0 -- the bit plane within the byte pair -- is carried through
-	// untouched, which is what lets sdram_download keep coalescing pairs.
+	// bit 0 (the byte within the word) is kept, so bytes still pair
 	wire [26:0] ioctl_addr_swz_c =
 		in_gfx1 ? {1'b0, BASE_GFX1 + {2'd0, swz_out, 1'b0} + {25'd0, ioctl_addr[0]}}
 		        : ioctl_addr;
 
-	// REGISTERED, because this is the critical path of the whole design: a
-	// subtract, the swizzle's own compare and subtract, a permutation and two
-	// adds, from an hps_io register to sdram_download's. The download is the
-	// one place a cycle of latency is free -- ioctl delivers a byte every few
-	// hundred clocks -- so the address, the data and the strobe are delayed
-	// together and the module downstream sees exactly what it saw before.
-	// THE INDEX AND THE DOWNLOAD FLAG ARE DELAYED WITH THE REST. They gate
-	// `accept` inside sdram_download, and passing them live while the write
-	// arrives a cycle later means the gate is evaluated against the WRONG
-	// transfer at every boundary: the last byte of the ROM is judged by the
-	// index of whatever follows it, and the first byte of the next transfer
-	// by the ROM's. An .mra's <switches> block is index 254 and lands right
-	// beside index 0, so the boundary is not hypothetical.
+	// Registered (timing), with the index and download flag delayed alongside
+	// so accept is judged against the same transfer.
 	logic [26:0] ioctl_addr_swz;
 	logic        ioctl_wr_q, ioctl_dl_q;
 	logic [15:0] ioctl_index_q;
@@ -314,33 +182,73 @@ module seta_sdram_top (
 		ioctl_dout_q   <= (gfx1_invert && in_gfx1) ? ~ioctl_dout : ioctl_dout;
 	end
 
+	wire        sd_req, sd_we16;
 	wire        dl_req, dl_we16, dl_busy;
-	// THE WAIT COVERS THE PIPELINED WRITE TOO. sdram_download raises it
-	// when it is busy, but it cannot see a write that is still one cycle
-	// away, so hps_io is also held for the cycle a write is in flight.
-	// Without that a second write could arrive before the module saw the
-	// first, and one byte of the ROM would simply not be there.
+	// wait also covers the write still in the pipeline register
 	wire        dl_ioctl_wait;
 	assign ioctl_wait = dl_ioctl_wait | ioctl_wr;
-	wire [25:0] dl_addr;
-	wire [15:0] dl_data;
+	wire [25:0] dl_addr, sd_addr;
+	wire [15:0] dl_data, sd_data;
 
 	sdram_download u_dl (
 		.clk(clk), .reset(reset),
 		.ioctl_download(ioctl_dl_q), .ioctl_index(ioctl_index_q),
 		.ioctl_wr(ioctl_wr_q), .ioctl_addr(ioctl_addr_swz),
-		// Inverted for gfx1 when the region says so, at the same point the
-		// swizzle is applied -- both are properties of how the region is laid
-		// out, not of the file the .mra ships. Registered with the address.
 		.ioctl_dout(ioctl_dout_q),
 		.ioctl_wait(dl_ioctl_wait),
-		.dl_req(dl_req), .dl_addr(dl_addr), .dl_data(dl_data),
-		.dl_we16(dl_we16), .dl_busy(dl_busy)
+		.dl_req(sd_req), .dl_addr(sd_addr), .dl_data(sd_data),
+		.dl_we16(sd_we16), .dl_busy(dl_busy)
 	);
 
-	// =====================================================================
-	// The chip and its three ports
-	// =====================================================================
+	// Fast ROM load. The copy ends at the top of the layout's x1snd region,
+	// where every .mra image for that layout ends.
+	wire [27:0] ldr_length = {2'd0, layout_f ? BASE_X1SND_F + 26'h040_0000 :
+	                                layout_e ? BASE_X1SND_E + 26'h010_0000 :
+	                                layout_d ? BASE_X1SND_D + 26'h010_0000 :
+	                                layout_c ? BASE_X1SND_C + 26'h020_0000 :
+	                                layout_b ? BASE_X1SND_B + 26'h010_0000 :
+	                                           BASE_X1SND_A + 26'h010_0000};
+
+	wire [25:0] ldr_raw_addr, ldr_xf_addr;
+	wire [15:0] ldr_raw_word, ldr_xf_data;
+	wire        ldr_req, ldr_we16;
+	wire [25:0] ldr_addr;
+	wire [15:0] ldr_data;
+
+	// The byte path's transform, per word: move to BASE_GFX1 + 2*swizzle(word),
+	// invert for gfx1_invert. raw_addr is even.
+	wire        ldr_in_gfx1 = (ldr_raw_addr >= BASE_GFX1)
+	                       && (ldr_raw_addr <  BASE_GFX1 + SIZE_GFX1);
+	wire [22:0] ldr_swz_in  = (ldr_raw_addr - BASE_GFX1) >> 1;
+	wire [22:0] ldr_swz_out;
+
+	gfx_swizzle #(.AW(23)) u_swz_ldr (
+		.half_words(gfx_half_words),
+		.word_in(ldr_swz_in),
+		.word_out(ldr_swz_out)
+	);
+
+	assign ldr_xf_addr = ldr_in_gfx1 ? BASE_GFX1 + {2'd0, ldr_swz_out, 1'b0} : ldr_raw_addr;
+	assign ldr_xf_data = (gfx1_invert && ldr_in_gfx1) ? ~ldr_raw_word : ldr_raw_word;
+
+	rom_loader u_ldr (
+		.clk(clk), .reset(reset),
+		.length(ldr_length),
+		.start(ldr_start), .busy(ldr_active),
+		.ddr_req(ldr_ddr_req), .ddr_addr(ldr_ddr_addr), .ddr_busy(ldr_ddr_busy),
+		.ddr_valid(ldr_ddr_valid), .ddr_rdata(ldr_ddr_rdata),
+		.raw_addr(ldr_raw_addr), .raw_word(ldr_raw_word),
+		.xf_addr(ldr_xf_addr), .xf_data(ldr_xf_data),
+		.dl_req(ldr_req), .dl_addr(ldr_addr), .dl_data(ldr_data),
+		.dl_we16(ldr_we16), .dl_busy(dl_busy)
+	);
+
+	// the byte path and the copy never write at the same time
+	assign dl_req  = ldr_active ? ldr_req  : sd_req;
+	assign dl_addr = ldr_active ? ldr_addr : sd_addr;
+	assign dl_data = ldr_active ? ldr_data : sd_data;
+	assign dl_we16 = ldr_active ? ldr_we16 : sd_we16;
+
 	logic [25:1] p_addr [0:2];
 	logic        p_wrl  [0:2], p_wrh [0:2], p_req [0:2];
 	logic [15:0] p_din  [0:2];
@@ -361,9 +269,6 @@ module seta_sdram_top (
 		.dout2(p_dout[2]), .req2(p_req[2]), .ack2(p_ack[2])
 	);
 
-	// One phy and one arbiter per port. The phy turns a byte address into the
-	// chip's burst-of-four; the arbiter shares that phy between clients and
-	// carries the download's write path.
 	logic        phy_req  [0:2], phy_we [0:2], phy_we16 [0:2];
 	logic [25:0] phy_addr [0:2];
 	logic [15:0] phy_wdata[0:2];
@@ -385,14 +290,9 @@ module seta_sdram_top (
 		end
 	endgenerate
 
-	// ---- port 0: sprite graphics --------------------------------------------
-	// A DIRECT arbiter client, not a narrow bridge: a swizzled sprite row is
-	// exactly one granule and never straddles two, so there is nothing for a
-	// granule cache to do except add a cycle.
-	//
-	// c_req is a LEVEL held until c_valid -- the arbiter's contract, and the
-	// OPPOSITE of sdram_narrow_bridge's, which wants a pulse. Both conventions
-	// are in this file; each client below is commented with the one it uses.
+	// port 0: sprites and tile layers, direct arbiter clients (a row is one
+	// granule). Arbiter requests are held until c_valid; the bridges below
+	// take pulses.
 	logic        spr_req_l;
 	always_ff @(posedge clk) begin
 		if (reset)          spr_req_l <= 1'b0;
@@ -400,8 +300,6 @@ module seta_sdram_top (
 		else if (spr_req)   spr_req_l <= 1'b1;
 	end
 
-	// The tile client, held the same way the sprite one is: c_req is a LEVEL
-	// until the matching c_valid.
 	logic tile_req_l = 1'b0;
 	always_ff @(posedge clk) begin
 		if (reset)               tile_req_l <= 1'b0;
@@ -438,9 +336,7 @@ module seta_sdram_top (
 		.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
 	);
 
-	// ---- port 1: X1-010 PCM --------------------------------------------------
-	// Byte-wide through a granule cache: the chip walks a sample sequentially,
-	// so eight consecutive bytes come out of one fetch. PULSED req.
+	// port 1: X1-010 samples, byte bridge (sequential reads share a granule)
 	wire        snd_g_req;
 	wire [25:0] snd_g_addr;
 	wire        snd_g_valid;
@@ -465,7 +361,7 @@ module seta_sdram_top (
 		.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
 	);
 
-	// ---- port 2: main CPU, and the download ----------------------------------
+	// port 2: CPU program and the download
 	wire        cpu_g_req;
 	wire [25:0] cpu_g_addr;
 	wire        cpu_g_valid;
@@ -474,9 +370,7 @@ module seta_sdram_top (
 	sdram_narrow_bridge #(.WORD_BYTES(2)) u_cpu_bridge (
 		.clk(clk), .reset(reset),
 		.inval(ioctl_download),
-		// 26 bits: 2 + 23 + 1. Writing 3'b000 here would make 27 and the top
-		// bit would be silently truncated -- harmless for a 64 KB image and
-		// not for a 2 MB one, which is exactly how a width bug hides.
+		// 26 bits: 2 + 23 + 1
 		.req(cpu_req), .addr({2'b00, cpu_addr, 1'b0}),
 		.valid(cpu_valid), .data(cpu_data),
 		.g_req(cpu_g_req), .g_addr(cpu_g_addr),

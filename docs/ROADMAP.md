@@ -403,7 +403,7 @@ except qzkklgy2. Sprite buffering enabled (`screen_vblank_seta_buffer_sprites`).
 | `msgundam` `msgundam1` | Mobile Suit Gundam | 56.66 Hz, explicitly a game-speed fudge, not measured |
 | `kamenrid` | Masked Riders Club Battle Race | vregs at `0x600003`, not `0x500003` |
 | `eightfrc` | Eight Forces | X1-010 sample ROM banking (`init_bankx1`) |
-| `oisipuzl` | Oishii Puzzle | 320×224 visible; driver says flip screen unsupported |
+| `oisipuzl` | Oishii Puzzle | 320×224 visible; no flip DIP, runs with the sprite flip bit set (`set_tilemaps_flip(1)`) |
 | `wrofaero` | War of Aero | uPD71054 (8254) PIT drives a level-4 IRQ |
 | `magspeed` | Magical Speed | registers at `0x5000xx`; lamp outputs |
 

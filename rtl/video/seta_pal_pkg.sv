@@ -1,9 +1,5 @@
-// The palette-mode enum, in a file of its own.
-//
-// scripts/run_sim.sh compiles `find rtl -name '*.sv' | sort`, so a package has
-// to sort before every file that imports it. It lived in x1_011_index.sv until
-// seta_video.sv needed it too, and "x1_011_index" sorts after "seta_video".
-// Splitting it out is the fix that does not depend on remembering that.
+// Palette address modes (x1_011_index.sv). A package of its own so it sorts
+// before its users in scripts/run_sim.sh's file list.
 
 `default_nettype none
 

@@ -1,0 +1,3 @@
+rtl/memory/gfx_swizzle.sv
+rtl/video/x1_001.sv
+sim/x1_001_tb/tb_x1_001.sv

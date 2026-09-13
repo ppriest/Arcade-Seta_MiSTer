@@ -147,6 +147,16 @@ class Mister:
                 new = self.shots(core) - before
                 if new:
                     name = sorted(new)[-1]
+                    # The file appears before the MiSTer has finished writing
+                    # it; fetched straight away it came back a truncated PNG.
+                    # Wait for its size to hold across a second.
+                    size, stable_for = None, 0
+                    while stable_for < 2 and time.time() < deadline + 10:
+                        s = self.sh(f"stat -c %s {REMOTE_SHOTS}/{core}/{name}",
+                                    check=False).strip()
+                        stable_for = stable_for + 1 if (s and s == size) else 0
+                        size = s
+                        time.sleep(0.5)
                     out_path.parent.mkdir(parents=True, exist_ok=True)
                     # NOT quoted: pscp takes the remote path as one argv
                     # element, so shell quotes become part of the path.

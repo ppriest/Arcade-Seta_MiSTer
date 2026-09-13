@@ -49,11 +49,8 @@ SUCCESS = "Full Compilation was successful"
 # Sets that are built but cannot yet run are held back from the device, so a
 # deploy never invites launching a game that is known not to work. Fill this
 # in as phases land -- name the .mra stems, matching build_mra.py's output.
-# blandia and blandiap: the .mra files prove byte-for-byte and the board arm is
-# in the RTL, but the set has not yet run on a DE10-nano.
-# zombraid: attract runs on hardware and matches MAME; the gun has not been used
-# in play there yet.
-HELD_BACK_SETS = ("Blandia", "Blandia (prototype)", "Zombie Raid")
+# Empty: blandia and zombraid, the last two held back, run on hardware.
+HELD_BACK_SETS = ()
 
 
 def load_env(path):
@@ -300,8 +297,8 @@ def main():
             m.put(f, f"{remote_dir}/{f.name}")
 
         if skipped:
-            print(f"\n  SKIPPED {len(skipped)} FG-3 .mra file(s): FG-3 needs the "
-                  f"SDRAM controller widened past 32 MB before it can run.")
+            print(f"\n  SKIPPED {len(skipped)} held-back .mra file(s) "
+                  f"(HELD_BACK_SETS): {', '.join(skipped)}")
             print(f"  Pass --all to copy them anyway.")
 
     print("\nDone." if not a.dry_run else "\nDry run -- nothing was copied.")

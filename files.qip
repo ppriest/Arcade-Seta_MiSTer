@@ -53,6 +53,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/x1_011_index.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_palette.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_video_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_video.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/crt_adjust.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_crt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/screen_rotate_two.sv
 
 # The sprite region's download-time layout permutation, and the SDRAM backend
