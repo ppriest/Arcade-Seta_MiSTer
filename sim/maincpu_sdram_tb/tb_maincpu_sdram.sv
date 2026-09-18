@@ -179,13 +179,14 @@ module tb_maincpu_sdram;
 	int board_sel = 8;    // BOARD_THUNDERL
 
 	maincpu dut (
-		.clk(clk), .reset(core_reset), .board(board_sel[4:0]), .cpu_ce(cpu_ce), .gun_ch(32'h80808080),
+		.clk(clk), .reset(core_reset), .board(board_sel[4:0]), .cpu_half(4'(CE_DIV / 2)), .cpu_run(1'b1), .gun_ch(32'h80808080),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
 		.wram_addr(wram_addr), .wram_wel(wram_wel), .wram_weh(wram_weh),
 		.wram_wdata(wram_wdata), .wram_rdata(wram_rdata),
 		.io_req(io_req), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata),
 		.io_uds(io_uds), .io_lds(io_lds), .io_sel(io_sel), .io_rdata(io_rdata),
+		.io_hold(1'b0),
 		.ipl_level(3'd0),
 		.iack(), .iack_level(),
 		.dbg_stb(dbg_stb), .dbg_addr(dbg_addr), .dbg_we(dbg_we), .dbg_data(dbg_data)

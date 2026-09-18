@@ -1072,7 +1072,7 @@ behind each; this is the summary.
   the Fitter's opinion. Keep `scripts/build.sh` for the exceptional in-tree case.
 - **Deploys are gated**: `scripts/deploy.py` refuses a `.rbf` unless the log says success, the
   `.rbf` is not older than the log, and no clock has negative slack; it prints every clock's slack
-  first. Cores land as `Arcade-Seta_NNNNNNNN.rbf` with an incrementing number read back from the
+  first. Cores land as `Seta_NNNNNNNN.rbf` with an incrementing number read back from the
   device, so earlier builds stay on the machine as fallbacks (rename the newest to `.held` to drop
   back one).
 - `releases/` holds the generated per-game `.mra` files — parents at the top level, clones under

@@ -1,17 +1,20 @@
 # Seta core for MiSTer
 
-MiSTer FPGA core for [Seta](https://en.wikipedia.org/wiki/Seta_Corporation)'s X1-010 arcade
-hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for the DE10-nano.
+MiSTer FPGA cores for [Seta](https://en.wikipedia.org/wiki/Seta_Corporation)'s X1-010 arcade
+hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
+
+* **Seta** — MAME's `seta/seta.cpp`
+* **Seta_Downtown** — MAME's `seta/downtown.cpp`: + 65C02 sub CPU
 
 ## Contents
 
+- [History](#history)
 - [Games](#games)
   - [Game Notes](#game-notes)
   - [Supported](#supported)
   - [Out of scope for now](#out-of-scope-for-now)
 - [Hardware](#hardware)
   - [Video timing](#video-timing)
-- [History](#history)
 - [Screenshots](#screenshots)
 - [Installation](#installation)
 - [Status](#status)
@@ -23,9 +26,51 @@ hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for
 - [Layout](#layout)
 - [License](#license)
 
+## History
+
+* **Arcade-Seta_20260918.rbf / Arcade-SetaDowntown_20260918.rbf**
+  * Seta_Downtown core added: DownTown / Mokugeki (four sets), Twin Eagle, Arbalester, Meta Fox
+  * 68000 is now fx68k, cycle-accurate; TG68K ran 3.5x too fast, and was causing issues
+  * CRT width: Match 384 option removed
+  * Sprites: games that flip their own sprite page (26 of 31, `scripts/sprctrl_scan.py`) have it copied at the flip. Fixes Strike Gunner's ship and asteroids, Mad Shark, and Gundhara's full-screen glitch under slowdown
+  * Sprites: the vblank copy runs in each board's order, as MAME's; Quiz Kokology's bees and Blandia's intro illustration are right
+  * Tile VRAM writes queued to vblank: Gundhara's occasional wrong tiles. A CPU read waits for the queue, so Blandia passes its VRAM test and boots
+  * DownTown ran too fast: the vblank interrupt was raised on both edges
+  * Audio mix OSD option (Mono, None, 25%, 50%), defaulting to mono
+  * DIPs with three or more bits (most coinage settings) showed only half their settings ([#6](https://github.com/ppriest/Arcade-Seta_MiSTer/issues/6))
+  * Blandia, Dragon Unit: coinage labels that depend on Coinage Type show both, e.g. `Coin B (Mode 1|2)` = `5C/1C|3C/7C`
+  * Button 3 wired for Blandia, as MAME's JOY_TYPE1_3BUTTONS; J. J. Squawkers shows two buttons (MAME declares three, the game reads two)
+  * Wit's players 3 and 4 wired
+  * `scripts/check_dips.py` and `scripts/check_inputs.py` check every `.mra`'s DIPs and every set's inputs against MAME
+
+* **`Arcade-Seta_20260913.rbf`**
+  * Fast ROM loading
+  * Timer interrupt ran at half rate: music at the right speed in War of Aero and the other five timer games
+  * Flip screen DIP now works for all games that have one, as a true 180 degree rotation (MAME is 128 px / 8 lines out, see `docs/MAME_DIVERGENCE.md`)
+  * Oishii Puzzle tile layers no longer flipped with the sprites
+  * Mobile Suit Gundam interrupts fixed
+  * Extreme Downhill boot screen black
+  * Tile row cache for busy 6bpp lines
+  * CRT adjust: H-Size, H-Position, V-Shift
+  * CRT width: Match 384 for the 320-wide games
+
+* **`Arcade-Seta_20260912.rbf`**
+  * Blandia and Zombie Raid added
+  * Sound in Extreme Downhill and Sokonuke Taisen
+  * J. J. Squawkers passes its boot RAM test
+
+* **`Arcade-Seta_20260911.rbf`**
+  * All twenty sets run
+  * Tilemap tearing fixed
+  * Inputs/DIPs all reviewed and corrected (6 button Daioh)
+
+* **`Arcade-Seta_20260910.rbf`**
+  * **Alpha release**
+  * Support for a bunch of games in varying states of running
+
 ## Games
 
-The goal is to support the collection of hardware covered by MAME in `seta.cpp`. Minus bootlegs on different hardware, and betting hardware.
+The goal is to support the collection of hardware covered by MAME in `seta.cpp` and `downtown.cpp`. Minus bootlegs on different hardware, and betting hardware.
 
 ### Game Notes
 
@@ -39,40 +84,44 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp`.
   * Reportedly it _does_ work on a Guncon 2, but it's not great with the dark scenes and jumps around
 
 * **CRT adjust** (all games) - H-Size, H-Position and V-Shift for an analog CRT, from rmonic79's [Arcade-Raiden_MiSTer](https://github.com/rmonic79/Arcade-Raiden_MiSTer).
-  * **CRT width: Match 384** (320-wide games only: Extreme Downhill, Sokonuke Taisen, Oishii Puzzle) - The option holds each pixel 1.2x as long, so the picture covers the 384-wide games' area, while the line (15.625 kHz), frame rate (57.44 Hz) and syncs stay the same. 
-  * V-Size is left out: the core already uses 542 of the device's 553 RAM blocks.
 
 ### Supported
 
-| Name | Year | Manufacturer | Main CPU | Tilemaps | Notes |
-|-|-|-|-|-|-|
-| Wit's | 1989 | Athena (Visco license) | M68000 @ 8 MHz | 0 | Four players |
-| Thunder & Lightning | 1990 | Seta | M68000 @ 8 MHz | 0 | Has protection |
-| Pairs Love | 1991 | Athena / Nihon System | M68000 @ 8 MHz | 0 | 2048 palette entries |
-| Block Carnival / Thunder & Lightning 2 | 1992 | Visco | M68000 @ 8 MHz | 0 | |
-| Ultraman Club | 1992 | Banpresto | M68000 @ 16 MHz | 0 | |
-| SD Gundam Neo Battling | 1992 | Banpresto | M68000 @ 16 MHz | 0 | |
-| Athena no Hatena? | 1993 | Athena | M68000 @ 16 MHz | 0 | 2 MB of sprites, 64 KB of work RAM mirrored |
-| Dragon Unit / Castle of Dragon | 1989 | Athena / Seta | M68000 @ 8 MHz | 1× 4bpp | |
-| Strike Gunner S.T.G | 1991 | Athena / Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
-| Quiz Kokology | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
-| Quiz Kokology 2 | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
-| Rezon | 1991 | Allumer | M68000 @ 16 MHz | 2× 4bpp | |
-| Daioh | 1993 | Athena | M68000 @ 16 MHz | 2× 4bpp |  |
-| Mobile Suit Gundam | 1993 | Banpresto | M68000 @ 16 MHz | 2× 4bpp | 4 MB of sprites |
-| War of Aero | 1993 | Yang Cheng | M68000 @ 16 MHz | 2× 4bpp | uPD71054C timer |
-| Oishii Puzzle Ha Irimasenka | 1993 | Sunsoft / Atlus | M68000 @ 16 MHz | 2× 4bpp |  |
-| Kamen Rider Club Battle Race | 1993 | Banpresto | M68000 @ 16 MHz | 2× 4bpp | Timer |
-| Eight Forces | 1994 | Tecmo | M68000 @ 16 MHz | 2× 4bpp | 12 MB of ROM |
-| Magical Speed | 1994 | Allumer | M68000 @ 16 MHz | 2× 4bpp | Timer; as Kamen Rider |
-| Zing Zing Zip | 1992 | Allumer / Tecmo | M68000 @ 16 MHz | 6bpp + 4bpp | vblank IRQ is level 3 |
-| Blandia | 1992 | Allumer | M68000 @ 16 MHz | 2× 6bpp | Second palette bank and its offset effect; banked samples |
-| J. J. Squawkers | 1993 | Athena / Able | M68000 @ 16 MHz | 2× 6bpp |  |
-| Mad Shark | 1993 | Allumer | M68000 @ 16 MHz | 2× 6bpp |  |
-| Extreme Downhill | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp | 320 wide; a 4 MB tile region |
-| Sokonuke Taisen Game | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp |  |
-| Gundhara | 1995 | Banpresto | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, a second work-RAM block |
-| Zombie Raid | 1995 | American Sammy | M68000 @ 16 MHz | 2× 6bpp | ADC0834 light gun, battery-backed RAM, 4 MB of samples |
+Seta_Downtown games are a separate core, `SetaDowntown_*.rbf`; all four are ROT270, with X1-010 sound on the 68000.
+
+| Name | Year | Manufacturer | Core | Main CPU | Tilemaps | Notes |
+|-|-|-|-|-|-|-|
+| Twin Eagle - Revenge Joe's Brother | 1988 | Seta (Taito license) | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Protection |
+| Wit's | 1989 | Athena (Visco license) | Seta | M68000 @ 8 MHz | 0 | Four players |
+| Dragon Unit / Castle of Dragon | 1989 | Athena / Seta | Seta | M68000 @ 8 MHz | 1× 4bpp | |
+| DownTown / Mokugeki | 1989 | Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Rotary joysticks, Protection |
+| Arbalester | 1989 | Jordan I.S. / Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | |
+| Meta Fox | 1989 | Jordan I.S. / Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Protection |
+| Thunder & Lightning | 1990 | Seta | Seta | M68000 @ 8 MHz | 0 | Has protection |
+| Pairs Love | 1991 | Athena / Nihon System | Seta | M68000 @ 8 MHz | 0 | 2048 palette entries |
+| Strike Gunner S.T.G | 1991 | Athena / Tecmo | Seta | M68000 @ 8 MHz | 1× 4bpp | |
+| Rezon | 1991 | Allumer | Seta | M68000 @ 16 MHz | 2× 4bpp | |
+| Block Carnival / Thunder & Lightning 2 | 1992 | Visco | Seta | M68000 @ 8 MHz | 0 | |
+| Ultraman Club | 1992 | Banpresto | Seta | M68000 @ 16 MHz | 0 | |
+| SD Gundam Neo Battling | 1992 | Banpresto | Seta | M68000 @ 16 MHz | 0 | |
+| Quiz Kokology | 1992 | Tecmo | Seta | M68000 @ 8 MHz | 1× 4bpp | |
+| Quiz Kokology 2 | 1992 | Tecmo | Seta | M68000 @ 8 MHz | 1× 4bpp | |
+| Zing Zing Zip | 1992 | Allumer / Tecmo | Seta | M68000 @ 16 MHz | 6bpp + 4bpp | vblank IRQ is level 3 |
+| Blandia | 1992 | Allumer | Seta | M68000 @ 16 MHz | 2× 6bpp | Second palette bank and its offset effect; banked samples |
+| Athena no Hatena? | 1993 | Athena | Seta | M68000 @ 16 MHz | 0 | 2 MB of sprites, 64 KB of work RAM mirrored |
+| Daioh | 1993 | Athena | Seta | M68000 @ 16 MHz | 2× 4bpp | |
+| Mobile Suit Gundam | 1993 | Banpresto | Seta | M68000 @ 16 MHz | 2× 4bpp | 4 MB of sprites |
+| War of Aero | 1993 | Yang Cheng | Seta | M68000 @ 16 MHz | 2× 4bpp | uPD71054C timer |
+| Oishii Puzzle Ha Irimasenka | 1993 | Sunsoft / Atlus | Seta | M68000 @ 16 MHz | 2× 4bpp | |
+| Kamen Rider Club Battle Race | 1993 | Banpresto | Seta | M68000 @ 16 MHz | 2× 4bpp | Timer |
+| J. J. Squawkers | 1993 | Athena / Able | Seta | M68000 @ 16 MHz | 2× 6bpp | |
+| Mad Shark | 1993 | Allumer | Seta | M68000 @ 16 MHz | 2× 6bpp | |
+| Eight Forces | 1994 | Tecmo | Seta | M68000 @ 16 MHz | 2× 4bpp | 12 MB of ROM |
+| Magical Speed | 1994 | Allumer | Seta | M68000 @ 16 MHz | 2× 4bpp | Timer; as Kamen Rider |
+| Extreme Downhill | 1995 | Sammy | Seta | M68000 @ 16 MHz | 6bpp + 4bpp | 320 wide; a 4 MB tile region |
+| Sokonuke Taisen Game | 1995 | Sammy | Seta | M68000 @ 16 MHz | 6bpp + 4bpp | |
+| Gundhara | 1995 | Banpresto | Seta | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, a second work-RAM block |
+| Zombie Raid | 1995 | American Sammy | Seta | M68000 @ 16 MHz | 2× 6bpp | ADC0834 light gun, battery-backed RAM, 4 MB of samples |
 
 ### Out of scope for now
 
@@ -99,6 +148,9 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp`.
 | Ultra Toukon Densetsu (Japan) | X1-010 + Z80 and YM3438 |
 | Crazy Fight | YM3812 + OKI M6295 |
 | Daioh (prototype, earliest) | missing program ROMs |
+| Caliber 50 (`downtown.cpp`) | Not yet: X1-010 on the 65C02, uPD4701 loop joysticks, battery RAM, scroll written mid-frame |
+| U.S. Classic (`downtown.cpp`) | Not yet: two trackballs through a uPD4701, colour PROMs, 6bpp tiles |
+| Thundercade / Twin Formation, Tokusyu Butai U.A.G. (`downtown.cpp`) | Not yet: YM2203 + YM3812 on the 65C02 |
 
 ## Hardware
 
@@ -135,44 +187,47 @@ Not every board measures the same:
 | Crazy Fight (out of scope) | 15.1433 kHz | 59.1851 Hz | `seta.cpp`, Guru |
 | Thundercade (older board, not in this core) | 15.21 kHz | 59.1845 Hz | `downtown.cpp`, Guru |
 
-The SD Gundam Neo Battling figures do not fit 512 × 272 at 8 MHz. 15.22 kHz would be about 526 dots per line and 58 Hz about 262 lines. That board still runs the common timing here.
-
 Some links discussing the hardware:
 * https://www.arcade-museum.com/manuf/Seta.html
 
-## History
-
-* **`Arcade-Seta_20260913.rbf`**
-  * Fast ROM loading
-  * Timer interrupt ran at half rate: music at the right speed in War of Aero and the other five timer games
-  * Flip screen DIP now works for all games that have one, as a true 180 degree rotation (MAME is 128 px / 8 lines out, see `docs/MAME_DIVERGENCE.md`)
-  * Oishii Puzzle tile layers no longer flipped with the sprites
-  * Mobile Suit Gundam interrupts fixed
-  * Extreme Downhill boot screen black
-  * Tile row cache for busy 6bpp lines
-  * CRT adjust: H-Size, H-Position, V-Shift
-  * CRT width: Match 384 for the 320-wide games
-
-* **`Arcade-Seta_20260912.rbf`**
-  * Blandia and Zombie Raid added
-  * Sound in Extreme Downhill and Sokonuke Taisen
-  * J. J. Squawkers passes its boot RAM test
-
-* **`Arcade-Seta_20260911.rbf`**
-  * All twenty sets run
-  * Tilemap tearing fixed
-  * Inputs/DIPs all reviewed and corrected (6 button Daioh)
-
-* **`Arcade-Seta_20260910.rbf`**
-  * **Alpha release**
-  * Support for a bunch of games in varying states of running
-
 ## Screenshots
+
+### Twin Eagle - Revenge Joe's Brother
+
+![twineagl 20260918_213915-screen](docs/screenshots/twineagl/20260918_213915-screen.png)
+![twineagl 20260918_213934-screen](docs/screenshots/twineagl/20260918_213934-screen.png)
 
 ### Wit's
 
 ![wits 20260912_185751-screen](docs/screenshots/wits/20260912_185751-screen.png)
 ![wits 20260912_185746-screen](docs/screenshots/wits/20260912_185746-screen.png)
+
+### Dragon Unit / Castle of Dragon
+
+![drgnunit 20260913_165328-screen](docs/screenshots/drgnunit/20260913_165328-screen.png)
+![drgnunit 20260913_165339-screen](docs/screenshots/drgnunit/20260913_165339-screen.png)
+![drgnunit 20260913_165453-screen](docs/screenshots/drgnunit/20260913_165453-screen.png)
+![drgnunit 20260913_165456-screen](docs/screenshots/drgnunit/20260913_165456-screen.png)
+![drgnunit 20260913_165513-screen](docs/screenshots/drgnunit/20260913_165513-screen.png)
+
+### DownTown / Mokugeki
+
+![downtown 20260918_214209-screen](docs/screenshots/downtown/20260918_214209-screen.png)
+![downtown 20260918_214227-screen](docs/screenshots/downtown/20260918_214227-screen.png)
+![downtown 20260918_214337-screen](docs/screenshots/downtown/20260918_214337-screen.png)
+
+### Arbalester
+
+![arbalest 20260918_214056-screen](docs/screenshots/arbalest/20260918_214056-screen.png)
+![arbalest 20260918_214137-screen](docs/screenshots/arbalest/20260918_214137-screen.png)
+![arbalest 20260918_214145-screen](docs/screenshots/arbalest/20260918_214145-screen.png)
+
+### Meta Fox
+
+![metafox 20260918_213757-screen](docs/screenshots/metafox/20260918_213757-screen.png)
+![metafox 20260918_213817-screen](docs/screenshots/metafox/20260918_213817-screen.png)
+![metafox 20260918_213831-screen](docs/screenshots/metafox/20260918_213831-screen.png)
+![metafox 20260918_213837-screen](docs/screenshots/metafox/20260918_213837-screen.png)
 
 ### Thunder & Lightning
 
@@ -183,6 +238,18 @@ Some links discussing the hardware:
 
 ![pairlove 20260913_172646-screen](docs/screenshots/pairlove/20260913_172646-screen.png)
 ![pairlove 20260913_172616-screen](docs/screenshots/pairlove/20260913_172616-screen.png)
+
+### Strike Gunner S.T.G
+
+![stg 20260913_175315-screen](docs/screenshots/stg/20260913_175315-screen.png)
+![stg 20260913_175326-screen](docs/screenshots/stg/20260913_175326-screen.png)
+![stg 20260913_175342-screen](docs/screenshots/stg/20260913_175342-screen.png)
+
+### Rezon
+
+![rezon 20260913_174735-screen](docs/screenshots/rezon/20260913_174735-screen.png)
+![rezon 20260913_174841-screen](docs/screenshots/rezon/20260913_174841-screen.png)
+![rezon 20260913_175006-screen](docs/screenshots/rezon/20260913_175006-screen.png)
 
 ### Block Carnival / Thunder & Lightning 2
 
@@ -204,42 +271,31 @@ Some links discussing the hardware:
 ![neobattl 20260913_175105-screen](docs/screenshots/neobattl/20260913_175105-screen.png)
 ![neobattl 20260913_175124-screen](docs/screenshots/neobattl/20260913_175124-screen.png)
 
-### Athena no Hatena?
-
-![atehate 20260913_165012-screen](docs/screenshots/atehate/20260913_165012-screen.png)
-![atehate 20260913_165021-screen](docs/screenshots/atehate/20260913_165021-screen.png)
-
-### Dragon Unit / Castle of Dragon
-
-![drgnunit 20260913_165328-screen](docs/screenshots/drgnunit/20260913_165328-screen.png)
-![drgnunit 20260913_165339-screen](docs/screenshots/drgnunit/20260913_165339-screen.png)
-![drgnunit 20260913_165453-screen](docs/screenshots/drgnunit/20260913_165453-screen.png)
-![drgnunit 20260913_165456-screen](docs/screenshots/drgnunit/20260913_165456-screen.png)
-![drgnunit 20260913_165513-screen](docs/screenshots/drgnunit/20260913_165513-screen.png)
-
-### Strike Gunner S.T.G
-
-![stg 20260913_175315-screen](docs/screenshots/stg/20260913_175315-screen.png)
-![stg 20260913_175326-screen](docs/screenshots/stg/20260913_175326-screen.png)
-![stg 20260913_175342-screen](docs/screenshots/stg/20260913_175342-screen.png)
-
 ### Quiz Kokology
 
 ![qzkklogy 20260913_174612-screen](docs/screenshots/qzkklogy/20260913_174612-screen.png)
-![qzkklogy 20260913_172827-screen](docs/screenshots/qzkklogy/20260913_172827-screen.png)
 ![qzkklogy 20260913_174024-screen](docs/screenshots/qzkklogy/20260913_174024-screen.png)
 
 ### Quiz Kokology 2
 
 ![qzkklgy2 20260913_174701-screen](docs/screenshots/qzkklgy2/20260913_174701-screen.png)
-![qzkklgy2 20260913_174635-screen](docs/screenshots/qzkklgy2/20260913_174635-screen.png)
 ![qzkklgy2 20260913_174706-screen](docs/screenshots/qzkklgy2/20260913_174706-screen.png)
 
-### Rezon
+### Zing Zing Zip
 
-![rezon 20260913_174735-screen](docs/screenshots/rezon/20260913_174735-screen.png)
-![rezon 20260913_174841-screen](docs/screenshots/rezon/20260913_174841-screen.png)
-![rezon 20260913_175006-screen](docs/screenshots/rezon/20260913_175006-screen.png)
+![zingzip 20260913_175727-screen](docs/screenshots/zingzip/20260913_175727-screen.png)
+![zingzip 20260913_175747-screen](docs/screenshots/zingzip/20260913_175747-screen.png)
+
+### Blandia
+
+![blandia 20260913_164854-screen](docs/screenshots/blandia/20260913_164854-screen.png)
+![blandia 20260913_164908-screen](docs/screenshots/blandia/20260913_164908-screen.png)
+![blandia 20260913_164959-screen](docs/screenshots/blandia/20260913_164959-screen.png)
+
+### Athena no Hatena?
+
+![atehate 20260913_165012-screen](docs/screenshots/atehate/20260913_165012-screen.png)
+![atehate 20260913_165021-screen](docs/screenshots/atehate/20260913_165021-screen.png)
 
 ### Daioh
 
@@ -276,30 +332,6 @@ Some links discussing the hardware:
 ![kamenrid 20260913_171718-screen](docs/screenshots/kamenrid/20260913_171718-screen.png)
 ![kamenrid 20260913_171801-screen](docs/screenshots/kamenrid/20260913_171801-screen.png)
 
-### Eight Forces
-
-![eightfrc 20260913_165553-screen](docs/screenshots/eightfrc/20260913_165553-screen.png)
-![eightfrc 20260913_165602-screen](docs/screenshots/eightfrc/20260913_165602-screen.png)
-![eightfrc 20260913_165641-screen](docs/screenshots/eightfrc/20260913_165641-screen.png)
-![eightfrc 20260913_165710-screen](docs/screenshots/eightfrc/20260913_165710-screen.png)
-
-### Magical Speed
-
-![magspeed 20260913_171640-screen](docs/screenshots/magspeed/20260913_171640-screen.png)
-![magspeed 20260913_171623-screen](docs/screenshots/magspeed/20260913_171623-screen.png)
-![magspeed 20260913_171656-screen](docs/screenshots/magspeed/20260913_171656-screen.png)
-
-### Zing Zing Zip
-
-![zingzip 20260913_175727-screen](docs/screenshots/zingzip/20260913_175727-screen.png)
-![zingzip 20260913_175747-screen](docs/screenshots/zingzip/20260913_175747-screen.png)
-
-### Blandia
-
-![blandia 20260913_164854-screen](docs/screenshots/blandia/20260913_164854-screen.png)
-![blandia 20260913_164908-screen](docs/screenshots/blandia/20260913_164908-screen.png)
-![blandia 20260913_164959-screen](docs/screenshots/blandia/20260913_164959-screen.png)
-
 ### J. J. Squawkers
 
 ![jjsquawk 20260913_171010-screen](docs/screenshots/jjsquawk/20260913_171010-screen.png)
@@ -314,6 +346,19 @@ Some links discussing the hardware:
 ![madshark 20260913_171507-screen](docs/screenshots/madshark/20260913_171507-screen.png)
 ![madshark 20260913_171518-screen](docs/screenshots/madshark/20260913_171518-screen.png)
 ![madshark 20260913_171542-screen](docs/screenshots/madshark/20260913_171542-screen.png)
+
+### Eight Forces
+
+![eightfrc 20260913_165553-screen](docs/screenshots/eightfrc/20260913_165553-screen.png)
+![eightfrc 20260913_165602-screen](docs/screenshots/eightfrc/20260913_165602-screen.png)
+![eightfrc 20260913_165641-screen](docs/screenshots/eightfrc/20260913_165641-screen.png)
+![eightfrc 20260913_165710-screen](docs/screenshots/eightfrc/20260913_165710-screen.png)
+
+### Magical Speed
+
+![magspeed 20260913_171640-screen](docs/screenshots/magspeed/20260913_171640-screen.png)
+![magspeed 20260913_171623-screen](docs/screenshots/magspeed/20260913_171623-screen.png)
+![magspeed 20260913_171656-screen](docs/screenshots/magspeed/20260913_171656-screen.png)
 
 ### Extreme Downhill
 
@@ -352,20 +397,22 @@ Some links discussing the hardware:
 
 ## Installation
 
-* Take the latest `*.rbf` from `releases/` and put it in `_Arcade/cores`
+* Take the latest `*.rbf` from `releases/` and put it in `_Arcade/cores`, renamed to drop the `Arcade-` prefix: `Arcade-Seta_20260913.rbf` becomes `Seta_20260913.rbf`. The `.mra` files' `<rbf>Seta</rbf>` matches either name, but MiSTer launches the highest-sorting match, and any `Seta_*.rbf` sorts above every `Arcade-Seta_*.rbf`, so a prefixed copy left alongside is never used
+* Seta_Downtown: the same, with its `.rbf` renamed from `Arcade-SetaDowntown_*.rbf` to `SetaDowntown_*.rbf`
 * Take the `*.mra` files from `releases/` and subdirs and put them in `_Arcade`
 * Put the MAME merged or split ROMs in `games/mame`
 
 ## Status
 
 Known issues:
-* **Quiz Kokology**, **Blandia** - During intro bad tiles can render
 * **Thunder & Lightning** - Character sprites in attract glitch in at the edge of the screen. The same in MAME. Appears to be an original game bug.
+* **Seta_Downtown** - Not yet run on hardware since the sprite snapshot (page flip) and tile VRAM queue changes shared with the Seta core. Twin Eagle's water, drawn from its tile bank, is not yet checked on hardware.
 
 See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
 
 ### Todo
 
+- [x] 68000 pace: TG68K ran a `nop; dbra` loop 3.5x faster than a 68000 (`sim/tg68k_pace_tb`), and Twin Eagle's boot reached its error handler. Replaced by fx68k (`sim/fx68k_pace_tb`); Twin Eagle boots
 - [ ] `hiscore.v` support, savestates
 - [ ] `zombraidp` / `zombraidpj` `.mra` files -- ERASE00 regions loaded in three byte lanes
 - [ ] `daiohc` — the `wrofaero` machine config with `daioh`-sized graphics, needs its own arm
@@ -398,6 +445,8 @@ Not PCB-validated. MAME is the accuracy reference for the most part, with its ow
   * The sprite engine and the video path are diffed against MAME's own render
   * The sound is diffed against a line-by-line transcription of MAME's mixer.
   * The ROM_START records, the DIP switches to generate the `.mra` titles
+
+* VBlank, Sprite and tilemap buffering behaviour (and divergent Blandia behaviour) validated by exhaustively checking and reconciling behaviours. See `docs\MAME_DIVERGENCE.md` and `docs\write_timing_mame.txt`
 
 ## Acknowledgements
 
@@ -437,8 +486,7 @@ Standard [Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer) stru
 
 GPL v3 (see `LICENSE`). Imported components keep their own licences and are GPLv3-compatible:
 TG68K.C (LGPLv3+), the adapted SDR SDRAM controller (Sorgelig, GPL-3.0-or-later),
-`screen_rotate_two.sv` (Sorgelig, GPLv2), `crt_adjust.sv` (rmonic79, GPL-3.0-or-later), and the MiSTer
-framework in `sys/`.
+`screen_rotate_two.sv` (Sorgelig, GPLv2), `crt_adjust.sv` (rmonic79, GPL-3.0-or-later), and the MiSTer framework in `sys/`.
 
 Game ROMs contain copyrighted material and are not included. Obtaining them is your
 responsibility.

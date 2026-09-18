@@ -69,6 +69,14 @@ DEF_STR = {
     "6C_1C": "6 Coins/1 Credit", "8C_3C": "8 Coins/3 Credits",
 }
 
+# The whole table from the same MAME tree as the driver when it is there
+# (src/emu/ioport.cpp, the INPUT_STRING_* list), so a token the hand table
+# lacks cannot come out raw: "2C_5C" reached Blandia's .mra that way.
+_IOPORT = os.path.join(os.path.dirname(SRC), "..", "..", "emu", "ioport.cpp")
+if os.path.exists(_IOPORT):
+    DEF_STR.update(re.findall(r'\{\s*INPUT_STRING_(\w+)\s*,\s*"([^"]*)"\s*\}',
+                              open(_IOPORT, encoding="utf8", errors="replace").read()))
+
 _DEFSTR_RE = re.compile(r"DEF_STR\(\s*([A-Za-z0-9_]+)\s*\)")
 _NUM = r"(0x[0-9a-fA-F]+|\d+)"
 
@@ -160,15 +168,33 @@ def parse_ports(body, all_blocks, missing, depth=0):
         m = re.match(rf'PORT_DIPNAME\(\s*{_NUM}\s*,\s*{_NUM}\s*,\s*(.*?)\s*\)\s*(?:PORT_\w+.*)?$',
                      line)
         if m:
+            if "PORT_CONDITION" in line:
+                sys.exit(f"conditional PORT_DIPNAME is not handled: {line}")
             last = (_label(m.group(3), missing), _num(m.group(1)), _num(m.group(2)), {})
             ports[cur].append(last)
             continue
 
+        # PORT_CONDITION("DSW",0x8000,EQUALS,0x8000) after a setting: the label
+        # applies only while that switch reads so. Split off first -- a lazy
+        # match to the last ")" otherwise takes the condition into the label,
+        # which is how Coin A read "DSW" (Blandia, Dragon Unit, downtown.cpp).
+        cond = None
+        mc = re.search(rf'\)\s*PORT_CONDITION\(\s*"(\w+)"\s*,\s*{_NUM}\s*,\s*(EQUALS|NOTEQUALS)\s*,\s*{_NUM}\s*\)\s*$',
+                       line)
+        if mc:
+            cond = (mc.group(1), _num(mc.group(2)), mc.group(3), _num(mc.group(4)))
+            line = line[:mc.start() + 1]
         m = re.match(rf'PORT_DIPSETTING\(\s*{_NUM}\s*,\s*(.*?)\s*\)\s*$', line)
         if m:
             if last is None:
                 sys.exit(f"PORT_DIPSETTING with no preceding PORT_DIPNAME: {line}")
-            last[3][_num(m.group(1))] = _label(m.group(2), missing)
+            if "PORT_" in m.group(2):
+                sys.exit(f"unparsed PORT_ macro after a setting: {raw.strip()}")
+            v, lab = _num(m.group(1)), _label(m.group(2), missing)
+            if cond is None:
+                last[3][v] = lab
+            else:
+                last[3].setdefault(("cond", cond), {})[v] = lab
             continue
 
         # PORT_SERVICE / PORT_SERVICE_DIPLOC -- A REAL DIP THAT LOOKS LIKE
@@ -223,7 +249,55 @@ def parse_ports(body, all_blocks, missing, depth=0):
             last = None
             continue
 
+    if depth == 0:
+        ports = {k: [_fold(d, ports) for d in v] for k, v in ports.items()}
     return ports
+
+
+def _short(label):
+    return re.sub(r"(\d+) Coins?/(\d+) Credits?", r"\1C/\2C", label)
+
+
+def _fold(dip, ports):
+    """MiSTer has no conditional DIPs: a switch whose settings depend on
+    another becomes one switch whose ids carry both readings, the one for the
+    other switch's default first -- Coin A (Mode 1|2) = 2C/1C|4C/1C."""
+    name, mask, dflt, settings = dip
+    if settings is None:
+        return dip
+    conds = [k for k in settings if isinstance(k, tuple)]
+    if not conds:
+        return dip
+    plain = {k: v for k, v in settings.items() if not isinstance(k, tuple)}
+    port, cmask = conds[0][1][0], conds[0][1][1]
+    if any(c[1][0] != port or c[1][1] != cmask for c in conds):
+        sys.exit(f"'{name}': settings conditional on more than one switch")
+    cdip = [d for d in ports.get(port, []) if d[1] == cmask and d[3] is not None]
+    if len(cdip) != 1 or bin(cmask).count("1") != 1:
+        sys.exit(f"'{name}': condition on {port} {cmask:#x} is not a one-bit switch")
+    cdef = cdip[0][2] & cmask
+
+    def labels_when(bitval):
+        out = {}
+        for (_, (p, m, op, val)) in conds:
+            hit = (bitval == val) if op == "EQUALS" else (bitval != val)
+            if hit:
+                out.update(settings[("cond", (p, m, op, val))])
+        return out
+
+    first, second = labels_when(cdef), labels_when(cdef ^ cmask)
+    folded = {v: _short(lab) for v, lab in plain.items()}
+    for v in sorted(set(first) | set(second)):
+        a, b = _short(first.get(v, "-")), _short(second.get(v, "-"))
+        folded[v] = a if a == b else f"{a}|{b}"
+    ca, cb = cdip[0][3].get(cdef, "?"), cdip[0][3].get(cdef ^ cmask, "?")
+    wa, wb = ca.split(), cb.split()
+    k = 0
+    while k < min(len(wa), len(wb)) - 1 and wa[k] == wb[k]:
+        k += 1
+    tag = (f"{wa[k - 1]} {' '.join(wa[k:])}|{' '.join(wb[k:])}" if k
+           else f"{ca}|{cb}")
+    return (f"{name} ({tag})", mask, dflt, folded)
 
 
 GROUP_A = ["thunderl", "wits", "blockcar", "umanclub", "neobattl",

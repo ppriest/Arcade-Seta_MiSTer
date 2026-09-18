@@ -190,31 +190,36 @@ def check_build(rbf, log, sta, allow_timing_miss=False):
 
 
 # ---------------------------------------------------------------------------
-# Remote naming: Arcade-Seta_NNNNNNNN.rbf, the number incrementing per deploy.
+# Remote naming: Seta_NNNNNNNN.rbf, the number incrementing per deploy. The
+# release file keeps its Arcade- prefix (releases/Arcade-Seta_YYYYMMDD.rbf);
+# it is dropped on install, here and in the README's installation steps.
 #
-# MiSTer resolves the .mra's <rbf>Arcade-Seta</rbf> to the highest-sorting
-# Arcade-Seta_*.rbf in the cores folder, so every deploy leaves the previous
+# MiSTer resolves the .mra's <rbf>Seta</rbf> to the highest-sorting of
+# Arcade-Seta_*.rbf and Seta_*.rbf in the cores folder (Main_MiSTer
+# mra_loader.cpp get_rbf tries both), so every deploy leaves the previous
 # builds in place as fallbacks: rename the newest to .held (any name that no
-# longer ends in .rbf) and the one before it is what the .mra launches. The
-# counter starts at 10000001 and is read back from the device, .held files
-# included, so a held build's number is never reused. A plain Arcade-Seta.rbf
-# from before this convention is moved aside to .held rather than left to
-# compete with the numbered ones.
+# longer ends in .rbf) and the one before it is what the .mra launches. Any
+# Seta_* sorts above every Arcade-Seta_*, so the old prefixed builds are
+# reached only once every Seta_* is held. The counter starts at 10000001 and
+# is read back from the device, .held files and old Arcade- names included, so
+# no number is reused. A plain Seta.rbf or Arcade-Seta.rbf from before the
+# numbering is moved aside to .held rather than left to compete.
 # ---------------------------------------------------------------------------
-RBF_STEM = "Arcade-Seta"
+RBF_STEM = "Seta"
 RBF_FIRST = 10000001
 
 
 def next_rbf_name(m):
+    global RBF_STEM
     if m.dry:
         return f"{RBF_STEM}_{RBF_FIRST}.rbf"   # a dry run never asks the device
     listing = m.run(f"ls -1 {REMOTE_CORES} 2>/dev/null; true")
     numbers = [int(n) for n in
-               re.findall(rf"^{RBF_STEM}_(\d+)\.rbf(?:\.held)?$", listing, re.M)]
-    plain = f"{RBF_STEM}.rbf"
-    if plain in listing.split():
-        print(f"    {plain} -> {plain}.held  (pre-numbering build, moved aside)")
-        m.run(f"mv {REMOTE_CORES}/{plain} {REMOTE_CORES}/{plain}.held")
+               re.findall(rf"^(?:Arcade-)?{RBF_STEM}_(\d+)\.rbf(?:\.held)?$", listing, re.M)]
+    for plain in (f"{RBF_STEM}.rbf", f"Arcade-{RBF_STEM}.rbf"):
+        if plain in listing.split():
+            print(f"    {plain} -> {plain}.held  (pre-numbering build, moved aside)")
+            m.run(f"mv {REMOTE_CORES}/{plain} {REMOTE_CORES}/{plain}.held")
     n = max(numbers) + 1 if numbers else RBF_FIRST
     return f"{RBF_STEM}_{n}.rbf"
 
@@ -230,12 +235,15 @@ def main():
     ap.add_argument("--sta", default=str(REPO / "output_files" / "Seta.sta.summary"))
     ap.add_argument("--name", default=None,
                     help="remote core filename. Default: the next numbered "
-                         "Arcade-Seta_NNNNNNNN.rbf on the device (see "
+                         "Seta_NNNNNNNN.rbf on the device (see "
                          "next_rbf_name); the .mra's <rbf> tag must match the "
                          "part before the underscore")
     ap.add_argument("--all", action="store_true",
                     help="also deploy .mra files listed in HELD_BACK_SETS "
                          "(sets that are built but known not to run yet)")
+    ap.add_argument("--core", choices=("seta", "downtown"), default="seta",
+                    help="downtown: the Seta_Downtown core -- SetaDowntown_N.rbf "
+                         "and releases/Seta_Downtown/ to _Arcade/_Seta_Downtown")
     ap.add_argument("--mra-only", action="store_true")
     ap.add_argument("--rbf-only", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
@@ -245,6 +253,14 @@ def main():
     ap.add_argument("--force", action="store_true",
                     help="deploy despite failed build checks -- say why")
     a = ap.parse_args()
+
+    global RBF_STEM, REMOTE_ARCADE
+    rel = REPO / "releases"
+    if a.core == "downtown":
+        # not Seta_*: the Seta .mra files' <rbf>Seta</rbf> would match it
+        RBF_STEM = "SetaDowntown"
+        REMOTE_ARCADE = "/media/fat/_Arcade/_Seta_Downtown"
+        rel = REPO / "releases" / "Seta_Downtown"
 
     env = load_env(REPO / "mister.env")
     m = Mister(env, a.dry_run)
@@ -274,8 +290,9 @@ def main():
 
     # ---- .mra files ----
     if not a.rbf_only:
-        rel = REPO / "releases"
-        mras = sorted(rel.rglob("*.mra"))
+        # the Seta core's .mra files exclude releases/Seta_Downtown/
+        mras = sorted(f for f in rel.rglob("*.mra")
+                      if a.core == "downtown" or "Seta_Downtown" not in f.parts)
         if not mras:
             sys.exit("no .mra files in releases/ -- run scripts/build_mra.py")
 

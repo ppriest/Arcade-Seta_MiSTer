@@ -28,8 +28,10 @@ module seta_video #(
 	input  wire  [8:0] spritelimit,
 	input  wire  [3:0] transpen,
 	input  wire        bgflag_opaque,
-	// setac_eof
+	// setac_eof, and whether MAME draws after it (x1_001.sv)
 	input  wire        buffer_sprites,
+	input  wire        copy_then_draw,
+	input  wire  [9:0] spr_snap_line,
 	input  wire [LB_W-1:0] colorbase_fg, colorbase_bg,
 	input  wire  [8:0] screen_h, vis_max_y,
 	input  wire [LB_W-1:0] backdrop,
@@ -55,6 +57,8 @@ module seta_video #(
 	input  wire [15:0] l0_vram_wdata,
 	input  wire        l0_vram_uds, l0_vram_lds,
 	output wire [15:0] l0_vram_rdata,
+	input  wire        l0_vram_drain,
+	output wire        l0_vram_busy,
 	input  wire        l0_ctrl_we,
 	input  wire  [1:0] l0_ctrl_addr,
 	input  wire [15:0] l0_ctrl_wdata,
@@ -75,6 +79,8 @@ module seta_video #(
 	input  wire [15:0] l1_vram_wdata,
 	input  wire        l1_vram_uds, l1_vram_lds,
 	output wire [15:0] l1_vram_rdata,
+	input  wire        l1_vram_drain,
+	output wire        l1_vram_busy,
 	input  wire        l1_ctrl_we,
 	input  wire  [1:0] l1_ctrl_addr,
 	input  wire [15:0] l1_ctrl_wdata,
@@ -89,6 +95,9 @@ module seta_video #(
 	input  wire [63:0] tile1_data,
 	// m_vregs: bit 0 swaps the layers, bit 1 sprites above both, bit 2 blandia's effect
 	input  wire  [7:0] vregs,
+	// twineagl_tile_offset (layer 0)
+	input  wire        tile_bank_en,
+	input  wire [31:0] tile_bank,
 	// set_tilemaps_flip(1) (oisipuzl): layers flip on sprite flip XOR this
 	input  wire        tilemaps_flip,
 
@@ -147,7 +156,12 @@ module seta_video #(
 	wire [8:0] line;
 
 	// declared before the instance (ModelSim)
-	wire snap_start;
+	wire snap_start, snap_pre;
+	// spr_snap_line: a pulse as that line begins
+	logic snap_at_line = 1'b0;
+	always_ff @(posedge clk)
+		snap_at_line <= line_start && spr_snap_line != 10'd0
+		             && {1'b0, line} == spr_snap_line;
 
 	seta_video_timing u_timing (
 		.clk(clk), .reset(reset), .ce_pix(ce_pix),
@@ -159,7 +173,7 @@ module seta_video #(
 		.hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank), .de(de),
 		.line_start(line_start), .line(line),
 		.irq_vblank_line(irq_vblank_line), .irq_mid_line(irq_mid_line),
-		.vblank_rise(vblank_rise), .snap_start(snap_start)
+		.vblank_rise(vblank_rise), .snap_start(snap_start), .snap_pre(snap_pre)
 	);
 
 	logic  [8:0] lb_addr;
@@ -188,7 +202,9 @@ module seta_video #(
 		.bg_yoffs(bg_yoffs), .bg_yoffs_flip(bg_yoffs_flip),
 		.bank_size(bank_size), .spritelimit(spritelimit), .transpen(transpen),
 		.bgflag_opaque(bgflag_opaque),
-		.buffer_sprites(buffer_sprites), .vblank_rise(vblank_rise),
+		.buffer_sprites(buffer_sprites), .copy_then_draw(copy_then_draw),
+		.snap_at_line(snap_at_line),
+		.vblank_rise(vblank_rise), .snap_pre(snap_pre),
 		.snap_start(snap_start),
 		.colorbase_fg(colorbase_fg), .colorbase_bg(colorbase_bg),
 		.screen_h(screen_h), .vis_max_y(vis_max_y), .backdrop(backdrop),
@@ -247,6 +263,7 @@ module seta_video #(
 		.vram_we(l0_vram_we), .vram_addr(l0_vram_addr),
 		.vram_wdata(l0_vram_wdata), .vram_uds(l0_vram_uds),
 		.vram_lds(l0_vram_lds), .vram_rdata(l0_vram_rdata),
+		.vram_drain(l0_vram_drain), .vram_busy(l0_vram_busy),
 		.vctrl_we(l0_ctrl_we), .vctrl_addr(l0_ctrl_addr),
 		.vctrl_wdata(l0_ctrl_wdata), .vctrl_uds(l0_ctrl_uds),
 		.vctrl_lds(l0_ctrl_lds), .vctrl_rdata(l0_ctrl_rdata),
@@ -254,6 +271,7 @@ module seta_video #(
 		.xoffs(l0_xoffs), .xoffs_flip(l0_xoffs_flip),
 		.flipscr(flip_layers), .xextent(xextent), .yextent(yextent),
 		.vis_dimy(vis_dimy), .colorbase(l0_colorbase), .code_limit(l0_code_limit),
+		.tile_bank_en(tile_bank_en), .tile_bank(tile_bank),
 		.bpp6(l0_bpp6),
 		.vblank_rise(vblank_rise),
 		.line_start(line_start & has_l0), .line(line),
@@ -274,6 +292,7 @@ module seta_video #(
 		.vram_we(l1_vram_we), .vram_addr(l1_vram_addr),
 		.vram_wdata(l1_vram_wdata), .vram_uds(l1_vram_uds),
 		.vram_lds(l1_vram_lds), .vram_rdata(l1_vram_rdata),
+		.vram_drain(l1_vram_drain), .vram_busy(l1_vram_busy),
 		.vctrl_we(l1_ctrl_we), .vctrl_addr(l1_ctrl_addr),
 		.vctrl_wdata(l1_ctrl_wdata), .vctrl_uds(l1_ctrl_uds),
 		.vctrl_lds(l1_ctrl_lds), .vctrl_rdata(l1_ctrl_rdata),
@@ -281,6 +300,7 @@ module seta_video #(
 		.xoffs(l1_xoffs), .xoffs_flip(l1_xoffs_flip),
 		.flipscr(flip_layers), .xextent(xextent), .yextent(yextent),
 		.vis_dimy(vis_dimy), .colorbase(l1_colorbase), .code_limit(l1_code_limit),
+		.tile_bank_en(1'b0), .tile_bank(32'd0),
 		.bpp6(l1_bpp6),
 		.vblank_rise(vblank_rise),
 		.line_start(line_start & has_l1), .line(line),

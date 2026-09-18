@@ -1,29 +1,22 @@
 #!/usr/bin/env python3
-"""Check every `.mra`'s <switches> block against MAME's own -listxml.
+"""Check every .mra's DIP switches and button count against MAME's -listxml.
 
-    python scripts/check_dips.py                 # every .mra in releases/
-    python scripts/check_dips.py kamenrid wits   # named sets
+    python scripts/check_dips.py [releases/...mra ...]
 
-scripts/extract_dips.py builds the blocks by parsing INPUT_PORTS_START out of
-seta.cpp. This checks the RESULT against a different source: MAME's -listxml,
-which is the driver's port list after MAME itself has assembled it, defaults
-included. A parser bug that drops a PORT_DIPSETTING or gets an order backwards
-shows up here and cannot show up in a self-comparison.
+Independent of build_mra.py / extract_dips.py: the switches are read the way
+Main_MiSTer's support/arcade/mra_loader.cpp reads them (bits="first,last", a
+range; option i puts i in that range; default="b0,b1,b2" is the switch
+vector's bytes), carried through the core's wiring, and compared with the
+dipswitch masks, values and defaults MAME's own XML gives:
 
-What is compared, per DIP:
+    DSW  bits 15-8  sw[0]  (seta_dsw_r / dsw1_r offset 0)  mra bits 0-7
+    DSW  bits  7-0  sw[1]  (offset 1)                      mra bits 8-15
+    COINS bits 7-4  sw[2][7:4]                             mra bits 20-23
 
-  * that it exists at all, by name and tag (COINS or DSW)
-  * the BIT POSITIONS, through the sw[] convention Seta.sv and build_mra.py
-    share -- sw[0] is the DSW's high byte, sw[1] its low byte, sw[2] the COINS
-    port's top nibble, so `.mra` bit = 8 + b for DSW bits 0..7, b - 8 for DSW
-    bits 8..15, and 16 + b for COINS bits 4..7
-  * every SETTING, by the index the MiSTer OSD will use: the value assembled
-    from the listed bits, LSB first
-  * the DEFAULT, byte for byte against <switches default="..">
-
-Exit code is the number of sets with a mismatch.
+Reports, per set: a MAME switch with no mra dip covering exactly its bits, a
+setting whose mra option is missing or named differently, a wrong default,
+mra dips MAME does not have, and the button count against MAME's <control>.
 """
-import os
 import re
 import subprocess
 import sys
@@ -31,181 +24,120 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-MAME_DIR = Path(os.getenv("MAME_DIR", r"C:\Emulation\Emulators\MAME"))
-MAME_EXE = MAME_DIR / os.getenv("MAME_EXE", "arcade64.exe")
-
-# The .mra file per setname, from the same table build_mra.py works off.
 sys.path.insert(0, str(REPO / "scripts"))
+from mame_capture import MAME_DIR, MAME_EXE, NO_WINDOW  # noqa: E402
 
 
-def mame_dips(setname):
-    """MAME's view: [(name, tag, mask, {value: label}, default_value)]."""
-    p = subprocess.run([str(MAME_EXE), setname, "-listxml"],
-                       capture_output=True, text=True, cwd=str(MAME_DIR))
-    if p.returncode != 0 or not p.stdout.strip():
-        sys.exit("mame -listxml %s failed: %s" % (setname, p.stderr[:200]))
-    root = ET.fromstring(p.stdout)
-    out = []
-    for ds in root.iter("dipswitch"):
-        tag = ds.get("tag")
-        if tag not in ("COINS", "DSW"):
+def mra_bit(tag, k):
+    if tag == "DSW":
+        return k - 8 if k >= 8 else k + 8
+    if tag == "COINS" and 4 <= k <= 7:
+        return 16 + k
+    return None
+
+
+def norm(s):
+    return re.sub(r"\s+", " ", s.strip().lower())
+
+
+def check(path, xml_cache):
+    root = ET.parse(path).getroot()
+    setname = root.findtext("setname")
+    if setname not in xml_cache:
+        out = subprocess.run([str(MAME_EXE), "-listxml", setname], cwd=str(MAME_DIR),
+                             capture_output=True, text=True, **NO_WINDOW).stdout
+        xml_cache[setname] = ET.fromstring(out).find(f"machine[@name='{setname}']")
+    m = xml_cache[setname]
+    probs, notes = [], []
+
+    sw = root.find("switches")
+    defaults = [int(b, 16) for b in sw.get("default").split(",")] if sw is not None else []
+    vec = sum(b << (8 * i) for i, b in enumerate(defaults))
+    dips = {}
+    for d in (sw.findall("dip") if sw is not None else []):
+        r = [int(x) for x in d.get("bits").split(",")]
+        if len(r) > 2:
+            probs.append(f"dip '{d.get('name')}': bits=\"{d.get('bits')}\" is a list; "
+                         f"MiSTer reads only {r[0]},{r[1]}")
+        lo, hi = r[0], r[1] if len(r) > 1 else r[0]
+        dips[(lo, hi)] = (d.get("name"), d.get("ids").split(","))
+
+    used = set()
+    for ds in m.findall("dipswitch"):
+        name, tag, mask = ds.get("name"), ds.get("tag"), int(ds.get("mask"))
+        ks = [k for k in range(16) if mask >> k & 1]
+        bits = [mra_bit(tag, k) for k in ks]
+        if None in bits:
+            probs.append(f"'{name}': MAME {tag} mask {mask:#x} is not wired to a switch byte")
             continue
-        mask = int(ds.get("mask"))
-        vals, dflt = {}, None
+        lo, hi = min(bits), max(bits)
+        if sorted(bits) != list(range(lo, hi + 1)):
+            probs.append(f"'{name}': mask {mask:#x} is not contiguous in the switch vector")
+            continue
+        if (lo, hi) not in dips:
+            dv = ds.find("dipvalue[@default='yes']")
+            want = 0
+            for k, b in zip(ks, bits):
+                if int(dv.get("value")) >> k & 1:
+                    want |= 1 << (b - lo)
+            got = (vec >> lo) & ((1 << (hi - lo + 1)) - 1)
+            if got != want:
+                probs.append(f"'{name}': not in the mra, default bits {got:#x}, MAME {want:#x}")
+            elif name == "Unused" or re.match(r"unknown\b", name, re.I):
+                # build_mra comments these out; the default must still hold
+                pass
+            else:
+                probs.append(f"'{name}': no mra dip at bits {lo},{hi}")
+            continue
+        used.add((lo, hi))
+        dname, ids = dips[(lo, hi)]
+        if norm(dname) != norm(name):
+            notes.append(f"'{name}': mra name '{dname}'")
+        dflt_idx = None
         for dv in ds.findall("dipvalue"):
             v = int(dv.get("value"))
-            vals[v] = dv.get("name")
-            if dv.get("default") == "yes":
-                dflt = v
-        out.append((ds.get("name"), tag, mask, vals, dflt))
-    return out
-
-
-def mra_switches(path):
-    """The .mra's view: (default bytes, [(name, [bits], [ids])])."""
-    root = ET.parse(path).getroot()
-    sw = root.find("switches")
-    if sw is None:
-        return None, []
-    dflt = [int(b, 16) for b in sw.get("default", "").split(",") if b]
-    dips = [(d.get("name"),
-             [int(b) for b in d.get("bits").split(",")],
-             d.get("ids").split(","))
-            for d in sw.findall("dip")]
-    return dflt, dips
-
-
-def mra_bit(tag, b):
-    """Where MAME's port bit b lands in the .mra's flat bit numbering."""
-    if tag == "COINS":
-        return 16 + b          # sw[2], and only the top nibble is wired
-    return 8 + b if b < 8 else b - 8   # sw[1] is the low byte, sw[0] the high
-
-
-def check(setname, mra_path):
-    bad, labels = [], []
-    dflt, dips = mra_switches(mra_path)
-    by_name = {}
-    for name, bits, ids in dips:
-        by_name.setdefault(name, []).append((bits, ids))
-
-    want_default = [0xFF, 0xFF, 0xF0]   # a bit nobody drives reads as 1
-    for name, tag, mask, vals, dv in mame_dips(setname):
-        maskbits = [i for i in range(16) if mask & (1 << i)]
-        bits = [mra_bit(tag, b) for b in maskbits]
-
-        if tag == "COINS" and any(b < 4 for b in maskbits):
-            bad.append("%s: COINS DIP %r uses bit(s) below 4, which the core "
-                       "does not wire (it takes sw[2][7:4])" % (setname, name))
-            continue
-
-        cands = by_name.get(name, [])
-        hit = next((c for c in cands if c[0] == bits), None)
-        if hit is None:
-            # PORT_DIPUNUSED / PORT_DIPUNKNOWN reach build_mra.py with no
-            # settings and deliberately get no <dip> line -- an OSD entry
-            # offering "Unused: On/Off" is noise. Their DEFAULT still has to
-            # be right, and the <switches default> check below covers that.
-            if name.lower() not in ("unused", "unknown"):
-                bad.append("%s: %s %r mask %#06x -> bits %s not in the .mra%s"
-                           % (setname, tag, name, mask, bits,
-                              " (bits there: %s)" % [c[0] for c in cands]
-                              if cands else ""))
-            continue
-        _, ids = hit
-
-        if len(ids) != 1 << len(bits):
-            bad.append("%s: %r has %d ids for %d bits"
-                       % (setname, name, len(ids), len(bits)))
-            continue
-
-        for v, label in vals.items():
             idx = 0
-            for i, b in enumerate(maskbits):
-                if v & (1 << b):
-                    idx |= 1 << i
-            if ids[idx] != label:
-                # A LABEL DIFFERENCE IS USUALLY VERSION SKEW, not a fault. The
-                # .mra is generated from the seta.cpp in ../mame (0.289); the
-                # arcade64.exe this runs is whatever is installed (0.286 here),
-                # and MAME renamed several Coinage settings in between. Kept
-                # apart from the structural checks for that reason.
-                labels.append("%s: %r value %#x -> index %d is %r, MAME says %r"
-                              % (setname, name, v, idx, ids[idx], label))
+            for k, b in zip(ks, bits):
+                if v >> k & 1:
+                    idx |= 1 << (b - lo)
+            if dv.get("default") == "yes":
+                dflt_idx = idx
+            if idx >= len(ids):
+                probs.append(f"'{name}' = '{dv.get('name')}': option {idx} missing "
+                             f"({len(ids)} ids)")
+            elif norm(ids[idx]) != norm(dv.get("name")):
+                notes.append(f"'{name}' option {idx}: mra '{ids[idx]}', MAME '{dv.get('name')}'")
+        got = (vec >> lo) & ((1 << (hi - lo + 1)) - 1)
+        if dflt_idx is not None and got != dflt_idx:
+            probs.append(f"'{name}': default option {got} ('{ids[got] if got < len(ids) else '?'}'),"
+                         f" MAME {dflt_idx} ('{ids[dflt_idx] if dflt_idx < len(ids) else '?'}')")
+    for key, (dname, _) in dips.items():
+        if key not in used:
+            probs.append(f"mra dip '{dname}' at bits {key[0]},{key[1]} is not a MAME switch")
 
-        if dv is None:
-            bad.append("%s: %r has no default in MAME" % (setname, name))
-            continue
-        for b in maskbits:
-            flat = mra_bit(tag, b)
-            byte, bit = flat // 8, flat % 8
-            if not (dv & (1 << b)):
-                want_default[byte] &= ~(1 << bit) & 0xFF
-
-    # sw[2]'s LOW nibble is not wired to anything -- Seta.sv takes sw[2][7:4]
-    # -- so only the top nibble of the third byte is compared.
-    got = list(dflt[:3])
-    if len(got) == 3:
-        got[2] &= 0xF0
-        want_default[2] &= 0xF0
-    if dflt and got != want_default:
-        bad.append("%s: <switches default> is %s, MAME's defaults give %s"
-                   % (setname, ",".join("%02X" % b for b in dflt),
-                      ",".join("%02X" % b for b in want_default)))
-    return bad, labels
+    btn = root.find("buttons")
+    ctl = m.find("input/control[@player='1']")
+    mame_b = int(ctl.get("buttons", 0)) if ctl is not None else 0
+    mra_b = int(btn.get("count")) if btn is not None else 0
+    names = btn.get("names").split(",")[:mra_b] if btn is not None else []
+    if mra_b != mame_b:
+        notes.append(f"buttons: mra {mra_b} ({', '.join(names)}), MAME control buttons={mame_b}")
+    return setname, probs, notes
 
 
 def main():
-    if not MAME_EXE.exists():
-        sys.exit("no MAME at %s (set MAME_DIR / MAME_EXE)" % MAME_EXE)
-
-    import build_mra
-    names = sys.argv[1:]
-    table = {}
-    for p in sorted((REPO / "releases").rglob("*.mra")):
-        setname = re.search(r"<setname>([^<]+)</setname>", p.read_text(
-            encoding="utf8", errors="replace"))
-        if setname:
-            table[setname.group(1)] = p
-    if names:
-        table = {k: v for k, v in table.items() if k in names}
-
-    ver = subprocess.run([str(MAME_EXE), "-version"], capture_output=True,
-                         text=True, cwd=str(MAME_DIR)).stdout.strip()
-    # THE TWO SIDES ARE DIFFERENT MAME VERSIONS, and that is the usual
-    # explanation for a label difference. The .mra labels come from the
-    # ../mame SOURCE by construction (scripts/extract_dips.py reads seta.cpp);
-    # the reference is whatever arcade64.exe happens to be. When they differ
-    # the source is the newer one -- checked on thunderl's Coin_A, where 0.289
-    # has 0x1 = 3C_4C and the 0.286 binary still has 4C_5C. Printing both
-    # versions on the same line means nobody has to rediscover that.
-    src = "unknown"
-    mk = REPO.parent / "mame" / "makefile"
-    if mk.exists():
-        m = re.search(r'BARE_BUILD_VERSION "([^"]+)"',
-                      mk.read_text(errors="replace"))
-        if m:
-            src = m.group(1)
-    print("reference: %s -listxml, against .mra files generated from "
-          "../mame's seta.cpp (source %s)\n" % (ver or MAME_EXE.name, src))
-
-    fails, skew = 0, []
-    for setname, path in sorted(table.items()):
-        bad, labels = check(setname, path)
-        print("%-10s %s%s"
-              % (setname, "ok" if not bad else "%d PROBLEM(S)" % len(bad),
-                 "  (%d label difference(s))" % len(labels) if labels else ""))
-        for b in bad:
-            print("   " + b)
-        skew += labels
-        fails += bool(bad)
-    if skew:
-        print("\nLabel differences -- check the two MAME versions before "
-              "treating any of these as a fault:")
-        for l in skew:
-            print("   " + l)
-    print("\n%d of %d sets structurally clean" % (len(table) - fails, len(table)))
-    return fails
+    paths = [Path(p) for p in sys.argv[1:]] or sorted((REPO / "releases").rglob("*.mra"))
+    cache, bad = {}, 0
+    for p in paths:
+        s, probs, notes = check(p, cache)
+        print(f"{s:12s} {'FAIL' if probs else 'ok  '}  {p.relative_to(REPO)}")
+        for x in probs:
+            print(f"    PROBLEM {x}")
+        for x in notes:
+            print(f"    note    {x}")
+        bad += bool(probs)
+    print(f"\n{len(paths)} mra files, {bad} with problems")
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

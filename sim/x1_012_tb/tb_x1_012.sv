@@ -32,6 +32,9 @@ module tb_x1_012;
 
 	// ---- DUT ---------------------------------------------------------------
 	logic        vram_we = 0;
+	logic        vram_drain = 0;
+	wire         vram_busy;
+	wire  [15:0] vram_rdata;
 	logic [12:0] vram_addr = 0;
 	logic [15:0] vram_wdata = 0;
 	logic        vctrl_we = 0;
@@ -54,7 +57,8 @@ module tb_x1_012;
 	x1_012 #(.LB_W(LB_W)) dut (
 		.clk(clk), .reset(reset),
 		.vram_we(vram_we), .vram_addr(vram_addr), .vram_wdata(vram_wdata),
-		.vram_uds(1'b1), .vram_lds(1'b1), .vram_rdata(),
+		.vram_uds(1'b1), .vram_lds(1'b1), .vram_rdata(vram_rdata),
+		.vram_drain(vram_drain), .vram_busy(vram_busy),
 		.vctrl_we(vctrl_we), .vctrl_addr(vctrl_addr), .vctrl_wdata(vctrl_wdata),
 		.vctrl_uds(1'b1), .vctrl_lds(1'b1), .vctrl_rdata(),
 		.xoffs(xoffs), .xoffs_flip(xoffs_flip), .flipscr(flipscr),
@@ -62,6 +66,7 @@ module tb_x1_012;
 		// covered end to end by scripts/flip_sweep.py through sim/seta_video_tb.
 		.xextent(10'd384), .yextent(9'd256),
 		.vis_dimy(vis_dimy), .colorbase(colorbase), .code_limit(code_limit),
+		.tile_bank_en(1'b0), .tile_bank(32'd0),
 		.bpp6(bpp6),
 		.vblank_rise(vblank_rise),
 		.line_start(line_start), .line(line), .line_budget(16'd0), .cache_en(1'b1),
@@ -223,6 +228,51 @@ module tb_x1_012;
 		repeat (2) @(posedge clk);
 
 		for (i = vis_y0; i <= vis_y1; i = i + 1) do_line(i);
+
+		// VRAM write queue: a write mid-frame is applied at the next vblank;
+		// past the queue's depth a frame's writes go live, in order.
+		begin
+			logic [15:0] prev_w;
+			int wait_bad = 0, live_bad = 0;
+			prev_w = dut.vram[13'h0123];
+			cpu_vram_write(13'h0123, ~prev_w);
+			repeat (20) @(posedge clk);
+			if (dut.vram[13'h0123] !== prev_w) wait_bad = 1;
+			vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+			repeat (4) @(posedge clk);
+			if (dut.vram[13'h0123] !== ~prev_w) wait_bad = wait_bad + 2;
+			for (i = 0; i < 200; i = i + 1) cpu_vram_write(13'h0400 + i[12:0], 16'h1000 + i[15:0]);
+			// and a later write to an address already queued must win
+			cpu_vram_write(13'h0400, 16'hBEEF);
+			// the queue drains a word a cycle; this bench writes every 2
+			repeat (300) @(posedge clk);
+			for (i = 1; i < 200; i = i + 1)
+				if (dut.vram[13'h0400 + i[12:0]] !== 16'h1000 + i[15:0]) live_bad = live_bad + 1;
+			if (dut.vram[13'h0400] !== 16'hBEEF) live_bad = live_bad + 1;
+			$display("  queue: deferred write %s, overflowed frame %0d of 200 wrong",
+			         wait_bad == 0 ? "held to vblank" : "WRONG", live_bad);
+			if (wait_bad != 0 || live_bad != 0) mismatches = mismatches + 1;
+		end
+		// A CPU READ drains the queue first: a RAM test (Blandia at boot)
+		// writes a block and reads it back within the frame.
+		begin
+			int rd_bad = 0;
+			vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+			repeat (4) @(posedge clk);
+			for (i = 0; i < 16; i = i + 1) cpu_vram_write(13'h0800 + i[12:0], 16'h5A00 + i[15:0]);
+			for (i = 0; i < 16; i = i + 1) begin
+				@(posedge clk);
+				vram_addr <= 13'h0800 + i[12:0];
+				vram_drain <= 1'b1;
+				@(posedge clk);
+				while (vram_busy) @(posedge clk);
+				repeat (2) @(posedge clk);       // address, then data register
+				if (vram_rdata !== 16'h5A00 + i[15:0]) rd_bad = rd_bad + 1;
+				vram_drain <= 1'b0;
+			end
+			$display("  queue: CPU read after a queued write, %0d of 16 old", rd_bad);
+			if (rd_bad != 0) mismatches = mismatches + 1;
+		end
 
 		$display("  ROM reads       %0d", rom_reads);
 		$display("  pixels checked  %0d", checked);

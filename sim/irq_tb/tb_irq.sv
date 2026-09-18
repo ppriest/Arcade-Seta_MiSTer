@@ -90,13 +90,14 @@ module tb_irq;
 	logic [7:1] irq_clr  = 7'd0;
 
 	maincpu dut (
-		.clk(clk), .reset(reset), .board(4'd8 /* BOARD_THUNDERL */), .cpu_ce(cpu_ce), .gun_ch(32'h80808080),
+		.clk(clk), .reset(reset), .board(5'd8 /* BOARD_THUNDERL */), .cpu_half(4'(CE_DIV / 2)), .cpu_run(1'b1), .gun_ch(32'h80808080),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
 		.wram_addr(wram_addr), .wram_wel(wram_wel), .wram_weh(wram_weh),
 		.wram_wdata(wram_wdata), .wram_rdata(wram_rdata),
 		.io_req(io_req), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata),
 		.io_uds(io_uds), .io_lds(io_lds), .io_sel(io_sel), .io_rdata(io_rdata),
+		.io_hold(1'b0),
 		.ipl_level(ipl_level),
 		.iack(iack), .iack_level(iack_level),
 		.dbg_stb(dbg_stb), .dbg_addr(dbg_addr), .dbg_we(dbg_we), .dbg_data(dbg_data)
@@ -286,7 +287,7 @@ module tb_irq;
 		rom['h282] = 16'h0030; rom['h283] = 16'h0000;   // ...$00300000
 		rom['h284] = 16'h4E73;                          // rte
 
-		$display("=== interrupts: seta_irq + TG68K, running a real ISR ===");
+		$display("=== interrupts: seta_irq + the CPU, running a real ISR ===");
 
 		repeat (8) @(posedge clk);
 		reset <= 0;
@@ -323,7 +324,8 @@ module tb_irq;
 		@(posedge clk);
 		pulse_set(3);
 		wait_isr(2, 4000, "ASSERT level 3");
-		repeat (400) @(posedge clk);
+		// an entry, the ISR and rte are ~90 68000 clocks, ~540 clk at 16 MHz
+		repeat (2000) @(posedge clk);
 		if (!pending[3])
 			fail("ASSERT level 3 cleared itself -- only an explicit ack may clear it");
 		if (isr_runs < 3)

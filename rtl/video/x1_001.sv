@@ -16,8 +16,8 @@
 // Bank: (ctrl2 ^ (~ctrl2 << 1)) & 0x40, i.e. bits 6 and 5 of spritectrl[1]
 // equal. setac_eof (buffer_sprites) copies half to half at vblank when bit 5
 // is clear, through the engine's read port. The engine renders from a snapshot
-// of the RAMs taken late in vblank (snap_start); a CPU write during the copy
-// holds it.
+// of the RAMs (the code words it reads, and Y); a CPU write during it holds it.
+// When the snapshot is taken depends on the board (the setac_eof comment).
 //
 // A sprite row is one ROM granule after gfx_swizzle.sv: rom_data words are
 // half1 xh=0, half1 xh=1, half2 xh=0, half2 xh=1, low to high.
@@ -66,9 +66,16 @@ module x1_001 #(
 	input  wire         bgflag_opaque,      // m_bgflag & 0x80 -- always 0 in scope
 	// screen_vblank_seta_buffer_sprites
 	input  wire         buffer_sprites,
+	// VIDEO_UPDATE_AFTER_VBLANK: MAME runs the copy, then draws
+	input  wire         copy_then_draw,
+	// a pulse as seta_board_cfg's spr_snap_line begins: a line where a game
+	// that writes its list all frame does not write
+	input  wire         snap_at_line,
 	input  wire         vblank_rise,
-	// snapshot, late in vblank
+	// snapshot, late in vblank (unbuffered boards)
 	input  wire         snap_start,
+	// snapshot, ending before vblank (buffered, draw-then-copy boards)
+	input  wire         snap_pre,
 	input  wire [LB_W-1:0] colorbase_fg,    // gfx colorbase + m_colorbase*16
 	input  wire [LB_W-1:0] colorbase_bg,    // gfx colorbase alone
 	input  wire   [8:0] screen_h,           // screen.height() -- 256, NOT 240
@@ -117,11 +124,23 @@ module x1_001 #(
 	logic  [7:0] ylowmem [0:1023];
 	logic  [7:0] ctrlmem [0:3];
 
-	// Snapshot copies the engine renders from, taken after any setac_eof copy.
+	// Snapshot copies the engine renders from, taken before any setac_eof copy.
 	// Games rewrite the list mid-frame (daioh, eightfrc at line 112); MAME draws
 	// at vblank.
-	logic [15:0] codesh [0:8191];
+	// The engine reads one 0x800-word half of the code RAM (bank_off + 0..0x7ff)
+	// and the 1024 Y bytes. The codes are held twice: a frame draws from one
+	// copy while the other is filled, so a snapshot taken mid-frame (a
+	// hand-flipped page, below) cannot tear it. One array a byte lane:
+	// Quartus 17 infers no RAM for a byte-enabled array whose write index is
+	// the complement of its read index.
+	logic  [7:0] codesh_lo [0:4095];    // {buf, addr[10:0]}
+	logic  [7:0] codesh_hi [0:4095];
 	logic  [7:0] ylowsh [0:1023];
+	logic        rbuf = 1'b0;           // the code copy the engine reads
+	wire         wbuf = ~rbuf;
+	// the half the chip draws from, live: (ctrl2 ^ (~ctrl2 << 1)) & 0x40
+	wire         live_use_bank = ((ctrlmem[1] ^ (~ctrlmem[1] << 1)) & 8'h40) != 8'h00;
+	wire         live_bank     = live_use_bank && bank_size[12];
 	logic  [7:0] ctrlsh [0:3];
 	logic [15:0] live_code_q;
 	logic  [7:0] live_ylow_q;
@@ -151,8 +170,18 @@ module x1_001 #(
 	// spritectrl[1], live: setac_eof reads it at vblank
 	wire [7:0] eof_ctrl = ctrlmem[1];
 
-	// setac_eof
-	logic        eof_busy = 1'b0;
+	// setac_eof, at vblank, in MAME's order for the board
+	// (docs/MAME_DIVERGENCE.md, "setac_eof: the copy and the draw").
+	// Draw-then-copy boards (drgnunit, stg, qzkklogy, qzkklgy2, msgundam): MAME
+	// draws at vblank start from the RAM as it stands, then copies. The
+	// snapshot runs on the line before vblank (snap_pre, 5120 cycles, under a
+	// line) and the copy at vblank, so writes the game makes from line 248 on
+	// reach neither (Strike Gunner writes its list from line 248).
+	// Copy-then-draw boards (blandia, blandiap: VIDEO_UPDATE_AFTER_VBLANK): the
+	// copy runs at vblank and the snapshot straight after it.
+	logic        eof_busy = 1'b0, eof_pending = 1'b0;
+	logic        snap_done, eof_done;
+	logic        snap_pending = 1'b0, snap_busy = 1'b0;
 	logic [10:0] eof_i;
 	logic        eof_dir;              // ctrl2 bit 6: 1 = 0x1000 -> 0x0000
 	// word offsets: the halves are 0x1000 apart
@@ -163,56 +192,107 @@ module x1_001 #(
 	wire [12:0] eof_dst = {~eof_dir, 1'b0, eof_i};
 
 	always_ff @(posedge clk) begin
-		eof_wr <= 1'b0;
+		eof_wr   <= 1'b0;
+		eof_done <= 1'b0;
 		if (reset) begin
-			eof_busy <= 1'b0;
+			eof_busy    <= 1'b0;
+			eof_pending <= 1'b0;
 		end else if (!eof_busy) begin
-			// ~ctrl2 & 0x20
-			if (vblank_rise && buffer_sprites && !eof_ctrl[5]) begin
-				eof_busy <= 1'b1;
+			if (vblank_rise && buffer_sprites) eof_pending <= 1'b1;
+			// ~ctrl2 & 0x20, read when the copy starts
+			if (eof_pending && (copy_then_draw || (!snap_busy && !snap_pending))) begin
+				eof_pending <= 1'b0;
+				if (!eof_ctrl[5]) eof_busy <= 1'b1;
 				eof_dir  <= eof_ctrl[6];
 				eof_i    <= 11'd0;
 			end
 		end else begin
 			eof_wr    <= 1'b1;
 			eof_waddr <= eof_dst;
-			if (eof_i == 11'h7ff) eof_busy <= 1'b0;
+			if (eof_i == 11'h7ff) begin
+				eof_busy <= 1'b0;
+				eof_done <= 1'b1;
+			end
 			else eof_i <= eof_i + 11'd1;
 		end
 	end
 
-	// Snapshot: 8192 code words then 1024 Y bytes, one a cycle, after setac_eof.
+	// A HAND-FLIPPED PAGE. With setac_eof disabled (spritectrl[1] bit 5 set)
+	// the game owns the two halves and flips bit 6 -- the half the chip draws
+	// -- itself, once the half it is about to show is written. 26 of the 31
+	// parents do this, once a frame, some mid-frame (stg at line 113), some in
+	// vblank (scripts/sprctrl_scan.py). MAME draws at vblank from the half
+	// selected then, as it stands then; the game may keep writing other halves
+	// right through the frame (stg does), so there is no settled moment to
+	// copy both. So for such a game the codes are copied at the flip, from the
+	// half it selects; CPU writes to that half keep reaching the copy until
+	// vblank, when the engine moves to it. Y (one buffer, stg rewrites it from
+	// line 113 to 240) and the control bytes are still taken at the board's
+	// usual point.
+	wire page_flip = k_we && k_addr == 2'd1 && k_wdata[5]
+	              && (k_wdata[6] != ctrlmem[1][6]);
+	logic own_flip = 1'b0;              // the game flips its own pages
+	always_ff @(posedge clk)
+		if (reset) own_flip <= 1'b0;
+		else if (page_flip) own_flip <= 1'b1;
+		else if (k_we && k_addr == 2'd1 && !k_wdata[5]) own_flip <= 1'b0;
+
+	// Snapshot: the 0x800 code words of the drawn half then the 1024 Y bytes,
+	// one a cycle: 3072 cycles. The codes fill the spare copy, and rbuf moves
+	// to it when the frame it belongs to starts (below). A flip snapshot is
+	// the codes alone; with own_flip the usual one is the Y bytes alone.
 	// A CPU write during the copy holds it for that cycle, so the word is re-read
 	// after the write.
-	logic        snap_pending = 1'b0, snap_busy = 1'b0;
 	logic [13:0] snap_i, snap_wi;
 	logic        snap_wr_code, snap_wr_ylow;
+	logic        snap_bank;             // the half this copy came from
+	logic        snap_ready = 1'b0;     // flip copy filled, waiting for vblank
+	logic        snap_flip  = 1'b0;     // this snapshot is a flip's
+	logic        flip_pending = 1'b0;
 	wire         snap_hold = snap_busy && ((c_we && (c_uds || c_lds)) || y_we);
 	always_ff @(posedge clk) begin
 		snap_wr_code <= 1'b0;
 		snap_wr_ylow <= 1'b0;
+		snap_done    <= 1'b0;
 		if (reset) begin
 			snap_pending <= 1'b0;
+			flip_pending <= 1'b0;
 			snap_busy    <= 1'b0;
+			snap_flip    <= 1'b0;
 		end else begin
-			if (snap_start) snap_pending <= 1'b1;
+			if (snap_at_line ? 1'b1
+			    : !buffer_sprites ? snap_start
+			    : copy_then_draw ? eof_done : snap_pre) snap_pending <= 1'b1;
+			if (page_flip) flip_pending <= 1'b1;
 			if (snap_busy) begin
 				if (!snap_hold) begin
 					snap_wi      <= snap_i;
-					snap_wr_code <= (snap_i < 14'd8192);
-					snap_wr_ylow <= (snap_i >= 14'd8192);
-					if (snap_i == 14'd9215) snap_busy <= 1'b0;
+					snap_wr_code <= (snap_i < 14'h800);
+					snap_wr_ylow <= (snap_i >= 14'h800);
+					if (snap_i == (snap_flip ? 14'h7ff : 14'hbff)) begin
+						snap_busy <= 1'b0;
+						snap_done <= 1'b1;
+					end
 					else snap_i <= snap_i + 14'd1;
 				end
+			end else if (flip_pending && !eof_busy) begin
+				// the codes of the half the flip selects
+				flip_pending <= 1'b0;
+				snap_busy    <= 1'b1;
+				snap_flip    <= 1'b1;
+				snap_i       <= 14'd0;
+				snap_bank    <= live_bank;
 			end else if (snap_pending && !eof_busy) begin
 				snap_pending <= 1'b0;
 				snap_busy    <= 1'b1;
-				snap_i       <= 14'd0;
+				snap_flip    <= 1'b0;
+				snap_i       <= own_flip ? 14'h800 : 14'd0;
+				snap_bank    <= live_bank;
 				ctrlsh[0] <= ctrlmem[0]; ctrlsh[1] <= ctrlmem[1];
 				ctrlsh[2] <= ctrlmem[2]; ctrlsh[3] <= ctrlmem[3];
 			end
 			// control bytes are flops: a write during the copy goes to both
-			if (snap_busy && k_we) ctrlsh[k_addr] <= k_wdata;
+			if (snap_busy && !snap_flip && k_we) ctrlsh[k_addr] <= k_wdata;
 		end
 	end
 
@@ -228,20 +308,47 @@ module x1_001 #(
 		code_rdata <= codemem[c_addr];
 	end
 
-	wire [12:0] live_rd_addr = eof_busy ? eof_src : snap_i[12:0];
+	// snap_i[11] is 0 while codes are copied. Not a constant 1'b0: with a
+	// constant address bit Quartus 17 builds this second read port of codemem
+	// from registers (64 Kbit of them) instead of a second RAM copy.
+	wire [12:0] live_rd_addr  = eof_busy ? eof_src
+	                                     : {snap_bank, snap_i[11:0]};
 	always_ff @(posedge clk) live_code_q <= codemem[live_rd_addr];
-	always_ff @(posedge clk) eng_code_q  <= codesh[eng_code_addr];
+	always_ff @(posedge clk) eng_code_q[7:0]  <= codesh_lo[{rbuf, eng_code_addr[10:0]}];
+	always_ff @(posedge clk) eng_code_q[15:8] <= codesh_hi[{rbuf, eng_code_addr[10:0]}];
 
-	// shadow write port: the copy's, except on a CPU write
-	wire        shc_cpu    = snap_busy && c_we;
-	wire [12:0] shc_addr   = shc_cpu ? c_addr  : snap_wi[12:0];
+	// The engine moves to new codes when the board's usual snapshot -- the Y
+	// bytes and control -- lands, so codes and Y always change together. That
+	// snapshot's own codes, or with own_flip the last flip copy. Mad Shark
+	// writes its list and flips in the first lines of vblank, before the
+	// usual snapshot: moving at vblank_rise instead paired its new Y with the
+	// old codes for a frame (hardware, 9d830c7). A flip after the usual
+	// snapshot waits for the next one.
+	always_ff @(posedge clk) begin
+		if (reset) begin
+			rbuf       <= 1'b0;
+			snap_ready <= 1'b0;
+		end else if (snap_done) begin
+			if (snap_flip) snap_ready <= 1'b1;
+			else if (!own_flip || snap_ready) begin
+				rbuf       <= ~rbuf;
+				snap_ready <= 1'b0;
+			end
+		end
+	end
+
+	// Shadow write port: the snapshot's, except on a CPU write to the half it
+	// is copying -- a write behind the cursor would otherwise be left out --
+	// and, for a flip copy, until the engine moves to it.
+	wire        c_in_half  = (c_addr[12] == snap_bank) && !c_addr[11];
+	wire        shc_open   = snap_busy ? (snap_flip || !own_flip) : snap_ready;
+	wire        shc_cpu    = shc_open && c_we && c_in_half;
+	wire [11:0] shc_addr   = shc_cpu ? {wbuf, c_addr[10:0]} : {wbuf, snap_wi[10:0]};
 	wire [15:0] shc_data   = shc_cpu ? c_wdata : live_code_q;
 	wire        shc_lo     = shc_cpu ? c_lds : snap_wr_code;
 	wire        shc_hi     = shc_cpu ? c_uds : snap_wr_code;
-	always_ff @(posedge clk) begin
-		if (shc_lo) codesh[shc_addr][7:0]  <= shc_data[7:0];
-		if (shc_hi) codesh[shc_addr][15:8] <= shc_data[15:8];
-	end
+	always_ff @(posedge clk) if (shc_lo) codesh_lo[shc_addr] <= shc_data[7:0];
+	always_ff @(posedge clk) if (shc_hi) codesh_hi[shc_addr] <= shc_data[15:8];
 
 	always_ff @(posedge clk) begin
 		if (y_we) ylowmem[y_addr] <= y_wdata;
@@ -249,8 +356,8 @@ module x1_001 #(
 	end
 	always_ff @(posedge clk) live_ylow_q <= ylowmem[snap_i[9:0]];
 	always_ff @(posedge clk) eng_ylow_q  <= ylowsh[eng_ylow_addr];
-	wire        shy_cpu  = snap_busy && y_we;
-	wire  [9:0] shy_addr = shy_cpu ? y_addr  : snap_wi[9:0];
+	wire        shy_cpu  = snap_busy && !snap_flip && y_we;
+	wire  [9:0] shy_addr = shy_cpu ? y_addr : snap_wi[9:0];
 	wire  [7:0] shy_data = shy_cpu ? y_wdata : live_ylow_q;
 	always_ff @(posedge clk)
 		if (shy_cpu || snap_wr_ylow) ylowsh[shy_addr] <= shy_data;

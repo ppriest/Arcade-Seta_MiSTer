@@ -77,6 +77,13 @@ if [ -d rtl/cpu/tg68k ]; then
   # kernel directly instead. See rtl/cpu/tg68k/PROVENANCE.md.
 fi
 
+# T65 (65C02 sub CPU of the downtown.cpp boards), VHDL-93, package first, then
+# its plain-port wrapper.
+if [ -d rtl/cpu/t65 ]; then
+  echo "--- vcom: T65 ---"
+  "$MS/vcom.exe" -quiet -93 -work work       rtl/cpu/t65/T65_Pack.vhd       rtl/cpu/t65/T65_ALU.vhd       rtl/cpu/t65/T65_MCode.vhd       rtl/cpu/t65/T65.vhd       rtl/cpu/t65c02.vhd
+fi
+
 echo "--- vlog: RTL + testbench ---"
 # Compile the whole core RTL every time rather than a per-bench file list.
 # It costs seconds and removes an entire class of "the bench passed against a
@@ -109,7 +116,9 @@ VLOG=$(find rtl -name '*.v' \
 # shellcheck disable=SC2086
 # +initreg/+initmem =r+0 give every un-reset variable and array the power-up
 # zero that hardware has and a four-state simulator does not.
-"$MS/vlog.exe" -quiet -sv -work work +define+SIMULATION +initreg=r+0 +initmem=r+0 \
+# -suppress 7061: fx68k drives parts of its register arrays from more than one
+# always_ff (Quartus accepts it; ModelSim refuses by default).
+"$MS/vlog.exe" -quiet -sv -work work -suppress 7061 +define+SIMULATION +initreg=r+0 +initmem=r+0 \
     $VLOG $RTL $(ls sim/common/*.sv 2>/dev/null) "sim/$TB"/*.sv
 
 echo "--- vsim: tb_${TB%_tb} ---"

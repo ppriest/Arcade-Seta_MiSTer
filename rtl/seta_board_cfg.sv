@@ -97,6 +97,12 @@ module seta_board_cfg (
 	output logic [10:0] l0_pal_bank, l1_pal_bank,
 	// screen_vblank_seta_buffer_sprites (setac_eof)
 	output logic        buffer_sprites,
+	// VIDEO_UPDATE_AFTER_VBLANK (blandia, blandiap): MAME copies, then draws
+	output logic        copy_then_draw,
+	// snapshot on this line instead of at vblank (0 = the board's usual point):
+	// for a game that writes its list all frame, a line where it does not
+	// (docs/MAME_DIVERGENCE.md, "When the games write, in MAME")
+	output logic  [9:0] spr_snap_line,
 	// X1-010 bank window: 0 none, 1 blandia_x1_map, 2 zombraid_x1_map
 	output logic  [1:0] x1_bank_mode,
 	// seta_vregs_w's byte offset in the vregs region (0x...3, 0x...5, 0x...15)
@@ -186,6 +192,8 @@ module seta_board_cfg (
 		fg_xoffs        = 9'sd0;
 		fg_xoffs_flip   = 9'sd0;
 		buffer_sprites  = 1'b0;
+		copy_then_draw  = 1'b0;
+		spr_snap_line   = 10'd0;
 		input_layout    = 3'd0;   // JOY_TYPE1_2BUTTONS
 		x1_bank_mode    = 2'd0;
 		vregs_ofs       = 3'd3;
@@ -399,7 +407,7 @@ module seta_board_cfg (
 
 		// jjsquawk: both layers 6bpp, plain remap
 		GAME_JJSQUAWK: begin
-			input_layout = 3'd0;
+			input_layout = 3'd0;   // two buttons: MAME's BUTTON3 is read nowhere
 			map_board = 5'd0; cpu_div = 5'd6;
 			gfx_half_words = 23'h80000;  code_mask = 16'h3fff;
 			game_rot = 2'd0;
@@ -465,7 +473,7 @@ module seta_board_cfg (
 		// the offset effect, colour-mode bit selecting PAL_BLAND0/1, 2 MB of banked
 		// samples. LAYOUT_C for its 4 MB of sprites.
 		GAME_BLANDIA, GAME_BLANDIAP: begin
-			input_layout = 3'd0;
+			input_layout = 3'd2;   // JOY_TYPE1_3BUTTONS
 			map_board = (game == GAME_BLANDIA) ? 5'd5 : 5'd6;
 			cpu_div = 5'd6;                          // 16 MHz
 			gfx_half_words = 23'h100000; code_mask = 16'h7fff;   // 4 MB
@@ -483,6 +491,8 @@ module seta_board_cfg (
 			has_pal2 = 1'b1;
 			// buffer_sprites on both configs; the game leaves spritectrl bit 5 clear
 			buffer_sprites = 1'b1;
+			// both configs set VIDEO_UPDATE_AFTER_VBLANK
+			copy_then_draw = 1'b1;
 			x1_bank_mode = 2'd1;
 			fg_xoffs = 9'sd0; fg_xoffs_flip = 9'sd8;
 			irq_sl240_level = 3'd2; irq_sl112_level = 3'd4;

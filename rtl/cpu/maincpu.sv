@@ -1,11 +1,12 @@
-// Main CPU: TG68KdotC_Kernel (68000 mode) plus address decode and bus
-// sequencing for every in-scope memory map, selected by `board`.
+// Main CPU: fx68k (cycle-accurate 68000, rtl/cpu/fx68k/PROVENANCE.md) plus
+// address decode and bus sequencing for every in-scope memory map, selected
+// by `board`. Autovectored interrupts only (VPA in the acknowledge cycle).
 //
-// The kernel is used directly (rtl/cpu/tg68k/PROVENANCE.md): busstate gives
-// the access type, data in and out are separate, and the CPU is stalled by
-// holding clkena low. Autovectored interrupts only.
-//
-// The kernel inverts IPL, so this drives ~ipl_level (no interrupt = 3'b111).
+// Clock: phi1 and phi2 enables alternate every cpu_half clk (6 = 8 MHz, 3 =
+// 16 MHz). An access starts when AS and a data strobe are low and DTACK
+// follows acc_ready. A phi2 that would sample DTACK while the access is not
+// ready is held until it is, so a slow SDRAM read costs clk cycles rather
+// than a 68000 wait state (sim/fx68k_pace_tb).
 
 `default_nettype none
 
@@ -31,8 +32,11 @@ package seta_board_pkg;
 		                          //                   plus a protection RAM
 		BOARD_MADSHARK  = 5'd16,  // madshark_map   -- kamenrid's registers,
 		                          //                   magspeed's inputs
-		BOARD_ZOMBRAID  = 5'd17   // zombraid_map   -- zingzip_map plus the
+		BOARD_ZOMBRAID  = 5'd17,  // zombraid_map   -- zingzip_map plus the
 		                          //                   gun ADC at 0xf00000
+		// downtown.cpp downtown_map (downtown, twineagl, metafox, arbalest);
+		// its sub CPU, tile bank and control registers are decoded in seta_core
+		BOARD_DOWNTOWN  = 5'd18
 	} board_t;
 endpackage
 
@@ -44,8 +48,9 @@ module maincpu (
 
 	input  wire  [4:0]  board,
 
-	// one pulse per CPU clock; the CPU steps on it only when the access is done
-	input  wire         cpu_ce,
+	// clk per phase (half a CPU clock); cpu_run low freezes the CPU (pause)
+	input  wire  [3:0]  cpu_half,
+	input  wire         cpu_run,
 
 	// program ROM (sdram_narrow_bridge): rom_req pulses, rom_addr held until rom_valid
 	output logic        rom_req,
@@ -75,6 +80,8 @@ module maincpu (
 	output logic        io_uds, io_lds,
 	output logic [15:0] io_sel,
 	input  wire  [15:0] io_rdata,
+	// hold the access in S_MEM3 (DTACK late) until the read data is current
+	input  wire         io_hold,
 
 	// zombraid ADC0834 inputs {GUNY2, GUNX2, GUNY1, GUNX1}, decoded here: io_sel
 	// is full
@@ -114,48 +121,65 @@ module maincpu (
 	// uPD71054C
 	localparam int IO_PIT      = 15;
 
-	wire [31:0] a32;
+	// declared before the instance: a port connection to an undeclared name is
+	// inferred as a net by ModelSim even under `default_nettype none`, and the
+	// later explicit declaration then collides with it.
+	wire [23:1] eab;
 	wire [15:0] cpu_dout;
 	wire [15:0] cpu_din;
-	wire        n_wr, n_uds, n_lds;
-	wire  [2:0] fc;      // declared before the instance: a port connection to an
-	                     // undeclared name is inferred as a net by ModelSim even
-	                     // under `default_nettype none`, and the later explicit
-	                     // declaration then collides with it.
-	wire  [1:0] busstate;
-	logic       cpu_clkena;
+	wire        as_n, n_uds, n_lds, rw_n;
+	wire        fc0, fc1, fc2;
+	wire  [2:0] fc = {fc2, fc1, fc0};
+	logic       en_phi1, en_phi2;
+	logic       acc_ready;
 
-	TG68KdotC_Kernel u_cpu (
-		.clk            (clk),
-		.nReset         (~reset),
-		.clkena_in      (cpu_clkena),
-		.data_in        (cpu_din),
-		.IPL            (~ipl_level),      // INVERTED inside the kernel
-		.IPL_autovector (1'b1),
-		.berr           (1'b0),
-		.CPU            (2'b00),           // 68000
-		.addr_out       (a32),
-		.data_write     (cpu_dout),
-		.nWr            (n_wr),
-		.nUDS           (n_uds),
-		.nLDS           (n_lds),
-		.busstate       (busstate),
-		.longword       (),
-		.nResetOut      (),
-		.FC             (fc),
-		.clr_berr       (),
-		.skipFetch      (),
-		.regin_out      (), .CACR_out (), .VBR_out ()
+	wire        in_iack   = !as_n && (fc == 3'b111);
+	wire        dtack_n   = !(acc_ready && !as_n && !in_iack);
+
+	fx68k u_cpu (
+		.clk(clk), .HALTn(1'b1), .extReset(reset), .pwrUp(reset),
+		.enPhi1(en_phi1), .enPhi2(en_phi2),
+		.eRWn(rw_n), .ASn(as_n), .LDSn(n_lds), .UDSn(n_uds), .E(), .VMAn(),
+		.FC0(fc0), .FC1(fc1), .FC2(fc2), .BGn(), .oRESETn(), .oHALTEDn(),
+		.DTACKn(dtack_n), .VPAn(!in_iack), .BERRn(1'b1),
+		.BRn(1'b1), .BGACKn(1'b1),
+		.IPL0n(~ipl_level[0]), .IPL1n(~ipl_level[1]), .IPL2n(~ipl_level[2]),
+		.iEdb(cpu_din), .oEdb(cpu_dout), .eab(eab)
 	);
 
-	wire        acc_active = (busstate != 2'b01);   // 01 = no memory access
+	// an access: AS and a strobe (a write's strobes follow AS by a state, with
+	// the data bus driven by then)
+	wire        acc_active = !as_n && !in_iack && !(n_uds && n_lds);
+	wire        acc_write  = !rw_n;
+	wire [23:0] addr24     = {eab, 1'b0};
 
-	wire        acc_write  = (busstate == 2'b11);
-	wire [23:0] addr24     = a32[23:0];
+	// interrupt acknowledge: one pulse as the cycle starts
+	logic       as_q = 1'b1;
+	always_ff @(posedge clk) as_q <= as_n;
+	assign iack       = in_iack && as_q;
+	assign iack_level = eab[3:1];
 
-	// interrupt acknowledge, qualified by an access
-	assign iack       = acc_active && (fc == 3'b111);
-	assign iack_level = addr24[3:1];
+	// phase enables; the DTACK-sampling phi2 (the second after AS) waits for
+	// acc_ready
+	logic [3:0] ph_cnt = 4'd0;
+	logic       next_phi2 = 1'b0;
+	logic [1:0] phi2_in_as = 2'd0;
+	wire        ph_due  = cpu_run && (ph_cnt + 4'd1 >= cpu_half);
+	wire        ph_hold = next_phi2 && !as_n && !in_iack && !acc_ready
+	                   && phi2_in_as != 2'd0;
+	assign en_phi1 = ph_due && !next_phi2;
+	assign en_phi2 = ph_due && next_phi2 && !ph_hold;
+	always_ff @(posedge clk) begin
+		if (cpu_run) begin
+			if (!ph_due)      ph_cnt <= ph_cnt + 4'd1;
+			else if (!ph_hold) begin
+				ph_cnt    <= 4'd0;
+				next_phi2 <= ~next_phi2;
+			end
+		end
+		if (as_n)                            phi2_in_as <= 2'd0;
+		else if (en_phi2 && phi2_in_as != 2'd3) phi2_in_as <= phi2_in_as + 2'd1;
+	end
 
 	// Address decode. Regions decode on ranges, so byte, word and long accesses all land.
 	logic [23:0] rom_end;
@@ -449,6 +473,24 @@ module maincpu (
 				vregs_base = NONE;
 			end
 
+			BOARD_DOWNTOWN: begin                    // downtown.cpp downtown_map
+				rom_end    = 24'h09FFFF;
+				// declared 0xf00000-0xffffff; the games write 0xf00000-0xf03fff
+				// (metafox, arbalest, twineagl) and 0xffc000-0xffffff (downtown,
+				// twineagl), which a 128 KB mirror keeps apart
+				wram_base  = 24'hF00000; wram_end = 24'hFFFFFF;
+				wram_mask  = 24'h01FFFF;
+				wram2_base = NONE; has_wram2 = 1'b0;
+				pal_base   = 24'h700000; pal_end  = 24'h7003FF;
+				l0c_base   = 24'h800000; l0v_base = 24'h900000;
+				l1c_base   = NONE;       l1v_base = NONE;  has_l1 = 1'b0;
+				spry_base  = 24'hD00000; sprc_base = 24'hD00600;
+				sprcode_base = 24'hE00000;
+				x1_base    = 24'h100000;
+				in_base    = NONE;
+				vregs_base = NONE;
+			end
+
 			default: board_unmapped = 1'b1;
 		endcase
 	end
@@ -528,11 +570,10 @@ module maincpu (
 	wire [23:0] xram_base = pal_base - 24'h400;
 	wire is_xram    = has_xram && (q_a >= xram_base) && (q_a < xram_base + xram_span);
 
-	// Bus sequencing. acc_ready is a held level. RAM and I/O accesses take four
-	// cycles (S_MEM..S_MEM4): the request (address, data, decode) is registered
-	// in S_MEM, io_req asserted in S_MEM2, the read captured in S_MEM4. Registers
-	// everything leaving the module (timing); the CPU steps at most once every
-	// six clk_sys cycles.
+	// Bus sequencing. acc_ready is a held level, DTACK, until AS rises. RAM and
+	// I/O accesses take four cycles (S_MEM..S_MEM4): the request (address, data,
+	// decode) is registered in S_MEM, io_req asserted in S_MEM2, the read
+	// captured in S_MEM4. Registers everything leaving the module (timing).
 	typedef enum logic [3:0] { S_IDLE, S_ROM, S_MEM, S_MEM2, S_MEM3, S_MEM4, S_DONE } state_t;
 	state_t state;
 
@@ -556,7 +597,7 @@ module maincpu (
 	                   is_pal};       //  0
 
 	logic [15:0] rd_data;
-	logic        acc_ready;
+	logic        dbg_sent;
 
 	logic [23:1] q_addr;
 	logic [15:0] q_wdata;
@@ -581,6 +622,7 @@ module maincpu (
 		if (reset) begin
 			state     <= S_IDLE;
 			acc_ready <= 1'b0;
+			dbg_sent  <= 1'b0;
 			rd_data   <= 16'h0000;
 			tprot_reg <= 8'h00;
 			gun_reg   <= 3'b100;             // /CS high: the ADC idle
@@ -634,7 +676,7 @@ module maincpu (
 					q_wram_weh <= 1'b0;
 					state      <= S_MEM3;
 				end
-				S_MEM3: state <= S_MEM4;
+				S_MEM3: if (!io_hold) state <= S_MEM4;
 				S_MEM4: begin
 					rd_data   <= q_wdog  ? 16'hFFFF
 					           : q_tprot ? {8'd0, tprot_reg}
@@ -645,21 +687,25 @@ module maincpu (
 				end
 
 				S_DONE: begin
-					// ready held until the CPU takes it; the trace strobe fires then
-					if (cpu_clkena) begin
-						acc_ready <= 1'b0;
-						state     <= S_IDLE;
+					// the trace strobe on the first cycle, while the bus still
+					// holds the access; ready held until the cycle ends
+					if (!dbg_sent) begin
+						dbg_sent  <= 1'b1;
 						dbg_stb   <= 1'b1;
 						dbg_addr  <= addr24[23:1];
 						dbg_we    <= acc_write;
 						dbg_data  <= acc_write ? cpu_dout : rd_data;
+					end
+					if (as_n) begin
+						acc_ready <= 1'b0;
+						dbg_sent  <= 1'b0;
+						state     <= S_IDLE;
 					end
 				end
 			endcase
 		end
 	end
 
-	assign cpu_clkena = cpu_ce && (!acc_active || acc_ready);
 	assign cpu_din    = rd_data;
 
 

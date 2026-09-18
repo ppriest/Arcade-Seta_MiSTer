@@ -26,6 +26,10 @@ module x1_012 #(
 	input  wire  [15:0] vram_wdata,
 	input  wire         vram_uds, vram_lds,
 	output logic [15:0] vram_rdata,
+	// a CPU read of VRAM is waiting: the queue drains now, and vram_busy
+	// holds the read until the last queued write has landed
+	input  wire         vram_drain,
+	output wire         vram_busy,
 
 	input  wire         vctrl_we,
 	input  wire   [1:0] vctrl_addr,
@@ -46,6 +50,10 @@ module x1_012 #(
 	input  wire [LB_W-1:0] colorbase,       // the GFXDECODE_ENTRY base
 	// code %= elements(), not a mask
 	input  wire  [15:0] code_limit,
+	// downtown.cpp twineagl_tile_offset: codes 0x3exx take bits 13-7 from
+	// one of four bank bytes (>> 1), selected by code bits 8-7
+	input  wire         tile_bank_en,
+	input  wire  [31:0] tile_bank,
 	input  wire         bpp6,
 
 	// bank select and scroll are latched at vblank_rise, as MAME draws the frame
@@ -93,9 +101,59 @@ module x1_012 #(
 	logic [12:0] eng_vaddr;
 	logic [15:0] eng_vq;
 
+	// CPU writes are queued and applied at vblank_rise, so a frame renders
+	// from VRAM as it stood at vblank, with the scroll latched there: MAME
+	// draws the frame at vblank from both. Written live, a tile a game writes
+	// mid-frame for its new scroll shows under the old one for a frame
+	// (Gundhara on hardware; docs/MAME_DIVERGENCE.md, "Tile VRAM writes are
+	// queued to vblank").
+	//
+	// The queue holds VQ_DEPTH writes. Past that, the frame's remaining writes
+	// go live: the queue drains continuously, in order, until the next vblank
+	// (Blandia and Mobile Suit Gundam write thousands a frame). A CPU read
+	// returns VRAM as applied, so a word written this frame reads back old
+	// until vblank -- except to the CPU: a read drains the queue first
+	// (vram_drain / vram_busy). Blandia tests its VRAM at boot, 12288 reads a
+	// layer in MAME, and read back old words it stopped with a black screen.
+	localparam int VQ_DEPTH = 128;
+	logic [30:0] vq_mem [0:VQ_DEPTH-1];      // {uds, lds, addr, data}
+	logic  [6:0] vq_head = '0, vq_tail = '0;
+	logic  [7:0] vq_count = '0, vq_allow = '0;
+	logic        vq_live = 1'b0;             // overflowed this frame: drain on arrival
+	logic [30:0] vq_q;
+	logic        vq_pop_d = 1'b0, vq_pop_dd = 1'b0;
+
+	wire vq_push = v_we;
+	wire vq_pop  = (vq_count != 8'd0) && (vq_live || vq_allow != 8'd0 || vram_drain);
+	// a popped write lands a cycle after the pop, and vram_rdata sees it a
+	// cycle after that
+	assign vram_busy = (vq_count != 8'd0) || vq_pop_d || vq_pop_dd;
+
 	always_ff @(posedge clk) begin
-		if (v_we && v_lds) vram[v_addr][7:0]  <= v_wdata[7:0];
-		if (v_we && v_uds) vram[v_addr][15:8] <= v_wdata[15:8];
+		if (vq_push) vq_mem[vq_tail] <= {v_uds, v_lds, v_addr, v_wdata};
+		vq_q <= vq_mem[vq_head];
+	end
+
+	always_ff @(posedge clk) begin
+		vq_pop_d  <= vq_pop;
+		vq_pop_dd <= vq_pop_d;
+		if (vq_push) vq_tail <= vq_tail + 7'd1;
+		if (vq_pop)  vq_head <= vq_head + 7'd1;
+		vq_count <= vq_count + {7'd0, vq_push} - {7'd0, vq_pop};
+		if (vblank_rise) begin
+			// what was written before this vblank is this frame's
+			vq_allow <= vq_count + {7'd0, vq_push} - {7'd0, vq_pop};
+			vq_live  <= 1'b0;
+		end else begin
+			if (vq_pop && vq_allow != 8'd0) vq_allow <= vq_allow - 8'd1;
+			if (vq_push && vq_count >= 8'(VQ_DEPTH - 2)) vq_live <= 1'b1;
+		end
+	end
+
+	wire [12:0] vq_addr = vq_q[28:16];
+	always_ff @(posedge clk) begin
+		if (vq_pop_d && vq_q[29]) vram[vq_addr][7:0]  <= vq_q[7:0];
+		if (vq_pop_d && vq_q[30]) vram[vq_addr][15:8] <= vq_q[15:8];
 		vram_rdata <= vram[v_addr];
 	end
 	always_ff @(posedge clk) eng_vq <= vram[eng_vaddr];
@@ -319,7 +377,9 @@ module x1_012 #(
 
 			S_TILE:  state <= S_TILE2;                // RAM latency
 			S_TILE2: begin
-				tile_code <= eng_vq[13:0];
+				tile_code <= (tile_bank_en && eng_vq[13:9] == 5'h1f)
+				           ? {tile_bank[{eng_vq[8:7], 3'd1} +: 7], eng_vq[6:0]}
+				           : eng_vq[13:0];
 				tile_fx   <= eng_vq[15];
 				tile_fy   <= eng_vq[14];
 				eng_vaddr <= bank_off + {2'd0, tile_ix} + 13'h800;

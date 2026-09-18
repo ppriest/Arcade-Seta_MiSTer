@@ -57,8 +57,12 @@ def main():
     a = ap.parse_args()
 
     bm = _load("build_maincpu_hex", HERE / "build_maincpu_hex.py")
+    # sets outside build_maincpu_hex's table (downtown.cpp, with MAME_SRC
+    # pointed at it): the region from ROM_START through build_region
     if a.set not in bm.SETS:
-        sys.exit(f"no ROM_START records for '{a.set}'")
+        sys.path.insert(0, str(HERE))
+        from build_region import region_image
+        region = region_image(a.set, "maincpu")[0]
 
     zippath = a.zip
     if not zippath:
@@ -72,7 +76,7 @@ def main():
         if not zippath:
             sys.exit(f"no archive holds set '{a.set}'")
 
-    img = bm.build(zippath, bm.SETS[a.set], a.set)
+    img = bm.build(zippath, bm.SETS[a.set], a.set) if a.set in bm.SETS else region
     out = Path(a.out) if a.out else (HERE.parent / "sim" / "maincpu_tb")
     out.mkdir(parents=True, exist_ok=True)
 

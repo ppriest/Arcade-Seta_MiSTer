@@ -274,7 +274,12 @@ def build(zippath, records, setname):
     prev_kind = None  # and HOW it was loaded
     for rec in records:
         kind, fname, dest, length, crc = rec
-        if kind == "continue":
+        if kind == "reload":
+            if blob is None:
+                sys.exit("ROM_RELOAD with no preceding load")
+            consumed = 0
+            kind = prev_kind
+        elif kind == "continue":
             if blob is None:
                 sys.exit("ROM_CONTINUE with no preceding load")
             # A CONTINUE INHERITS ITS LOAD'S KIND. Treating every one as a

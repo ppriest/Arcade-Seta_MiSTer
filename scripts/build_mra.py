@@ -123,8 +123,36 @@ LAYOUT_F_SETS = {"zombraid"}
 # 0x300100-0x3001ff, saved as the 256-byte window (docs/ROADMAP.md).
 NVRAM_SETS = {"zombraid": 256}
 
+# Button layouts that differ from the driver's ports. jjsquawk declares
+# JOY_TYPE1_3BUTTONS, but the game uses two (attack, jump): button 3 is read
+# nowhere, service menu included. rtl/seta_board_cfg.sv gives it layout 0.
+LAYOUT_OVERRIDE = {"jjsquawk": 0, "jjsquawko": 0}
+
+
+# ---------------------------------------------------------------------------
+# downtown.cpp (the Seta_Downtown core): selected by pointing MAME_SRC at it.
+#     MAME_SRC=E:/mame/src/mame/seta/downtown.cpp python scripts/build_mra.py
+# Its own game numbering (downtown_board_cfg.sv), one layout, its own rbf and
+# folder.
+# ---------------------------------------------------------------------------
+DOWNTOWN = os.path.basename(SRC) == "downtown.cpp"
+RBF_NAME = "Seta"
+if DOWNTOWN:
+    CFG_SV = REPO / "rtl" / "downtown" / "downtown_board_cfg.sv"
+    OUT_DIR = REPO / "releases" / "Seta_Downtown"
+    # NOT "Seta_Downtown": MiSTer resolves <rbf>X</rbf> to Arcade-X or X
+    # followed by '.' or '_' (Main_MiSTer mra_loader.cpp get_rbf), so the Seta
+    # .mra files' <rbf>Seta</rbf> would also match Seta_Downtown_*.rbf
+    RBF_NAME = "SetaDowntown"
+    LAYOUTS["G"] = (["maincpu", "sprites", "tiles", "x1snd", "sub"],
+                    {"maincpu": "BASE_MAINCPU", "sprites": "BASE_GFX1_AB",
+                     "tiles": "BASE_GFX2_G", "x1snd": "BASE_X1SND_G",
+                     "sub": "BASE_SUB_G"})
+
 
 def layout_of(setname):
+    if DOWNTOWN:
+        return "G"
     if setname in LAYOUT_F_SETS:
         return "F"
     if setname in LAYOUT_E_SETS:
@@ -152,6 +180,7 @@ def read_sdram_map():
         bases[m.group(1)] = int(m.group(2).replace("_", ""), 16)
     missing = sorted({n for _, tbl in LAYOUTS.values() for n in tbl.values()}
                      - set(bases))
+    # BASE_SUB_G sits inside the module body; the regex above reads it too
     if missing:
         sys.exit(f"{SDRAM_SV.name} does not define {', '.join(missing)}")
     return bases
@@ -184,6 +213,8 @@ CLONE_OF = {
     "gundharac": "gundhara",
     "jjsquawko": "jjsquawk",
 }
+if DOWNTOWN:
+    CLONE_OF = {}      # every downtown.cpp set in scope has its own DT_* entry
 
 
 def clone_regions_match(child, parent, all_blocks):
@@ -209,7 +240,7 @@ def read_game_enum():
     txt = CFG_SV.read_text(encoding="utf-8", errors="replace")
     out = {}
     # Four or five bits: game_t widened when Group C filled the enum.
-    for m in re.finditer(r"GAME_(\w+)\s*=\s*[45]'d(\d+)", txt):
+    for m in re.finditer(r"(?:GAME|DT)_(\w+)\s*=\s*[45]'d(\d+)", txt):
         out[m.group(1).lower()] = int(m.group(2))
     if not out:
         sys.exit(f"{CFG_SV.name} defines no GAME_* enum")
@@ -361,6 +392,12 @@ def groups_for(records, region, setname, body):
         if r[0] == "copy":
             continue
         kind, name, dest, ln, crc = r[:5]
+        if kind == "reload":
+            # ROM_RELOAD: the previous file again from its start, the same way
+            if prev is None:
+                sys.exit(f"{setname}/{region}: ROM_RELOAD with no load before it")
+            resolved.append((prev[2], prev[0], dest, ln, prev[1], 0))
+            continue
         if kind == "continue":
             if prev is None:
                 sys.exit(f"{setname}/{region}: ROM_CONTINUE with no load "
@@ -381,6 +418,14 @@ def groups_for(records, region, setname, body):
             prev, prev_used = (name, crc, kind), ln
 
     recs = sorted(resolved, key=lambda r: (r[2] & ~1, r[2] & 1))
+    # A plain load that a later one overwrites keeps only the bytes before it:
+    # downtown.cpp's sub regions load a file at 0x4000 and reload it at 0xc000,
+    # and a .mra's parts are laid end to end, so the first becomes a slice.
+    for k in range(len(recs) - 1):
+        a_, b_ = recs[k], recs[k + 1]
+        if a_[0] == "load" and b_[0] == "load" and a_[2] + a_[3] > b_[2]:
+            recs[k] = (a_[0], a_[1], a_[2], b_[2] - a_[2], a_[4],
+                       a_[5] if a_[5] is not None else 0)
     out = []
     i = 0
     while i < len(recs):
@@ -548,8 +593,15 @@ def dip_xml(ports):
             for label in ids:
                 if "," in label:
                     sys.exit(f"dip '{name}': label {label!r} contains a comma")
-            bits = [8 * byte_index + b for b in bit_positions]
-            out.append((esc(name), ",".join(str(b) for b in bits),
+            # MiSTer reads bits="first,last", a RANGE (Main_MiSTer
+            # support/arcade/mra_loader.cpp, sscanf "%d,%d"): a list of three
+            # made a 2-bit switch of every 3-bit one (jjsquawk's coinage
+            # showed four settings, issue #6). A gap cannot be expressed.
+            if bit_positions != list(range(bit_positions[0], bit_positions[-1] + 1)):
+                sys.exit(f"dip '{name}': mask {mask:#04x} is not contiguous")
+            lo = 8 * byte_index + bit_positions[0]
+            hi = 8 * byte_index + bit_positions[-1]
+            out.append((esc(name), str(lo) if lo == hi else f"{lo},{hi}",
                         esc(",".join(ids))))
         default_bytes.append(default & 0xFF)
     return out, default_bytes
@@ -607,6 +659,19 @@ BUTTON_LAYOUTS = {
     # reads it as layout 0; only the names differ.
     7: ["Trigger", "Reload"],
 }
+
+
+def dt_buttons(setname, block):
+    """downtown.cpp: Seta.sv's input_layout 0 (common_type1) or 1 (common_type2),
+    and DownTown's rotary joystick on buttons 3 and 4."""
+    names = ["Button 1", "Button 2"]
+    if 'PORT_START("ROT1")' in block and "IPT_POSITIONAL" in block:
+        names += ["Rotate Left", "Rotate Right"]
+    n = len(names)
+    names = names + ["-"] * (6 - n) + ["Start", "Coin", "Pause", "Service"]
+    default = ["A", "B", "X", "Y", "L", "R"][:n] + ["Start", "Select", "L", "R"]
+    return (f'<buttons names="{esc(",".join(names))}" '
+            f'default="{esc(",".join(default))}" count="{n}"/>')
 
 
 def input_layout(setname, block, all_blocks, depth=0):
@@ -803,7 +868,7 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     lines.append('<misterromdescription>')
     lines.append(f'    <name>{esc(info["title"])}</name>')
     lines.append(f'    <setname>{esc(setname)}</setname>')
-    lines.append('    <rbf>Seta</rbf>')
+    lines.append(f'    <rbf>{RBF_NAME}</rbf>')
     lines.append(f'    <mameversion>0286</mameversion>')
     lines.append(f'    <year>{esc(info["year"])}</year>')
     lines.append(f'    <manufacturer>{esc(info["maker"])}</manufacturer>')
@@ -830,8 +895,6 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     # the rest rendering the wrong tiles.
     #
     # Arcade-Psikyo_MiSTer emits index 1 first for the same reason.
-    lines.append(f'    <!-- which game, for rtl/seta_board_cfg.sv. FIRST, '
-                 f'because the download is permuted with it. -->')
     lines.append(f'    <rom index="1"><part>{mod:02X}</part></rom>')
     lines.append('')
     # FAST LOADING. address= makes the HPS copy this ROM straight into DDR3 at
@@ -904,16 +967,30 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     lines.append('    </rom>')
     lines.append('')
 
-    ports = extract_dips.parse_ports(dip_blocks[info["inputs"]], dip_blocks, set())
+    unknown = set()
+    ports = extract_dips.parse_ports(dip_blocks[info["inputs"]], dip_blocks, unknown)
+    if unknown:
+        sys.exit(f"DEF_STR not in extract_dips' table: {', '.join(sorted(unknown))}")
     sw = split_ports(ports, setname)
     dips, defaults = dip_xml(sw)
     lines.append(f'    <switches default="{",".join(f"{b:02X}" for b in defaults)}" base="0">')
     for name, bits, ids in dips:
-        lines.append(f'        <dip name="{name}" bits="{bits}" ids="{ids}"/>')
+        dip = f'<dip name="{name}" bits="{bits}" ids="{ids}"/>'
+        # MAME's "Unknown" switches go in commented out: their bits keep the
+        # driver's default through <switches default>, and anyone who wants
+        # to experiment can uncomment the line.
+        if re.match(r"unknown\b", name, re.I):
+            if "--" in dip:
+                sys.exit(f"dip '{name}': '--' cannot go inside an XML comment")
+            dip = f'<!-- {dip} -->'
+        lines.append(f'        {dip}')
     lines.append('    </switches>')
     lines.append('')
-    lines.append('    ' + buttons_xml(
-        input_layout(setname, dip_blocks[info["inputs"]], dip_blocks)))
+    if DOWNTOWN:
+        lines.append('    ' + dt_buttons(setname, dip_blocks[info["inputs"]]))
+    else:
+        lines.append('    ' + buttons_xml(LAYOUT_OVERRIDE.get(setname) if setname in LAYOUT_OVERRIDE
+            else input_layout(setname, dip_blocks[info["inputs"]], dip_blocks)))
     if setname in NVRAM_SETS:
         # The framework keeps a file of this size per .mra: it downloads it
         # into the core at index 4 after the ROM and reads it back when the
@@ -921,6 +998,12 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         lines.append(f'    <nvram index="4" size="{NVRAM_SETS[setname]}"/>')
     lines.append('</misterromdescription>')
     xml = "\n".join(lines) + "\n"
+    # every ROM file part carries its CRC32 (mra.py checks it against the zip
+    # below; MiSTer uses it to find the file under another name)
+    no_crc = [p for p in re.findall(r"<part [^>]*>", xml)
+              if "name=" in p and "crc=" not in p]
+    if no_crc:
+        sys.exit(f"{setname}: part(s) without crc: {no_crc[:2]}")
 
     # ---- where it goes ----------------------------------------------------
     # A parent sits directly in the Arcade folder; a clone goes into
@@ -928,8 +1011,9 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     # than one per ROM revision.
     if info["parent"] != "0":
         pinfo = gl.get(info["parent"])
-        folder = out_dir / "_alternatives" / ("_" + re.sub(r"\s*\(.*", "",
-                                                           pinfo["title"] if pinfo else info["parent"]))
+        # the parent's title as a folder name: mra_filename's replacements
+        ptitle = mra_filename(pinfo["title"] if pinfo else info["parent"])[:-4]
+        folder = out_dir / "_alternatives" / ("_" + re.sub(r"\s*\(.*", "", ptitle))
     else:
         folder = out_dir
     path = folder / mra_filename(info["title"])

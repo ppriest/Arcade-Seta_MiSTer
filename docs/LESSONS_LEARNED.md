@@ -142,6 +142,16 @@ sprites, compounding under load. A real copy removed the ghosting and the per-sc
 
 ## ROM loading: .mra, byte order, deployment
 
+### [Seta] A `<dip>`'s `bits` is a range, "first,last", not a list
+
+`Main_MiSTer` `support/arcade/mra_loader.cpp` reads it with `sscanf("%d,%d")`. `build_mra.py`
+wrote every bit (`bits="8,9,10"`), which MiSTer read as bits 8-9: every switch of three or more bits
+showed half its settings and could only reach that half (J. J. Squawkers' coinage, issue #6; 30 of
+34 Seta sets). The `.mra` files had been checked against MAME, but by a parser that read `bits` the
+way the generator wrote it. `scripts/check_dips.py` parses the file as the loader does and
+compares against `-listxml`. The same review found `PORT_CONDITION` settings parsed into "DSW"
+labels, since a lazy match to the line's last `)` took the condition in.
+
 ### Prove the interleave against MAME's disassembly offline, before building
 
 "It boots" is weak evidence -- a wrong map can boot far enough to look plausible. Every interleave
@@ -1763,6 +1773,30 @@ against writes that land anyway (a write during the copy goes to the copy too,
 and the cursor holds for that cycle). The bench now writes behind the cursor
 and requires the snapshot to hold it; with the write-through disabled it loses
 96 of 96 words.
+
+### [Seta] A golden frame taken after vblank cannot check what pairs with what across vblank
+
+Quiz Kokology's attract drew bee sprites with pieces a tile low, missing or
+flipped, and the frame stayed wrong when paused. On the buffered-sprite boards
+the X1-001 copies code/X to a second half at vblank and draws from that half,
+while Y is read live. MAME draws a frame and then copies, so a frame pairs its
+Y with codes copied a vblank earlier. The core copied and then snapshotted, so
+its codes were a frame newer than its Y.
+
+The benches could not see it: MAME's capture notifier runs after the copy and
+its `video:snapshot()` re-renders from that state, which is exactly the core's
+pairing. Replaying MAME's write log over 401 frames and rendering both
+pairings found 94 frames that differ, some with the whole sprite set broken,
+and a probe had already shown the snapshot was never torn (no write during it,
+none lost). When a device buffers some state and not other state, the bench
+has to run two frames, not render one.
+
+Three reorderings fixed Quiz Kokology on hardware and each broke Blandia a
+different way, and all were reverted. Moving the copy is really placing it
+against when the CPU writes, and the core's CPU writes earlier in the frame
+than MAME's. Check the writer's timing against the reference before moving an
+event relative to it (docs/MAME_DIVERGENCE.md, "setac_eof: the copy and the
+draw, in each board's order").
 
 ### [Seta] Read the interrupt vectors before trusting a board's interrupt config
 

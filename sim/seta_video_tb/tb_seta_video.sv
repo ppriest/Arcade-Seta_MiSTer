@@ -187,11 +187,12 @@ module tb_seta_video;
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
 
-		.buffer_sprites(1'b0),
+		.buffer_sprites(1'b0), .copy_then_draw(1'b0),
+		.spr_snap_line(10'd0),
 		.has_l0(cfgv[C_HAS_L0][0]),
 		.l0_vram_we(l0v_we), .l0_vram_addr(l0v_addr),
 		.l0_vram_wdata(l0v_wdata), .l0_vram_uds(1'b1), .l0_vram_lds(1'b1),
-		.l0_vram_rdata(),
+		.l0_vram_rdata(), .l0_vram_drain(1'b0), .l0_vram_busy(),
 		.l0_ctrl_we(l0c_we), .l0_ctrl_addr(l0c_addr),
 		.l0_ctrl_wdata(l0c_wdata), .l0_ctrl_uds(1'b1), .l0_ctrl_lds(1'b1),
 		.l0_ctrl_rdata(),
@@ -204,7 +205,7 @@ module tb_seta_video;
 		.has_l1(cfgv[C_HAS_L1][0]),
 		.l1_vram_we(l1v_we), .l1_vram_addr(l1v_addr),
 		.l1_vram_wdata(l1v_wdata), .l1_vram_uds(1'b1), .l1_vram_lds(1'b1),
-		.l1_vram_rdata(),
+		.l1_vram_rdata(), .l1_vram_drain(1'b0), .l1_vram_busy(),
 		.l1_ctrl_we(l1c_we), .l1_ctrl_addr(l1c_addr),
 		.l1_ctrl_wdata(l1c_wdata), .l1_ctrl_uds(1'b1), .l1_ctrl_lds(1'b1),
 		.l1_ctrl_rdata(),
@@ -214,6 +215,7 @@ module tb_seta_video;
 		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.vregs(cfgv[C_VREGS][7:0]), .tilemaps_flip(cfgv[C_TMFLIP][0]),
+		.tile_bank_en(1'b0), .tile_bank(32'd0),
 		.vga_r(vga_r), .vga_g(vga_g), .vga_b(vga_b),
 		.vga_hs(vga_hs), .vga_vs(vga_vs), .vga_hb(vga_hb), .vga_vb(vga_vb),
 		.vga_de(vga_de), .vga_ce(vga_ce),
@@ -271,6 +273,19 @@ module tb_seta_video;
 	logic [15:0] palimg  [0:PAL_IMG-1];
 
 	int vis_x0, vis_x1, vis_y0, vis_y1, vis_w, vis_h, pal_entries;
+
+	// Sprite engine overruns on the lines that are shown. One in vblank is
+	// harmless: the next line_start abandons it and nothing displays it (after
+	// the snapshot the vblank lines render the new frame's list).
+	int          ov_vis = 0, ov_blank = 0;
+	logic [15:0] ov_q = '0;
+	always @(posedge clk) begin
+		ov_q <= dut.u_spr.dbg_overrun;
+		if (dut.u_spr.dbg_overrun != ov_q) begin
+			if (dut.u_spr.line >= vis_y0 && dut.u_spr.line <= vis_y1) ov_vis++;
+			else ov_blank++;
+		end
+	end
 	int bad = 0, checked = 0, frame = 0;
 	int first_bad_x = -1, first_bad_y = -1;
 	logic [23:0] first_bad_got, first_bad_want;
@@ -467,7 +482,7 @@ module tb_seta_video;
 		$display("  lines rendered   %0d", dbg_lines);
 		$display("  sprites blitted  %0d", dbg_sprites);
 		$display("  ROM granules     %0d", dbg_fetches);
-		$display("  line overruns    %0d", dbg_overrun);
+		$display("  line overruns    %0d (shown lines %0d, vblank %0d)", dbg_overrun, ov_vis, ov_blank);
 		$display("  lines cut short  %0d", dbg_dropped);
 		$display("  worst line       %0d cycles (%0d sprites)",
 		         dbg_worst_line, dbg_worst_sprites);
@@ -480,9 +495,9 @@ module tb_seta_video;
 			$display("FAIL: nothing was compared");
 		else if (bad != 0)
 			$display("FAIL: the video path disagrees with MAME");
-		else if (dbg_overrun != 0)
-			$display("FAIL: %0d line(s) were still rendering at the next line_start",
-			         dbg_overrun);
+		else if (ov_vis != 0)
+			$display("FAIL: %0d shown line(s) were still rendering at the next line_start",
+			         ov_vis);
 		else
 			$display("PASS: %0d pixels identical to MAME's own render", checked);
 		$finish;

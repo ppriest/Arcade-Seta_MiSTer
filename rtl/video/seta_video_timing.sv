@@ -30,7 +30,9 @@ module seta_video_timing (
 	output logic       irq_vblank_line,   // MAME scanline 240
 	output logic       irq_mid_line,      // MAME scanline 112
 	output logic       vblank_rise,
-	output logic       snap_start      // sprite snapshot, 5 lines before the wrap
+	output logic       snap_start,     // sprite snapshot, 5 lines before the wrap
+	// the line the last visible line is displayed on begins: its render is done
+	output logic       snap_pre
 );
 
 	wire h_last = (hcount == htotal - 10'd1);
@@ -47,6 +49,7 @@ module seta_video_timing (
 		irq_mid_line    <= 1'b0;
 		vblank_rise     <= 1'b0;
 		snap_start      <= 1'b0;
+		snap_pre        <= 1'b0;
 
 		if (reset) begin
 			hcount <= 10'd0;
@@ -68,6 +71,9 @@ module seta_video_timing (
 				if (line_next == vact_end + 10'd1) vblank_rise <= 1'b1;
 				// late in vblank, after the games' vblank handlers have written
 				if (line_next == vtotal - 10'd5) snap_start <= 1'b1;
+				// a line is rendered on the line before it is shown: from here to
+				// vblank_rise the engine renders only the first line of vblank
+				if (line_next == vact_end) snap_pre <= 1'b1;
 			end
 		end
 	end

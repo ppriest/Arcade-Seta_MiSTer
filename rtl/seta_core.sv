@@ -57,6 +57,8 @@ module seta_core (
 	input  wire [15:0] extra_in,
 	input  wire [15:0] p3_in, p4_in,     // wits only
 	input  wire [15:0] dsw_in,
+	// downtown.cpp: DownTown's rotary joysticks, positions 0..11
+	input  wire  [3:0] rot1, rot2,
 	// zombraid ADC0834 channels: {GUNY2, GUNX2, GUNY1, GUNX1}
 	input  wire [31:0] gun_ch,
 
@@ -154,7 +156,8 @@ module seta_core (
 	wire  [9:0] vtotal, vs_start, vs_end, vact_start, vact_end;
 
 	// declared before the instance (ModelSim)
-	wire        buffer_sprites;
+	wire        buffer_sprites, copy_then_draw;
+	wire  [9:0] spr_snap_line;
 	wire  [1:0] x1_bank_mode;
 	wire  [2:0] vregs_ofs;
 	wire        tilemaps_flip;
@@ -171,7 +174,23 @@ module seta_core (
 
 	assign gun_game = (game == GAME_ZOMBRAID);
 
+	// downtown.cpp's tile bank, declared before seta_video uses it (ModelSim)
+	logic [31:0] dt_tile_bank;
+`ifndef SETA_DOWNTOWN
+	wire         dt_tile_bank_en = 1'b0;
+`endif
+
+`ifdef SETA_DOWNTOWN
+	wire  [1:0] dt_sub_map;
+	wire  [4:0] dt_sub_bank_entries;
+	wire        dt_tile_bank_en;
+	wire  [1:0] dt_prot;
+	downtown_board_cfg u_cfg (
+		.sub_map(dt_sub_map), .sub_bank_entries(dt_sub_bank_entries),
+		.tile_bank_en(dt_tile_bank_en), .dt_prot(dt_prot),
+`else
 	seta_board_cfg u_cfg (
+`endif
 		.game(game),
 		.game_rot(game_rot), .input_layout(input_layout),
 		.map_board(map_board), .cpu_div(cpu_div),
@@ -193,7 +212,8 @@ module seta_core (
 		.tilemaps_flip(tilemaps_flip),
 		.narrow_320(narrow_320), .short_224(),
 		.gfx1_invert(gfx1_invert),
-		.buffer_sprites(buffer_sprites),
+		.buffer_sprites(buffer_sprites), .copy_then_draw(copy_then_draw),
+		.spr_snap_line(spr_snap_line),
 		.l0_xoffs(l0_xoffs), .l0_xoffs_flip(l0_xoffs_flip),
 		.l0_colorbase(l0_colorbase), .l0_code_limit(l0_code_limit),
 		.l1_xoffs(l1_xoffs), .l1_xoffs_flip(l1_xoffs_flip),
@@ -213,20 +233,17 @@ module seta_core (
 		.vact_start(vact_start), .vact_end(vact_end)
 	);
 
-	logic [4:0] cpu_cnt = 0;
 	logic [3:0] snd_cnt = 0, pix_cnt = 0;
-	wire cpu_tick = (cpu_cnt == 5'd0);
 	wire snd_ce   = (snd_cnt == 4'd0);
 	wire ce_pix   = (pix_cnt == 4'd0);
 
 	always_ff @(posedge clk) begin
-		cpu_cnt <= (cpu_cnt + 5'd1 >= cpu_div) ? 5'd0 : cpu_cnt + 5'd1;
 		snd_cnt <= (snd_cnt == 4'd5)  ? 4'd0 : snd_cnt + 4'd1;
 		pix_cnt <= (pix_cnt == 4'd11) ? 4'd0 : pix_cnt + 4'd1;
 	end
 
+	// the 68000's phases are generated in maincpu.sv, cpu_div / 2 clk each;
 	// pause stops the CPU only
-	wire cpu_ce = cpu_tick && !pause_cpu;
 
 	wire        rom_req;
 	wire [23:1] rom_addr;
@@ -239,6 +256,7 @@ module seta_core (
 	logic [15:0] wram_rdata;
 
 	wire        io_req, io_we, io_uds, io_lds;
+	wire        io_hold;
 	wire [23:1] io_addr;
 	wire [11:0] pal_index_w;
 	wire        coins_at8;
@@ -251,7 +269,8 @@ module seta_core (
 	wire  [2:0] iack_level, ipl_level;
 
 	maincpu u_cpu (
-		.clk(clk), .reset(reset), .board(map_board), .cpu_ce(cpu_ce),
+		.clk(clk), .reset(reset), .board(map_board),
+		.cpu_half(cpu_div[4:1]), .cpu_run(!pause_cpu),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
 		.wram_addr(wram_addr), .wram_wel(wram_wel), .wram_weh(wram_weh),
@@ -260,6 +279,7 @@ module seta_core (
 		.pal_index_w(pal_index_w), .coins_at8(coins_at8),
 		.io_extra(io_extra),
 		.io_uds(io_uds), .io_lds(io_lds), .io_sel(io_sel), .io_rdata(io_rdata),
+		.io_hold(io_hold),
 		.gun_ch(gun_ch),
 		.ipl_level(ipl_level), .iack(iack), .iack_level(iack_level),
 		.dbg_stb(dbg_cpu_stb), .dbg_addr(dbg_cpu_addr),
@@ -368,6 +388,7 @@ module seta_core (
 	end
 	assign gun_aim = {aim_y2, aim_x2, aim_y1, aim_x1};
 
+`ifndef SETA_DOWNTOWN
 	// Second work RAM block, 64 KB (zingzip_map's 0x300000; wits' 0xe04000).
 	logic [15:0] wram2 [0:32767];
 	logic [15:0] wram2_q;
@@ -467,6 +488,17 @@ module seta_core (
 		if (t_code_we && t_uds) code_tail[t_addr][15:8] <= t_wdata[15:8];
 		code_tail_q <= code_tail[t_addr];
 	end
+`else
+	// not on the downtown.cpp boards
+	wire [15:0] wram2_q = 16'h0, xram_q = 16'h0;
+	wire [15:0] l0_tail_q = 16'h0, l1_tail_q = 16'h0, code_tail_q = 16'h0;
+	assign ioctl_din  = 8'h00;
+	assign dbg_nv_state = 2'b00;
+	always_ff @(posedge clk) begin
+		nvram_save   <= 1'b0;
+		dbg_nv_saves <= 8'd0;
+	end
+`endif
 
 	wire         tile_req, tile1_req;
 	wire  [23:3] tile_addr, tile1_addr;
@@ -474,6 +506,18 @@ module seta_core (
 	wire  [63:0] tile_data, tile1_data;
 	wire  [15:0] l0_vram_rdata, l0_ctrl_rdata;
 	wire  [15:0] l1_vram_rdata, l1_ctrl_rdata;
+	// A CPU read of tile VRAM waits for that layer's write queue to drain
+	// (x1_012.sv): set with io_req, so it is up from S_MEM3, where maincpu
+	// holds while io_hold is up.
+	wire         l0_vram_busy, l1_vram_busy;
+	logic        l0_vram_rd = 1'b0, l1_vram_rd = 1'b0;
+	always_ff @(posedge clk) begin
+		if (io_req && !io_we && io_sel[IO_L0VRAM] && !io_addr[14]) l0_vram_rd <= 1'b1;
+		else if (!l0_vram_busy) l0_vram_rd <= 1'b0;
+		if (io_req && !io_we && io_sel[IO_L1VRAM] && !io_addr[14]) l1_vram_rd <= 1'b1;
+		else if (!l1_vram_busy) l1_vram_rd <= 1'b0;
+	end
+	assign io_hold = (l0_vram_rd && l0_vram_busy) || (l1_vram_rd && l1_vram_busy);
 
 	// m_vregs; bits 3-5 are the X1-010 sample bank
 	logic  [7:0] vregs = 8'd0;
@@ -483,6 +527,10 @@ module seta_core (
 		         && io_addr[2:1] == vregs_ofs[2:1])
 			vregs <= io_wdata[7:0];
 	end
+
+	wire        sub_rom_req, sub_rom_valid;
+	wire [18:0] sub_rom_addr;
+	wire  [7:0] sub_rom_data;
 
 	wire        spr_req;
 	wire [23:3] spr_addr;
@@ -511,7 +559,8 @@ module seta_core (
 		.bg_yoffs(bg_yoffs), .bg_yoffs_flip(bg_yoffs_flip),
 		.bank_size(bank_size), .spritelimit(spritelimit), .transpen(transpen),
 		.bgflag_opaque(1'b0),
-		.buffer_sprites(buffer_sprites),
+		.buffer_sprites(buffer_sprites), .copy_then_draw(copy_then_draw),
+		.spr_snap_line(spr_snap_line),
 		.colorbase_fg(colorbase_fg), .colorbase_bg(colorbase_bg),
 		.screen_h(screen_h), .vis_max_y(vact_end[8:0]), .backdrop(backdrop),
 		.code_mask(code_mask), .line_budget(line_budget),
@@ -526,6 +575,7 @@ module seta_core (
 		.l0_vram_addr(io_addr[13:1]), .l0_vram_wdata(io_wdata),
 		.l0_vram_uds(io_uds), .l0_vram_lds(io_lds),
 		.l0_vram_rdata(l0_vram_rdata),
+		.l0_vram_drain(l0_vram_rd), .l0_vram_busy(l0_vram_busy),
 		.l0_ctrl_we(io_req && io_we && io_sel[IO_L0CTRL]),
 		.l0_ctrl_addr(io_addr[2:1]), .l0_ctrl_wdata(io_wdata),
 		.l0_ctrl_uds(io_uds), .l0_ctrl_lds(io_lds),
@@ -540,6 +590,7 @@ module seta_core (
 		.l1_vram_addr(io_addr[13:1]), .l1_vram_wdata(io_wdata),
 		.l1_vram_uds(io_uds), .l1_vram_lds(io_lds),
 		.l1_vram_rdata(l1_vram_rdata),
+		.l1_vram_drain(l1_vram_rd), .l1_vram_busy(l1_vram_busy),
 		.l1_ctrl_we(io_req && io_we && io_sel[IO_L1CTRL]),
 		.l1_ctrl_addr(io_addr[2:1]), .l1_ctrl_wdata(io_wdata),
 		.l1_ctrl_uds(io_uds), .l1_ctrl_lds(io_lds),
@@ -549,6 +600,7 @@ module seta_core (
 		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.vregs(vregs), .tilemaps_flip(tilemaps_flip),
+		.tile_bank_en(dt_tile_bank_en), .tile_bank(dt_tile_bank),
 
 		.code_we(io_req && io_we && io_sel[IO_SPRCODE] && !io_addr[14]),
 		.code_addr(dbg_rd_en ? dbg_rd_idx : io_addr[13:1]), .code_wdata(io_wdata),
@@ -582,6 +634,84 @@ module seta_core (
 		.dbg_worst_line(dbg_worst_line), .dbg_worst_sprites(dbg_worst_sprites),
 		.dbg_dropped(dbg_dropped), .dbg_snap(dbg_snap)
 	);
+
+`ifdef SETA_DOWNTOWN
+	// ---- downtown.cpp: the 65C02 system and the board's own registers ----
+	wire [23:0] dt_byte = {io_addr, 1'b0};
+	wire dt_subctrl = io_req && io_we && io_lds && io_addr[23:4] == 20'hA0000;  // 0xa00000-7
+	wire dt_shared  = io_addr[23:12] == 12'hB00;                                // 0xb00000-0xb00fff
+	wire dt_tbank_w = io_req && io_we && io_lds && io_addr[23:4] == 20'h40000;  // 0x400000-7
+	// twineagl_ctrl_w at 0x500001: bits 5-4 clear -> levels 1 and 3 cleared
+	wire dt_ctrl_w  = io_req && io_we && io_lds && io_addr[23:1] == 23'h280000 && io_wdata[5:4] == 2'b00;
+
+	initial dt_tile_bank = 32'd0;
+	always_ff @(posedge clk) begin
+		if (reset) dt_tile_bank <= 32'd0;
+		else if (dt_tbank_w) dt_tile_bank[{io_addr[2:1], 3'd0} +: 8] <= io_wdata[7:0];
+	end
+
+	// the 65C02 clock, 16 MHz / 8
+	logic [5:0] sub_div = 6'd0;
+	always_ff @(posedge clk) sub_div <= (sub_div == 6'd47) ? 6'd0 : sub_div + 6'd1;
+
+	wire [7:0] dt_shr_q;
+	downtown_sub u_sub (
+		.clk(clk), .reset(reset), .ce(sub_div == 6'd0),
+		.sub_map(dt_sub_map), .bank_entries(dt_sub_bank_entries),
+		.m_shr_req(io_req && dt_shared), .m_shr_we(io_we && io_lds),
+		.m_shr_addr(io_addr[11:1]), .m_shr_wdata(io_wdata[7:0]), .m_shr_rdata(dt_shr_q),
+		.m_ctrl_we(dt_subctrl), .m_ctrl_addr(io_addr[2:1]), .m_ctrl_wdata(io_wdata[7:0]),
+		.p1_in(p1_in[7:0]), .p2_in(p2_in[7:0]), .coins_in(coins_in[7:0]),
+		.rot1(rot1), .rot2(rot2),
+		.line_112(irq_sl112_pulse), .line_240(irq_sl240_pulse),
+		.rom_req(sub_rom_req), .rom_addr(sub_rom_addr),
+		.rom_valid(sub_rom_valid), .rom_data(sub_rom_data)
+	);
+
+	// downtown_protection_r/w: 256 bytes at 0x200000, power-on 0xff; with job
+	// byte (0x2000f8) 0xa3, 0x200100-0x20010a read "WALTZ0"
+	logic [7:0] dt_prot_ram [0:255];
+	initial for (int i = 0; i < 256; i++) dt_prot_ram[i] = 8'hff;
+	logic [7:0] dt_prot_q, dt_job;
+	wire  dt_prot_hit = (dt_prot == 2'd1) && io_addr[23:9] == 15'h1000;       // 0x200000-0x2001ff
+	always_ff @(posedge clk) begin
+		if (io_req && io_we && io_lds && dt_prot_hit) begin
+			dt_prot_ram[io_addr[8:1]] <= io_wdata[7:0];
+			if (io_addr[8:1] == 8'h7c) dt_job <= io_wdata[7:0];
+		end
+		dt_prot_q <= dt_prot_ram[io_addr[8:1]];
+	end
+	initial dt_job = 8'hff;
+	logic [7:0] dt_waltz;
+	always_comb begin
+		case (io_addr[8:1])
+			8'h80: dt_waltz = "W";  8'h81: dt_waltz = "A";  8'h82: dt_waltz = "L";
+			8'h83: dt_waltz = "T";  8'h84: dt_waltz = "Z";  8'h85: dt_waltz = "0";
+			default: dt_waltz = 8'h00;
+		endcase
+	end
+	wire dt_waltz_hit = dt_job == 8'ha3 && io_addr[8:1] >= 8'h80 && io_addr[8:1] <= 8'h85;
+
+	// twineagl_200100: eight bytes at 0x200100-0x20010f
+	logic [7:0] dt_xram [0:7];
+	wire  dt_xram_hit = (dt_prot == 2'd2) && io_addr[23:4] == 20'h20010;      // 0x200100-f
+	always_ff @(posedge clk)
+		if (io_req && io_we && io_lds && dt_xram_hit) dt_xram[io_addr[3:1]] <= io_wdata[7:0];
+
+	// metafox_protection_r at 0x21c000-0x21ffff: 0x3d, 0x76, 0x10 at +0x0001,
+	// +0x1001, +0x2001, else the word offset * 0x1f
+	wire  dt_mf_in  = (dt_prot == 2'd3) && dt_byte >= 24'h21C000 && dt_byte <= 24'h21FFFF;
+	wire [12:0] dt_mf_rel = io_addr[13:1];                                     // (byte - 0x21c000) / 2
+	wire [15:0] dt_mf_q = (dt_mf_rel == 13'h0000) ? 16'h003d
+	                    : (dt_mf_rel == 13'h0800) ? 16'h0076
+	                    : (dt_mf_rel == 13'h1000) ? 16'h0010
+	                    : ({3'd0, dt_mf_rel} * 16'h1f);
+`else
+	assign dt_tile_bank = 32'd0;
+	wire        dt_ctrl_w = 1'b0;
+	assign sub_rom_req = 1'b0;
+	assign sub_rom_addr = 19'd0;
+`endif
 
 	wire pit_out0;
 	logic pit_out0_d;
@@ -617,6 +747,11 @@ module seta_core (
 		if (has_ack2 && io_req && io_addr == ack2_addr && ack2_level != 3'd0
 		    && (!ack_wr_only || io_we))
 			irq_clr[ack2_level] = 1'b1;
+
+		if (dt_ctrl_w) begin
+			irq_clr[3'd1] = 1'b1;
+			irq_clr[3'd3] = 1'b1;
+		end
 	end
 
 	seta_irq u_irq (
@@ -635,12 +770,16 @@ module seta_core (
 		else                     pit_div <= pit_div + 7'd1;
 	end
 
+`ifndef SETA_DOWNTOWN
 	seta_pit u_pit (
 		.clk(clk), .reset(reset), .ce(pit_ce),
 		.we(io_req && io_we && io_sel[IO_PIT] && io_lds),
 		.addr(io_addr[2:1]), .wdata(io_wdata[7:0]),
 		.out0(pit_out0)
 	);
+`else
+	assign pit_out0 = 1'b0;
+`endif
 
 	wire        snd_rom_req;
 	wire [19:0] snd_rom_addr;
@@ -706,6 +845,13 @@ module seta_core (
 	// io read mux; unmapped reads are zero
 	always_comb begin
 		io_rdata = 16'h0000;
+`ifdef SETA_DOWNTOWN
+		if (dt_shared)               io_rdata = {8'h00, dt_shr_q};
+		else if (dt_prot_hit)        io_rdata = {8'h00, dt_waltz_hit ? dt_waltz : dt_prot_q};
+		else if (dt_xram_hit)        io_rdata = {8'h00, dt_xram[io_addr[3:1]]};
+		else if (dt_mf_in)           io_rdata = dt_mf_q;
+		else
+`endif
 		if      (tl_prot_rd_hit)     io_rdata = {8'h00, tl_prot_value};
 		// palette SRAM first: both bits are set on a palette address
 		else if (io_sel[IO_XRAM])    io_rdata = xram_q;
@@ -739,7 +885,11 @@ module seta_core (
 		end
 	end
 
+`ifdef SETA_DOWNTOWN
+	seta_sdram_top #(.SUB(1'b1)) u_sdram (
+`else
 	seta_sdram_top u_sdram (
+`endif
 		.clk(clk), .reset(mem_reset), .init(init),
 		.SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ), .SDRAM_DQML(SDRAM_DQML),
 		.SDRAM_DQMH(SDRAM_DQMH), .SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS),
@@ -760,6 +910,8 @@ module seta_core (
 		.spr_valid(spr_valid), .spr_data(spr_data),
 		.snd_req(snd_rom_req), .snd_addr(snd_phys),
 		.snd_valid(snd_rom_valid), .snd_data(snd_rom_data),
+		.sub_req(sub_rom_req), .sub_addr(sub_rom_addr),
+		.sub_valid(sub_rom_valid), .sub_data(sub_rom_data),
 		.ldr_start(ldr_start), .ldr_active(ldr_active),
 		.ldr_ddr_req(ldr_ddr_req), .ldr_ddr_addr(ldr_ddr_addr),
 		.ldr_ddr_busy(ldr_ddr_busy), .ldr_ddr_valid(ldr_ddr_valid),

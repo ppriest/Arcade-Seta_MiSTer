@@ -39,6 +39,8 @@ KINDS = {
     "ROM_LOAD16_BYTE": "load16_byte",
     "ROM_LOAD16_WORD_SWAP": "load16_wswap",
     "ROM_LOAD": "load",
+    # downtown.cpp: bytes as they are in the file, like ROM_LOAD
+    "ROM_LOAD16_WORD": "load",
     # The 6bpp tile layers, and macros seta.cpp defines itself rather
     # than MAME core ones: ROM_SKIP(2) and GROUPWORD|REVERSE|SKIP(1),
     # loaded at 0 and 1 so the region comes out as 3-byte groups.
@@ -110,6 +112,14 @@ def region_records(body, want="maincpu"):
                      r'\s*(0x[0-9a-fA-F]+)', line)
         if m:
             records.append(("continue", None,
+                            int(m.group(1), 16), int(m.group(2), 16), None))
+            continue
+        # ROM_RELOAD(dest, length): the previous file again, from its start,
+        # the same way (downtown.cpp's "sub" regions)
+        m = re.match(r'ROM_RELOAD\s*\(\s*(0x[0-9a-fA-F]+)\s*,'
+                     r'\s*(0x[0-9a-fA-F]+)', line)
+        if m:
+            records.append(("reload", None,
                             int(m.group(1), 16), int(m.group(2), 16), None))
             continue
         if line.startswith(("ROM_LOAD", "ROM_CONTINUE", "ROMX_LOAD", "ROM_FILL",

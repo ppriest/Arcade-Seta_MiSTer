@@ -72,7 +72,8 @@ It prints every clock's slack before copying anything. This exists because a Psi
 mid-Fitter and the deploy that followed happily verified the *previous* build's stale `.rbf` as
 green.
 
-Cores land as `Arcade-Seta_NNNNNNNN.rbf` with an **incrementing number read back from the device**,
+Cores land as `Seta_NNNNNNNN.rbf` (`SetaDowntown_NNNNNNNN.rbf`), the release file's `Arcade-` prefix
+dropped, with an **incrementing number read back from the device**,
 so earlier builds stay on the machine as fallbacks. MiSTer launches the highest-numbered one, so
 renaming the newest to `.held` drops back one — a one-command bisection across deployed builds.
 

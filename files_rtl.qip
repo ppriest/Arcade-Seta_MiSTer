@@ -1,0 +1,68 @@
+# RTL shared by the Seta and Seta_Downtown cores.
+
+# Debug instrumentation, ported from Arcade-Fuuki_MiSTer (docs/WORKFLOW.md).
+# Listed here from the start so `scripts/build.sh --map` type-checks them on
+# every build, before anything instantiates them.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/debug_counter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/debug_tracer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/issp_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pause_control.sv
+
+# CPU -- fx68k, cycle-accurate 68000. See rtl/cpu/fx68k/PROVENANCE.md.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/fx68k/fx68k.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/fx68k/fx68kAlu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/fx68k/uaddrPla.sv
+set_global_assignment -name MIF_FILE rtl/cpu/fx68k/microrom.mem
+set_global_assignment -name MIF_FILE rtl/cpu/fx68k/nanorom.mem
+
+# ---------------------------------------------------------------------------
+# Memory transport, vendored from Arcade-Fuuki_MiSTer (which took sdram.sv from
+# Psikyo, which took it from Sorgelig). See rtl/memory/sdram/PROVENANCE.md.
+# ---------------------------------------------------------------------------
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram/sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram_phy.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram_arbiter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram_download.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram_narrow_bridge.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/rom_loader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ddram_phy.sv
+
+# Main CPU wrapper: fx68k plus address decode and bus sequencing.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/maincpu.sv
+
+# Sound -- X1-010, written from MAME (no FPGA implementation exists).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/x1_010.sv
+
+# ---------------------------------------------------------------------------
+# Video
+#
+# screen_rotate_two.sv is vendored MiSTer-devel code (Sorgelig) and is left
+# UNTOUCHED: it references signals before declaring them, which Quartus accepts
+# and ModelSim rejects (vlog-2730). It is therefore excluded from simulation by
+# scripts/run_sim.sh rather than patched.
+# ---------------------------------------------------------------------------
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/x1_001.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/x1_012.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_pal_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/x1_011_index.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_palette.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_video_timing.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_video.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/crt_adjust.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/seta_crt.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/screen_rotate_two.sv
+
+# The sprite region's download-time layout permutation, and the SDRAM backend
+# that applies it.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/gfx_swizzle.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/seta_sdram_top.sv
+
+# Interrupts, per-game configuration, pairlove's write-history block, and the
+# core that ties the lot together.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/seta_pit.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/adc0834.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/seta_irq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_board_cfg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_prot_pairlove.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_prot_thunderl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/seta_core.sv

@@ -50,7 +50,8 @@ wire signed [15:0] core_audio_l, core_audio_r;
 assign AUDIO_S   = 1;
 assign AUDIO_L   = core_audio_l;
 assign AUDIO_R   = core_audio_r;
-assign AUDIO_MIX = 0;
+// OSD Audio mix: Mono (default), None, 25%, 50%; AUDIO_MIX 3 is mono
+assign AUDIO_MIX = (status[124:123] == 2'd0) ? 2'd3 : status[124:123] - 2'd1;
 
 //////////////////////////////////////////////////////////////////
 
@@ -79,8 +80,13 @@ localparam DEBUG_MENU_HIDE = 1'b0;
 localparam DEBUG_MENU_HIDE = 1'b1;
 `endif
 wire debug_menu_hide = DEBUG_MENU_HIDE;
+`ifdef SETA_DOWNTOWN
+localparam CORE_NAME = "Seta_Downtown";
+`else
+localparam CORE_NAME = "Seta";
+`endif
 localparam CONF_STR = {
-	"Seta;;",
+	CORE_NAME, ";;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O[64:63],Rotation,Auto,Off,CW,CCW;",
@@ -89,12 +95,12 @@ localparam CONF_STR = {
 	"O[70:69],Crop,Off,216 lines,224 lines;",
 	"O[75:71],Crop offset,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"O[46:44],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+	"O[124:123],Audio mix,Mono,None,25%,50%;",
 	"-;",
 	"O[94],CRT adjust,Off,On;",
 	"H3O[99:95],CRT H-Size,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"H3O[106:100],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"H3O[112:107],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
-	"H4O[113],CRT width,Native,Match 384;",
 	"-;",
 	// gun games (H2)
 	"H2O[86:85],Crosshair,Off,P1,P2,P1+P2;",
@@ -130,7 +136,7 @@ wire   [1:0] buttons;
 wire [127:0] status;
 wire  [10:0] ps2_key;
 wire  [24:0] ps2_mouse;
-wire [31:0] joystick_0, joystick_1;
+wire [31:0] joystick_0, joystick_1, joystick_2, joystick_3;
 wire [15:0] joystick_l_analog_0, joystick_l_analog_1;
 
 wire        ioctl_download;
@@ -156,10 +162,12 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({11'd0, ~narrow_320, ~status[94], ~gun_game, debug_menu_hide, 1'b0}),  // H1 Debug, H2 gun, H3 CRT adjust, H4 320-wide
+	.status_menumask({12'd0, ~status[94], ~gun_game, debug_menu_hide, 1'b0}),  // H1 Debug, H2 gun, H3 CRT adjust
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
+	.joystick_2(joystick_2),
+	.joystick_3(joystick_3),
 	.joystick_l_analog_0(joystick_l_analog_0),
 	.joystick_l_analog_1(joystick_l_analog_1),
 
@@ -308,7 +316,6 @@ endfunction
 
 wire [2:0] input_layout;
 wire       gun_game;
-wire       narrow_320;
 wire [35:0] gun_aim;
 
 // daioh EXTRA: P1 buttons 4-6 at 0-2, P2 at 3-5
@@ -332,6 +339,37 @@ wire [31:0] joy_gun [0:1];
 assign joy_gun[0] = joystick_0 | (ms_sel[0] ? {26'd0, ps2_mouse[1], ps2_mouse[0], 4'd0} : 32'd0);
 assign joy_gun[1] = joystick_1 | (ms_sel[1] ? {26'd0, ps2_mouse[1], ps2_mouse[0], 4'd0} : 32'd0);
 
+`ifdef SETA_DOWNTOWN
+// downtown.cpp: input_layout 0 is common_type1 (LRUD at 0-3, as seta_port's
+// JOY2), 1 is common_type2 (UDLR at 0-3). COINS: type1 COIN1 0, COIN2 1,
+// START1 2, START2 3, SERVICE1 4, TILT 5; type2 TILT 4, SERVICE1 5, COIN2 6,
+// COIN1 7.
+function automatic [7:0] dt_port(input [31:0] j, input [2:0] layout);
+	dt_port = (layout == 3'd1) ? {j[10], 1'b0, j[5], j[4], j[0], j[1], j[2], j[3]}
+	                           : seta_port(j, 3'd0);
+endfunction
+wire [15:0] p1_in = ~{8'h00, dt_port(joystick_0, input_layout)};
+wire [15:0] p2_in = ~{8'h00, dt_port(joystick_1, input_layout)};
+wire [15:0] coins_in = (input_layout == 3'd1)
+	? ~{8'h00, joystick_0[11], joystick_1[11], joystick_0[13], 1'b0, 4'h0}
+	: ~{8'h00, 2'b00, 1'b0, joystick_0[13], joystick_1[10], joystick_0[10], joystick_1[11], joystick_0[11]};
+
+// DownTown's 12-position rotary joysticks: buttons 3 and 4 step them
+reg  [3:0] rot_pos [0:1];
+reg  [1:0] rot_btn_d [0:1];
+wire [1:0] rot_btn [0:1];
+assign rot_btn[0] = joystick_0[7:6];
+assign rot_btn[1] = joystick_1[7:6];
+integer ri;
+always @(posedge clk_sys) begin
+	for (ri = 0; ri < 2; ri = ri + 1) begin
+		rot_btn_d[ri] <= rot_btn[ri];
+		if (reset) rot_pos[ri] <= 4'd0;
+		else if (rot_btn[ri][0] & ~rot_btn_d[ri][0]) rot_pos[ri] <= (rot_pos[ri] == 4'd0)  ? 4'd11 : rot_pos[ri] - 4'd1;
+		else if (rot_btn[ri][1] & ~rot_btn_d[ri][1]) rot_pos[ri] <= (rot_pos[ri] == 4'd11) ? 4'd0  : rot_pos[ri] + 4'd1;
+	end
+end
+`else
 wire [15:0] p1_in = ~{8'h00, seta_port(joy_gun[0], input_layout)};
 wire [15:0] p2_in = ~{8'h00, seta_port(joy_gun[1], input_layout)};
 
@@ -344,6 +382,7 @@ wire [15:0] coins_in = {
 	~joystick_1[11],    // 1 COIN2
 	~joystick_0[11]     // 0 COIN1
 };
+`endif
 
 // Pause: joystick bit 12 toggles; the Debug page's Pause CPU is ORed in.
 wire pause_btn = joystick_0[12] | joystick_1[12];
@@ -358,9 +397,9 @@ wire [12:0] dbg_rd_idx;
 wire [31:0] dbg_spr_rd;
 wire pause_core = pause_toggle | status[82] | dbg_rd_en;
 
-// P3/P4: wits only
-wire [15:0] p3_in = 16'hffff;
-wire [15:0] p4_in = 16'hffff;
+// P3/P4: wits only (wits_map 0xb00008, 0xb0000a), MiSTer joysticks 3 and 4
+wire [15:0] p3_in = ~{8'h00, seta_port(joystick_2, input_layout)};
+wire [15:0] p4_in = ~{8'h00, seta_port(joystick_3, input_layout)};
 
 ///////////////////////   THE GAME   /////////////////////////////
 
@@ -522,7 +561,7 @@ seta_core seta_core
 
 	.game(mod_byte[4:0]),
 	.game_rot(game_rot), .input_layout(input_layout), .gun_game(gun_game),
-	.narrow_320(narrow_320),
+	.narrow_320(),
 	.gun_aim(gun_aim),
 
 	.SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ),
@@ -543,6 +582,11 @@ seta_core seta_core
 
 	.p1_in(p1_in), .p2_in(p2_in), .coins_in(coins_in), .extra_in(extra_in),
 	.p3_in(p3_in), .p4_in(p4_in), .dsw_in(dsw_in),
+`ifdef SETA_DOWNTOWN
+	.rot1(rot_pos[0]), .rot2(rot_pos[1]),
+`else
+	.rot1(4'd0), .rot2(4'd0),
+`endif
 	.gun_ch(gun_ch),
 
 	.pause_cpu(pause_core),
@@ -712,15 +756,14 @@ wire vga_de_raw;
 // The output chain runs at clk_video, 48 MHz (half clk_sys, same PLL): the
 // scandoubler/HQ2x blender does not meet timing at 96 MHz.
 //
-// CRT adjust and CRT width (rtl/video/seta_crt.sv); bypassed when both are off
-// or the scandoubler runs.
+// CRT adjust (rtl/video/seta_crt.sv); bypassed when it is off or the
+// scandoubler runs.
 wire [7:0] crt_r, crt_g, crt_b;
 wire       crt_hs, crt_vs, crt_hb, crt_vb, crt_on, crt_ce;
 
 seta_crt u_crt (
 	.clk(clk_sys), .ce(core_ce),
 	.adjust(status[94] & ~forced_scandoubler),
-	.wide(status[113] & narrow_320 & ~forced_scandoubler),
 	.hsize_idx(status[99:95]), .hpos_idx(status[106:100]), .vshift_idx(status[112:107]),
 	.r_in(ovl_r), .g_in(ovl_g), .b_in(ovl_b),
 	.hs_in(core_hs), .vs_in(core_vs), .hb_in(core_hb), .vb_in(core_vb),

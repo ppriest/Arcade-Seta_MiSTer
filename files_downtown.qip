@@ -1,0 +1,15 @@
+set_global_assignment -name SDC_FILE Seta.sdc
+# Seta_Downtown.sv defines SETA_DOWNTOWN and includes Seta.sv.
+set_global_assignment -name SYSTEMVERILOG_FILE Seta_Downtown.sv
+set_global_assignment -name QIP_FILE files_rtl.qip
+
+# The 65C02 sub CPU (rtl/cpu/t65/PROVENANCE.md), package first.
+set_global_assignment -name VHDL_FILE rtl/cpu/t65/T65_Pack.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/t65/T65_ALU.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/t65/T65_MCode.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/t65/T65.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/t65c02.vhd
+
+# downtown.cpp board: per-game table and the 65C02 system.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/downtown/downtown_board_cfg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/downtown/downtown_sub.sv

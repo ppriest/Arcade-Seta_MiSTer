@@ -1,7 +1,8 @@
 // SDRAM: every ROM the core reads at runtime, on one chip through sdram.sv's
 // three fixed-priority ports (port 0 preempts 1, 1 preempts 2):
 //   port 0  sprite and tile graphics   (arbiter, 3 clients)
-//   port 1  X1-010 samples             (byte bridge)
+//   port 1  X1-010 samples             (byte bridge), and with SUB the
+//           downtown.cpp 65C02's ROM     (a second byte bridge)
 //   port 2  CPU program, ROM download   (word bridge + download)
 //
 // Address map, per layout (bases below; scripts/build_mra.py reads the
@@ -12,13 +13,16 @@
 //   D  gfx1 2M, gfx2 4M (4 MB), gfx3 8M, x1snd 10M      6bpp sets
 //   E  gfx1 2M (8 MB), gfx2 10M, gfx3 12M, x1snd 16M    gundhara
 //   F  gfx1 2M, gfx2 4M, gfx3 7M, x1snd 10M (4 MB)      zombraid
+//   G  maincpu 0, gfx1 1M (2 MB), gfx2 3M, x1snd 5M, sub 6M  downtown.cpp
 //
 // On the way in, the sprite region's word addresses are permuted
 // (gfx_swizzle.sv) and, for ROMREGION_INVERT, its bytes inverted.
 
 `default_nettype none
 
-module seta_sdram_top (
+module seta_sdram_top #(
+	parameter bit SUB = 1'b0
+) (
 	input  wire clk,
 
 	// reset & ~ioctl_download: MiSTer holds reset for the whole download
@@ -82,6 +86,12 @@ module seta_sdram_top (
 	output wire        snd_valid,
 	output wire  [7:0] snd_data,
 
+	// downtown.cpp "sub" region, byte address (SUB)
+	input  wire        sub_req,
+	input  wire [18:0] sub_addr,
+	output wire        sub_valid,
+	output wire  [7:0] sub_data,
+
 	// fast ROM load (rom_loader.sv); Seta.sv starts it
 	input  wire        ldr_start,
 	output wire        ldr_active,      // copying: Seta.sv holds the core in reset
@@ -123,19 +133,27 @@ module seta_sdram_top (
 	wire layout_d = (layout == 3'd3);
 	wire layout_e = (layout == 3'd4);
 	wire layout_f = (layout == 3'd5);
+	wire layout_g = (layout == 3'd6);
+
+	// LAYOUT_G: downtown.cpp
+	localparam logic [25:0] BASE_GFX2_G    = 26'h030_0000;   // 2 MB
+	localparam logic [25:0] BASE_X1SND_G   = 26'h050_0000;   // 1 MB
+	localparam logic [25:0] BASE_SUB_G     = 26'h060_0000;   // 512 KB
 
 	wire   [25:0] BASE_GFX1 = layout_f ? BASE_GFX1_F :
 	                          layout_e ? BASE_GFX1_E :
 	                          layout_d ? BASE_GFX1_D :
 	                          layout_c ? BASE_GFX1_C : BASE_GFX1_AB;
-	wire   [25:0] BASE_GFX2 = layout_f ? BASE_GFX2_F :
+	wire   [25:0] BASE_GFX2 = layout_g ? BASE_GFX2_G :
+	                          layout_f ? BASE_GFX2_F :
 	                          layout_e ? BASE_GFX2_E :
 	                          layout_d ? BASE_GFX2_D :
 	                          layout_c ? BASE_GFX2_C : BASE_GFX2_B;
 	// localparams, not wires, so build_mra.py can read them
 	localparam logic [25:0] BASE_X1SND_A = 26'h030_0000;
 	localparam logic [25:0] BASE_X1SND_B = 26'h040_0000;
-	wire   [25:0] BASE_X1SND = layout_f ? BASE_X1SND_F :
+	wire   [25:0] BASE_X1SND = layout_g ? BASE_X1SND_G :
+	                           layout_f ? BASE_X1SND_F :
 	                           layout_e ? BASE_X1SND_E :
 	                           layout_d ? BASE_X1SND_D :
 	                           layout_c ? BASE_X1SND_C :
@@ -200,9 +218,10 @@ module seta_sdram_top (
 		.dl_we16(sd_we16), .dl_busy(dl_busy)
 	);
 
-	// Fast ROM load. The copy ends at the top of the layout's x1snd region,
-	// where every .mra image for that layout ends.
-	wire [27:0] ldr_length = {2'd0, layout_f ? BASE_X1SND_F + 26'h040_0000 :
+	// Fast ROM load. The copy ends at the top of the layout's last region
+	// (x1snd; the sub region in G), where every .mra image for it ends.
+	wire [27:0] ldr_length = {2'd0, layout_g ? BASE_SUB_G   + 26'h008_0000 :
+	                                layout_f ? BASE_X1SND_F + 26'h040_0000 :
 	                                layout_e ? BASE_X1SND_E + 26'h010_0000 :
 	                                layout_d ? BASE_X1SND_D + 26'h010_0000 :
 	                                layout_c ? BASE_X1SND_C + 26'h020_0000 :
@@ -351,15 +370,50 @@ module seta_sdram_top (
 		.g_valid(snd_g_valid), .g_data(snd_g_data)
 	);
 
-	sdram_arbiter #(.N(1)) u_arb1 (
-		.clk(clk), .reset(reset),
-		.phy_req(phy_req[1]), .phy_we(phy_we[1]), .phy_we16(phy_we16[1]),
-		.phy_addr(phy_addr[1]), .phy_wdata(phy_wdata[1]),
-		.phy_busy(phy_busy[1]), .phy_valid(phy_valid[1]), .phy_rdata(phy_rdata[1]),
-		.c_req(snd_g_req), .c_addr(snd_g_addr + BASE_X1SND),
-		.c_valid(snd_g_valid), .c_rdata(snd_g_data),
-		.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
-	);
+	generate
+		if (SUB) begin : g_sub
+			wire        sub_g_req;
+			wire [25:0] sub_g_addr;
+			wire  [1:0] arb1_valid;
+			wire [63:0] arb1_rdata;
+
+			sdram_narrow_bridge #(.WORD_BYTES(1)) u_sub_bridge (
+				.clk(clk), .reset(reset),
+				.inval(ioctl_download),
+				.req(sub_req), .addr({7'd0, sub_addr}),
+				.valid(sub_valid), .data(sub_data),
+				.g_req(sub_g_req), .g_addr(sub_g_addr),
+				.g_valid(arb1_valid[1]), .g_data(arb1_rdata)
+			);
+
+			assign snd_g_valid = arb1_valid[0];
+			assign snd_g_data  = arb1_rdata;
+
+			sdram_arbiter #(.N(2)) u_arb1 (
+				.clk(clk), .reset(reset),
+				.phy_req(phy_req[1]), .phy_we(phy_we[1]), .phy_we16(phy_we16[1]),
+				.phy_addr(phy_addr[1]), .phy_wdata(phy_wdata[1]),
+				.phy_busy(phy_busy[1]), .phy_valid(phy_valid[1]), .phy_rdata(phy_rdata[1]),
+				.c_req({sub_g_req, snd_g_req}),
+				.c_addr({sub_g_addr + BASE_SUB_G, snd_g_addr + BASE_X1SND}),
+				.c_valid(arb1_valid), .c_rdata(arb1_rdata),
+				.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
+			);
+		end else begin : g_nosub
+			assign sub_valid = 1'b0;
+			assign sub_data  = 8'h00;
+
+			sdram_arbiter #(.N(1)) u_arb1 (
+				.clk(clk), .reset(reset),
+				.phy_req(phy_req[1]), .phy_we(phy_we[1]), .phy_we16(phy_we16[1]),
+				.phy_addr(phy_addr[1]), .phy_wdata(phy_wdata[1]),
+				.phy_busy(phy_busy[1]), .phy_valid(phy_valid[1]), .phy_rdata(phy_rdata[1]),
+				.c_req(snd_g_req), .c_addr(snd_g_addr + BASE_X1SND),
+				.c_valid(snd_g_valid), .c_rdata(snd_g_data),
+				.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
+			);
+		end
+	endgenerate
 
 	// port 2: CPU program and the download
 	wire        cpu_g_req;

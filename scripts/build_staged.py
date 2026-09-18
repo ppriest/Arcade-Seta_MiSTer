@@ -120,7 +120,7 @@ def report_resources(stage):
 #
 # Slack alone cannot catch that. Presence has to be asserted separately.
 REQUIRED_INSTANCES = (
-    "TG68KdotC_Kernel",   # the CPU
+    "fx68k",              # the CPU
     "x1_001",             # sprites
     "x1_010",             # sound
     "seta_video",         # palette, timing, the two scanline interrupts

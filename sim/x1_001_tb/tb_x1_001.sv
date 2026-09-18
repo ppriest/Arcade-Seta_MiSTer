@@ -73,10 +73,12 @@ module tb_x1_001;
 	logic        line_start = 0;
 	logic        vblank_rise = 0;
 	logic        snap_start  = 0;
+	logic        snap_pre    = 0;
 	// +nocopy: skip the setac_eof copy test (render straight from the dump).
 	logic        copy_test = 1'b1;
 	int          copy_bad = 0;
 	int          race_bad = 0;
+	int          pair_bad = 0;
 	logic  [8:0] line = 0;
 	wire         line_done, busy;
 
@@ -116,8 +118,9 @@ module tb_x1_001;
 		.screen_h(cfgv[C_SCRH][8:0]), .vis_max_y(cfgv[C_VISMAXY][8:0]),
 		.backdrop(cfgv[C_BACKDROP][LB_W-1:0]),
 		.code_mask(cfgv[C_CODEMASK][15:0]),
-		.vblank_rise(vblank_rise), .snap_start(snap_start),
-		.buffer_sprites(copy_test),
+		.vblank_rise(vblank_rise), .snap_start(snap_start), .snap_pre(snap_pre),
+		.buffer_sprites(copy_test), .copy_then_draw(1'b0),
+		.snap_at_line(1'b0),
 		.line_start(line_start), .line(line),
 		.line_done(line_done), .busy(busy),
 		.rom_req(rom_req), .rom_addr(rom_addr),
@@ -334,12 +337,44 @@ module tb_x1_001;
 			for (i = 0; i < 'h800; i++)
 				cpu_code_write((ctrlimg[1][6] ? 13'h0000 : 13'h1000) + i[12:0], 16'h0000);
 			vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+			// queued until the next snapshot has finished
+			repeat (100) @(posedge clk);
+			snap_start <= 1'b1; @(posedge clk); snap_start <= 1'b0;
 			repeat (12000) @(posedge clk);
 			copy_bad = 0;
 			for (i = 0; i < 'h800; i++)
 				if (dut.codemem[(ctrlimg[1][6] ? 13'h0000 : 13'h1000) + i[12:0]] !==
 				    dut.codemem[(ctrlimg[1][6] ? 13'h1000 : 13'h0000) + i[12:0]]) copy_bad++;
 			$display("  setac_eof copy (ctrl2 = %02x): %0d of 2048 words differ", ctrlimg[1], copy_bad);
+
+			// THE PAIRING. A draw-then-copy board: MAME draws a frame before that
+			// vblank's copy, so live Y goes with the half copied a vblank earlier.
+			// The snapshot ends before vblank (snap_pre), the copy runs at it.
+			// Frame A, then frame B with new codes and Y: B's snapshot must hold
+			// B's Y with A's codes, and a write after B's vblank must not reach it.
+			if (!ctrlimg[1][6]) begin
+				for (i = 0; i < 8; i++) cpu_code_write(i[12:0], 16'h1111);
+				snap_pre <= 1'b1; @(posedge clk); snap_pre <= 1'b0;
+				repeat (6000) @(posedge clk);
+				vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+				repeat (3000) @(posedge clk);
+				for (i = 0; i < 8; i++) begin
+					cpu_code_write(i[12:0], 16'h2222);
+					cpu_ylow_write(i[9:0], 8'h55);
+				end
+				snap_pre <= 1'b1; @(posedge clk); snap_pre <= 1'b0;
+				repeat (6000) @(posedge clk);
+				vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+				// the game rewriting its list straight after vblank start
+				for (i = 0; i < 8; i++) cpu_ylow_write(i[9:0], 8'hAA);
+				repeat (3000) @(posedge clk);
+				for (i = 0; i < 8; i++) begin
+					if ({dut.codesh_hi[{dut.rbuf, 11'(i)}], dut.codesh_lo[{dut.rbuf, 11'(i)}]} !== 16'h1111) pair_bad++;
+					if (dut.ylowsh[i[9:0]] !== 8'h55) pair_bad++;
+					if (dut.codemem[13'h1000 + i[12:0]] !== 16'h2222) pair_bad++;
+				end
+				$display("  buffered pairing: %0d of 24 checks wrong", pair_bad);
+			end
 			for (i = 0; i < 8192; i++) cpu_code_write(i[12:0], codeimg[i]);
 			copy_test = 1'b0;
 		end
@@ -353,24 +388,80 @@ module tb_x1_001;
 		// halves of the copy, and require the snapshot to hold what was
 		// written.
 		snap_start <= 1'b1; @(posedge clk); snap_start <= 1'b0;
-		repeat (300) @(posedge clk);            // the cursor is past 0x40 by now
+		wait (dut.snap_busy);
+		while (dut.snap_i < 14'h060) @(posedge clk);    // the cursor is past 0x40
 		for (i = 0; i < 64; i++)
-			cpu_code_write(13'h0040 + i[12:0], 16'hA500 + i[15:0]);
-		while (dut.snap_i < 14'd8400) @(posedge clk);   // into the Y half
+			cpu_code_write(dut.bank_off + 13'h0040 + i[12:0], 16'hA500 + i[15:0]);
+		while (dut.snap_i < 14'h880) @(posedge clk);    // into the Y bytes
 		for (i = 0; i < 32; i++)
 			cpu_ylow_write(10'h010 + i[9:0], 8'h3C);
 		while (dut.snap_busy) @(posedge clk);
+		repeat (2) @(posedge clk);              // the copy the engine reads moves
 		for (i = 0; i < 64; i++)
-			if (dut.codesh[13'h0040 + i[12:0]] !== (16'hA500 + i[15:0])) race_bad++;
+			if ({dut.codesh_hi[{dut.rbuf, 11'h040 + 11'(i)}], dut.codesh_lo[{dut.rbuf, 11'h040 + 11'(i)}]} !== (16'hA500 + i[15:0])) race_bad++;
 		for (i = 0; i < 32; i++)
 			if (dut.ylowsh[10'h010 + i[9:0]] !== 8'h3C) race_bad++;
+		// A HAND-FLIPPED PAGE takes a snapshot: setac_eof off (ctrl2 bit 5) and
+		// bit 6 -- the drawn bank -- changed. The half just finished is captured
+		// then, whatever the line (stg flips at 113).
+		begin
+			logic [7:0] c1 = ctrlimg[1] | 8'h20;
+			int flip_bad = 0;
+			cpu_ctrl_write(2'd1, c1);
+			while (dut.snap_busy || dut.snap_pending) @(posedge clk);
+			// the half the flip selects, written before it
+			cpu_code_write((c1[6] ^ 1'b1) ? 13'h1100 : 13'h0100, 16'hF00D);
+			cpu_ctrl_write(2'd1, c1 ^ 8'h40);        // the flip
+			repeat (6) @(posedge clk);
+			if (!dut.snap_busy && !dut.snap_pending) flip_bad++;
+			while (dut.snap_busy) @(posedge clk);
+			repeat (2) @(posedge clk);
+			// the flip copy waits for the usual snapshot, not vblank
+			if (dut.snap_ready !== 1'b1) flip_bad++;
+			vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+			repeat (4) @(posedge clk);
+			if (dut.snap_ready !== 1'b1) flip_bad++;
+			// a write to that half before then reaches the copy
+			cpu_code_write((c1[6] ^ 1'b1) ? 13'h1101 : 13'h0101, 16'hCAFE);
+			// the usual snapshot: Y and control, and the engine moves to the
+			// flip copy with them
+			cpu_ylow_write(10'h020, 8'h77);
+			snap_start <= 1'b1; @(posedge clk); snap_start <= 1'b0;
+			wait (dut.snap_busy);
+			while (dut.snap_busy) @(posedge clk);
+			repeat (2) @(posedge clk);
+			if (dut.snap_ready !== 1'b0 || dut.ylowsh[10'h020] !== 8'h77) flip_bad++;
+			if ({dut.codesh_hi[{dut.rbuf, 11'h100}], dut.codesh_lo[{dut.rbuf, 11'h100}]} !== 16'hF00D) flip_bad++;
+			if ({dut.codesh_hi[{dut.rbuf, 11'h101}], dut.codesh_lo[{dut.rbuf, 11'h101}]} !== 16'hCAFE) flip_bad++;
+			// with no flip since, the next usual snapshot leaves the codes
+			begin
+				logic rb = dut.rbuf;
+				snap_start <= 1'b1; @(posedge clk); snap_start <= 1'b0;
+				wait (dut.snap_busy);
+				while (dut.snap_busy) @(posedge clk);
+				repeat (2) @(posedge clk);
+				if (dut.rbuf !== rb) flip_bad++;
+			end
+			// a write after the move must not reach the copy being drawn
+			cpu_code_write((c1[6] ^ 1'b1) ? 13'h1100 : 13'h0100, 16'hBAAD);
+			repeat (40) @(posedge clk);
+			if ({dut.codesh_hi[{dut.rbuf, 11'h100}], dut.codesh_lo[{dut.rbuf, 11'h100}]} !== 16'hF00D) flip_bad++;
+			cpu_ctrl_write(2'd1, ctrlimg[1]);
+			while (dut.snap_busy || dut.snap_pending) @(posedge clk);
+			vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;
+			repeat (4) @(posedge clk);
+			$display("  page flip (ctrl2 bit 5 set, bit 6 changed): %0d of 9 checks wrong",
+			         flip_bad);
+			if (flip_bad) race_bad += flip_bad;
+		end
+
 		$display("  written during the copy: %0d of 96 words missing from the snapshot",
 		         race_bad);
 		for (i = 0; i < 'h300; i++)  cpu_ylow_write(i[9:0], ylowimg[i]);
 		for (i = 0; i < 8192; i++)   cpu_code_write(i[12:0], codeimg[i]);
 
 		// The engine renders from the snapshot taken late in vblank: take
-		// one, and wait out the 9216-cycle copy.
+		// one, and wait out the 5120-cycle copy.
 		snap_start <= 1'b1; @(posedge clk); snap_start <= 1'b0;
 		repeat (12000) @(posedge clk);
 
@@ -415,6 +506,8 @@ module tb_x1_001;
 		else if (race_bad != 0)
 			$display("FAIL: %0d word(s) written during the copy are not in the snapshot",
 			         race_bad);
+		else if (pair_bad != 0)
+			$display("FAIL: the snapshot pairs Y with the wrong buffered half");
 		else if (copy_bad != 0)
 			$display("FAIL: the setac_eof copy left %0d words wrong", copy_bad);
 		else if (bad != 0)

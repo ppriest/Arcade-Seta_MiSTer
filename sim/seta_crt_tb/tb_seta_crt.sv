@@ -1,18 +1,15 @@
 // seta_crt: where the picture lands, in clk cycles from the HSync rise.
 //   ref  : 384 wide, CRT adjust On, H-Size 0 (the module's native-rate path)
-//   wide : 320 wide, Match 384
 //   h10  : 320 wide, CRT adjust On, H-Size +10, H-Position -19
 //   pos-8: 384 wide, CRT adjust On, H-Position -8: ref moved 96 cycles left
-// Every source pixel must come out once, in order. wide must match ref's width
-// and start within half a read tick (7 cycles): output HSync is registered on
-// read ticks too. Line period is 6144 in all; H-Size moves the HSync fall by
-// up to a tick, so pulse width is checked for wide only.
+// Every source pixel must come out once, in order. Line period is 6144 in
+// all.
 
 `timescale 1ns/1ps
 `default_nettype none
 
 module crt_probe #(parameter string NAME = "", parameter bit NARROW = 0,
-                   parameter bit ADJUST = 0, parameter bit WIDE = 0,
+                   parameter bit ADJUST = 0,
                    parameter logic [4:0] HSIZE = 5'd0,
                    parameter logic [6:0] HPOS = 7'd0) (
 	input  wire         clk,
@@ -40,7 +37,7 @@ module crt_probe #(parameter string NAME = "", parameter bit NARROW = 0,
 	wire       hs_o, vs_o, hb_o, vb_o, act, ce_o;
 
 	seta_crt u_crt (
-		.clk(clk), .ce(ce), .adjust(ADJUST), .wide(WIDE),
+		.clk(clk), .ce(ce), .adjust(ADJUST),
 		.hsize_idx(HSIZE), .hpos_idx(HPOS), .vshift_idx(6'd0),
 		.r_in(hcount[7:0]), .g_in({6'd0, hcount[9:8]}), .b_in(vcount[7:0]),
 		.hs_in(hs), .vs_in(vs), .hb_in(hb), .vb_in(vb),
@@ -86,42 +83,34 @@ module tb_seta_crt;
 	always @(posedge clk) div <= (div == 4'd11) ? 4'd0 : div + 4'd1;
 	wire ce = (div == 4'd0);
 
-	int f[4], l[4], n[4], hp[4], hw[4];
-	bit o[4], d[4];
+	int f[3], l[3], n[3], hp[3], hw[3];
+	bit o[3], d[3];
 
 	crt_probe #(.NAME("ref"), .NARROW(0), .ADJUST(1)) p_ref (
 		.clk(clk), .ce(ce), .first_c(f[0]), .last_c(l[0]), .npix(n[0]),
 		.hs_period(hp[0]), .hs_width(hw[0]), .ordered(o[0]), .done(d[0]));
-	crt_probe #(.NAME("wide"), .NARROW(1), .WIDE(1)) p_wide (
+	crt_probe #(.NAME("h10"), .NARROW(1), .ADJUST(1), .HSIZE(5'd10), .HPOS(7'd78)) p_h10 (
 		.clk(clk), .ce(ce), .first_c(f[1]), .last_c(l[1]), .npix(n[1]),
 		.hs_period(hp[1]), .hs_width(hw[1]), .ordered(o[1]), .done(d[1]));
-	crt_probe #(.NAME("h10"), .NARROW(1), .ADJUST(1), .HSIZE(5'd10), .HPOS(7'd78)) p_h10 (
+	crt_probe #(.NAME("pos-8"), .NARROW(0), .ADJUST(1), .HPOS(7'd89)) p_pos (
 		.clk(clk), .ce(ce), .first_c(f[2]), .last_c(l[2]), .npix(n[2]),
 		.hs_period(hp[2]), .hs_width(hw[2]), .ordered(o[2]), .done(d[2]));
-	crt_probe #(.NAME("pos-8"), .NARROW(0), .ADJUST(1), .HPOS(7'd89)) p_pos (
-		.clk(clk), .ce(ce), .first_c(f[3]), .last_c(l[3]), .npix(n[3]),
-		.hs_period(hp[3]), .hs_width(hw[3]), .ordered(o[3]), .done(d[3]));
 
-	string names[4] = '{"ref ", "wide", "h10 ", "pos-8"};
+	string names[3] = '{"ref ", "h10 ", "pos-8"};
 	int fails = 0;
 	initial begin
-		wait (d[0] && d[1] && d[2] && d[3]);
-		for (int i = 0; i < 4; i++)
+		wait (d[0] && d[1] && d[2]);
+		for (int i = 0; i < 3; i++)
 			$display("%s  active %4d..%4d cycles (%4d)  pixels %3d  ordered %0d  hsync period %4d width %3d",
 			         names[i], f[i], l[i], l[i] - f[i], n[i], o[i], hp[i], hw[i]);
 		if (n[0] != 384 || !o[0]) begin $display("FAIL ref pixels"); fails++; end
-		if (n[1] != 320 || !o[1]) begin $display("FAIL wide pixels"); fails++; end
-		if (n[2] != 320 || !o[2]) begin $display("FAIL h10 pixels"); fails++; end
-		if (n[3] != 384 || !o[3] || f[3] != f[0] - 96 || l[3] != l[0] - 96) begin
+		if (n[1] != 320 || !o[1]) begin $display("FAIL h10 pixels"); fails++; end
+		if (n[2] != 384 || !o[2] || f[2] != f[0] - 96 || l[2] != l[0] - 96) begin
 			$display("FAIL pos-8 not ref shifted 96 cycles left"); fails++;
 		end
-		for (int i = 1; i < 4; i++)
+		for (int i = 1; i < 3; i++)
 			if (hp[i] != hp[0]) begin $display("FAIL %s line period", names[i]); fails++; end
-		if (hw[1] != hw[0]) begin $display("FAIL wide hsync width"); fails++; end
 		if (hp[0] != 6144) begin $display("FAIL line not 512 x 12"); fails++; end
-		if ((f[1] - f[0]) > 7 || (f[0] - f[1]) > 7 || (l[1] - f[1]) != (l[0] - f[0])) begin
-			$display("FAIL wide window not ref's to 7 cycles"); fails++;
-		end
 		if (fails) $display("FAIL"); else $display("PASS");
 		$finish;
 	end

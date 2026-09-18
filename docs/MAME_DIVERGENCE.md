@@ -76,7 +76,8 @@ The chips are identical across boards, so a per-game pixel offset is standing
 in for something structural. **Candidate for generalisation** — one rule could
 replace fourteen constants.
 
-*Transcribed per game. Not investigated.*
+*Transcribed per game. Analysed as signal delays in "The position offsets as
+signal delays" below; not restructured.*
 
 ### `seta_vregs_w`'s comment contradicts its code
 
@@ -135,32 +136,123 @@ as every Group A game on the same 16 MHz X1-001.
 
 ### Everything the renderer reads is sampled at vblank
 
-The X1-001 renders from a snapshot of its code, Y and control RAM taken late
-in vblank, five lines before the frame wraps; the X1-012 latches its scroll
-registers and bank bit at vblank, and the mixer its order register. MAME draws the whole frame at vblank from the
-registers' values then, which is the same picture. The chip reads scroll per
-scanline (MAME's own comment cites Caliber 50's underground raster effect),
-so a game that changes scroll mid-frame ON PURPOSE will not show it here.
-None of the twenty sets in scope does; Daioh and Eight Forces write scroll
-and their whole sprite list from the scanline-112 handler, and rendered live
-that showed as a tear across the middle of every frame.
+MAME draws each frame at once, at vblank, from the state then. This core
+renders line by line, so it holds every input to a frame at its vblank value.
+What the core does, where the timing comes from, and whether hardware
+confirms it:
 
-The TILE VRAM itself is NOT buffered -- the engine reads it live, as the chip
-does. Measured from MAME's write log: of Daioh's 151,802 mid-picture VRAM
-writes, 76,460 go to the bank being displayed and only 16,829 of those to a
-tile on screen at the current scroll -- about six visible-tile writes a frame
-(Eight Forces: 15,180, the same order). A handful of 16-pixel squares, against
-one scroll write that moves every line below it, which is what the split across
-the middle actually was.
+| input | the core | why | hardware |
+|-|-|-|-|
+| X1-012 scroll, bank, colour mode; mixer order | latched at vblank | Daioh and Eight Forces write scroll and their sprite list from the line-112 handler; rendered live that tore the middle of every frame | yes (release builds) |
+| X1-012 tile VRAM | CPU writes queued to vblank, 128 deep, live past that (below) | scroll is latched at vblank, so a tile written mid-frame for the new scroll shows under the old one | Gundhara right with it (062), occasional wrong tiles without (064); Blandia boots with the read drain (eed6f5b) |
+| X1-001 code, Y, control, unbuffered boards | snapshot 5 lines before the frame wraps, ~19 lines into vblank | the games write their lists in the first lines after vblank start (Mad Shark: over 90% in 8 lines); a snapshot at vblank drew sprites with each other's tiles | yes |
+| X1-001, a hand-flipped page (26 of 31 parents) | codes copied at the flip, from the half it selects; they go live with Y and control at the board's usual point (below) | with `setac_eof` off the game owns the two halves and the flip is its "list complete"; stg flips at line 113 and writes across the whole frame, so no point near vblank is clean for both halves | Strike Gunner right, attract including the asteroid scene (9d830c7); the other 25 not yet re-checked |
+| X1-001, other buffered boards | copy and snapshot at vblank, in each board's order | "`setac_eof`: the copy and the draw, in each board's order" | Quiz Kokology, Blandia, Mobile Suit Gundam right (e92059d); Strike Gunner's ship wrong on every order so far, the snapshot before vblank (0a0e86b) not yet built; Dragon Unit not yet tested |
 
-The sprite snapshot was first taken AT vblank, which is the line the games'
-vblank interrupt fires on, so its 9216-cycle copy walked the list while the
-handler rewrote it and a sprite drew with another sprite's tile or flip --
-only while the CPU ran, worst on Mad Shark. It now starts five lines before
-the wrap, and a CPU write during the copy goes to the snapshot too
-(`sim/x1_001_tb` writes behind the copy's cursor and checks).
+The chip reads scroll per scanline (MAME's comment cites Caliber 50's raster
+effect), so a game that changes scroll mid-frame on purpose would not show it
+here. None of the sets in scope is known to.
 
-*Deliberate; matches MAME's picture. Caliber 50 would need per-line scroll.*
+#### Strike Gunner: the game's own page flip takes the snapshot
+
+Its attract scene with the large grey ship shows wrong pieces of the ship on
+every fixed snapshot placement tried: the release order, snapshot-then-copy at
+vblank, the snapshot ending before vblank, and a snapshot at line 150. Probe G
+rules out the two cheap explanations: `eof_lost` (CPU writes dropped under the
+copy) sat at 14-16 and did not grow, and `lines_cut` (sprites dropped on a line
+over its time budget) at 3. The renderer is not at fault either:
+`x1_001_model.py` reproduces MAME's own screenshot pixel for pixel on ten
+frames through that scene (320-680).
+
+What the write log says (`debug/stg-sprlog`, frames 300-700, writes a frame
+per scanline):
+
+```
+    0 |3666656555544333221110......         .....0011111111111111221232|
+   64 |22100......0....  .                              ###############|
+  128 |2 .. .0. ..                           13334455454554544544444344|
+  192 |3333333321111232222211122211111111222233233333456666666666666666|
+```
+
+About 1000 words a frame: sprite Y from line 113 to 240, codes on nearly every
+line, 3-6 a line through vblank (192-255) and on into 0-27. The two quiet spans
+are mid-frame, lines 83-112 and 139-165. A snapshot takes about a line, so at
+any fixed line it copies a half-written list.
+
+The board tells the core when the list is complete. Strike Gunner sets
+`spritectrl[1]` bit 5 -- `setac_eof`'s copy off, measured over 3000 frames --
+and flips bit 6, the half the chip draws from, itself at line 113 on 2882 of
+those frames. The two halves are the game's own double buffer, and the flip is
+the game saying the half it has just written is ready.
+
+This is not Strike Gunner's alone. `scripts/sprctrl_scan.py` (600 frames of
+attract, every parent) finds 26 of 31 sets doing the same, one flip a frame:
+
+| behaviour | sets |
+|-|-|
+| `setac_eof` copy on, no flips | qzkklogy, qzkklgy2, msgundam, blandia |
+| copy off, no flips | eightfrc |
+| flip mid-frame | stg 113, zombraid 112, extdwnhl 112/254, sokonuke 113, daioh 117/132/229, atehate 118, gundhara 118, jjsquawk 119, oisipuzl 120, drgnunit 130, pairlove 130-223, umanclub 1-176, zingzip 44/254, wits 11, magspeed 2-17, wrofaero 0-210, kamenrid 5-254, neobattl 2-255 |
+| flip in vblank | madshark 246-255, downtown 254, thunderl 249, blockcar 251, arbalest 241, metafox 241, twineagl 0-1, rezon 0 |
+
+So `x1_001.sv` follows the board's rule, not a per-game switch. Once a game
+flips its own page (`page_flip`: a write to control byte 1 with bit 5 set and
+bit 6 changed; `own_flip` until bit 5 is cleared):
+
+- the codes are copied at the flip, from the half it selects, into the spare of
+  two copies (`codesh_lo`/`codesh_hi`, indexed `{buf, addr}`). CPU writes to
+  that half keep reaching the copy until the engine moves to it (`rbuf`).
+- the Y bytes and control bytes are taken at the board's usual snapshot point,
+  as before. Y is a single buffer, and Strike Gunner rewrites it from line 113
+  to 240, after its flip; taking it at the flip would pair new codes with the
+  previous frame's Y.
+- the engine moves to the flip copy when that usual snapshot lands, so codes
+  and Y change together. Moving at vblank instead (9d830c7) paired new Y with
+  old codes for a frame whenever the flip fell between vblank and the usual
+  snapshot: Mad Shark every frame (it writes its list and flips in the first
+  lines of vblank; a mess on hardware), Gundhara in play when slowdown pushes
+  its flip from line 118 towards vblank (468 of 3001 frames flip late in MAME
+  with a coin in; an occasional full-screen glitch on hardware). A flip after
+  the usual snapshot waits for the next one.
+
+A game that never flips its own page is snapshotted exactly as before: codes,
+Y and control together, used as they land.
+
+Reading sprite RAM live instead -- which is what the chip does -- was tried and
+does not work here, because this core renders a line at a time from RAM the
+game is still writing:
+
+- control bytes live: a line of garbage where bit 6 flipped mid-frame.
+- Y live: the lower half of the screen a mess. Y is a single buffer, not two,
+  rewritten from line 113 to 240.
+- codes live: a corrupt quarter in some attract scenes. The game does not
+  respect its own buffer everywhere -- in frames 300-700 it wrote 0 of 196854
+  words to the displayed half, but across 3000 frames 322 frames wrote it,
+  30-62 words at lines 47-76.
+
+#### Tile VRAM writes are queued to vblank
+
+MAME draws each tile layer at vblank from VRAM and scroll as they stand then.
+This core latches scroll at vblank (above), so VRAM read live would pair this
+frame's tiles with last frame's scroll wherever a game writes both mid-frame.
+Gundhara writes its layers' scroll at lines 112-119 and tile VRAM right across
+the frame (MAME, `scripts/write_timing.py gundhara`: about 73 words a frame).
+With VRAM live it shows occasional wrong tiles on hardware (064); with CPU
+writes queued to vblank it does not (062).
+
+`x1_012.sv` queues up to 128 CPU writes a frame and applies them at vblank.
+Past that the rest of the frame's writes go live, in order: Blandia and
+Mobile Suit Gundam write thousands a frame. A CPU read of VRAM drains that
+layer's queue first and is held (DTACK late) until the last queued write has
+landed, so it always returns what was written. Blandia needs this: it tests
+both layers' VRAM at boot (MAME: 12288 reads a layer, from PCs 0x20f2-0x217e),
+and with reads returning the value as of the last vblank it stopped with a
+black screen (hardware, 062 and 070). With the drain it boots and its intro
+illustration is right (hardware, eed6f5b). The queue costs two RAM blocks.
+
+The queue was first added for Strike Gunner's grey ship (ab152c6) and removed
+when that turned out to be the X1-001's floating tilemap, which the queue does
+not reach (289317b). Gundhara is the case that needs it.
 
 ### One read window in the supported maps is still undecoded
 
@@ -275,14 +367,100 @@ where a back-to-front renderer would drop the ones on top.
 *Measured: no visible cost across all captured frames at every ROM latency
 tested. Only two boot states with 536 sprites on one line are affected.*
 
-### `setac_eof` is not instantaneous
+### `setac_eof`: the copy and the draw, in each board's order
 
-MAME copies 0x800 words at the vblank edge in zero time. This core copies a
-word per cycle, ~21 µs at 96 MHz, holding the sprite RAM write port — so a CPU
-write into the destination half during that window is lost where MAME keeps it.
+On the buffered boards the X1-001 draws sprite code/X from a half of its code
+RAM that `setac_eof` copies at vblank, and Y live. Whether a frame shows the
+half copied at that vblank or at the one before depends on whether the copy
+comes before or after the draw, and the boards differ. This is not a per-game
+kludge; each line below is either MAME's board definition or a measurement.
 
-*Alternative is a second write port on an 8192-word RAM. Revisit if a game
-misbehaves in a way that points here.*
+| sets | PCB (seta.cpp's list) | MAME's screen | order | core |
+|-|-|-|-|-|
+| drgnunit | P0-053-1 | vblank callback, draw at vblank start | draw, then copy | snapshot on the line before vblank, copy at vblank |
+| stg, qzkklogy, qzkklgy2 | P0-053A | as drgnunit | draw, then copy | snapshot on the line before vblank, copy at vblank |
+| msgundam | P0-081A | as drgnunit | draw, then copy | snapshot on the line before vblank, copy at vblank |
+| blandia, blandiap | P0-078A, P0-072-2 | `VIDEO_UPDATE_AFTER_VBLANK`: the callback runs first | copy, then draw | copy at vblank, then snapshot |
+
+`seta_board_cfg.sv`'s `copy_then_draw` selects the order (blandia, blandiap).
+The snapshot copies the 4096 code words the engine reads and the 1024 Y bytes
+(5120 cycles, under a line). On the draw-then-copy boards it starts once the
+last visible line is rendered (`seta_video_timing.sv`'s `snap_pre`) and ends
+before vblank, so, as in MAME, writes before vblank reach the frame and writes
+from line 248 on do not; the copy (a word a clk, ~21 µs) runs at vblank. A CPU
+write during the copy is lost where MAME, copying in zero time, keeps it.
+
+**Evidence.**
+
+- *MAME's definitions:* `seta.cpp` gives only blandia and blandiap
+  `set_video_attributes(VIDEO_UPDATE_AFTER_VBLANK)`; all six connect
+  `screen_vblank_seta_buffer_sprites` (`setac_eof` on the rising edge).
+- *Rendering:* replaying MAME's Quiz Kokology write log over frames 2400-2800
+  and rendering both pairings gives 94 differing frames; copy-then-draw
+  reproduces the core's broken hardware screenshot, draw-then-copy is clean.
+- *Write timing* (`scripts/write_timing.py`, `docs/write_timing_mame.txt`):
+  - Quiz Kokology 1 and 2 write sprite Y, control and codes around line 112,
+    nowhere near vblank, in attract and play: the order is all that matters.
+  - Blandia writes Y and control in the 8 lines before vblank start and codes
+    after it (intro: 16-39 lines after; play: mid-frame, about lines 48-192).
+    Copying at vblank and drawing that half pairs this frame's Y with the codes
+    written after the previous vblank, which is how the game lays its update
+    out. Probe G on hardware agrees with MAME's lines (its counter is 2 ahead
+    of the interrupts'; last write per frame 249, maximum 267).
+  - Mobile Suit Gundam writes 23% of its Y in the first 2 lines after vblank
+    start; Strike Gunner's codes in play straddle vblank (2.4% in the first 2
+    lines, 18% in the first 24), Dragon Unit's partly (4% in the first 24).
+    In the ship scene Strike Gunner writes both halves from line 248 (3942
+    writes a half in the first 2 lines, frames 300-700), and on hardware
+    probe G's late_frames (a sprite write during the copy or snapshot) rose
+    every frame with the snapshot at vblank: pieces of the ship's floating
+    tilemap drew from writes MAME's frame does not include. That is why the
+    snapshot now ends before vblank.
+- *Hardware* (fx68k; TG68K's 3.5x pace moved every write, see below):
+
+| build | order | Quiz Kokology | Blandia |
+|-|-|-|-|
+| 1a6a0a5 | copy, then snapshot 5 lines before the wrap, all boards | glitching | attract right |
+| ca940a3 | snapshot 5 lines before the wrap, then copy, all boards | right | intro and play glitchy |
+| 62227db | snapshot at vblank, then copy, all boards | right | attract flickering, play glitchy |
+| e92059d | per board, snapshot at vblank on draw-then-copy | right | right (intro and play) |
+| 0a0e86b | per board, snapshot on the line before vblank | not yet built | not yet built |
+
+Unverified: the physical reason. MAME models the order per board, and the
+games' write timing and the hardware results agree with it, but no schematic
+or PCB measurement here shows where the X1-001's buffer latches on each board.
+On e92059d Mobile Suit Gundam looked right and Strike Gunner's ship glitched;
+Dragon Unit is not yet tested.
+
+The TG68K history, kept for the pace finding: TG68K ran a `nop; dbra` loop at
+4 clock enables an iteration against a 68000's 14 (`sim/tg68k_pace_tb`), so the
+core wrote sprite lists earlier in the frame than MAME, and every ordering
+tried then (861a15a, f766e9c, 807cc87) fixed one of Quiz Kokology and Blandia
+and broke the other. fx68k (`sim/fx68k_pace_tb`: 14) replaced it.
+
+#### When the games write, in MAME
+
+`scripts/write_timing.py` counts every write to sprite Y, sprite control,
+sprite code/X and the tile layers by scanline, for the 31 parent sets, over
+1800 frames of attract after 600 and 1800 frames of play (coin at 600,
+counted from 1500; `docs/write_timing_mame.txt` lists the six sets whose
+closing snapshot was not in play). MAME's frames are 256 lines; vblank starts
+at 248 (240 on eightfrc, oisipuzl, madshark, metafox, arbalest). The sprite
+list (Y, control) falls in the same place in attract and play, in three
+groups:
+
+| written | share | sets |
+|-|-|-|
+| in the first 24 lines after vblank start | 96-100%, 13-26% in the first 2 lines | thunderl, blockcar, umanclub, neobattl, rezon, wrofaero, msgundam, kamenrid, magspeed, zingzip, madshark, downtown, twineagl, metafox, arbalest (wits mostly) |
+| around line 112, nowhere near vblank | all | atehate, pairlove, drgnunit, stg, qzkklogy, qzkklgy2, daioh, gundhara, jjsquawk, extdwnhl, sokonuke, zombraid, eightfrc, oisipuzl |
+| the 8 lines before vblank start | Y and control; codes after vblank start | blandia |
+
+The unbuffered sets (the first group but msgundam, and the second but the
+drgnunit family) are snapshotted 5 lines before the core's frame wraps, about
+19 lines into its vblank, after their update; the core shows each list a
+frame before MAME does. Mad Shark, for one, writes over 90% of its Y in the
+first 8 lines. No per-line measurement of the core yet (probe G gives only
+the last write line).
 
 ### atehate work RAM is 64 KB, not 1 MB
 
@@ -374,6 +552,68 @@ Layer pairs rotate with 0 mismatching pixels on every set except eightfrc
 frame 900 and one daioh frame whose layer-1 RAM differed between the runs;
 sprite pairs rotate with 0 on every set where the two runs' sprite state
 matched. Not yet seen on hardware.
+
+### The position offsets as signal delays
+
+Analysis of the X offsets in `rtl/seta_board_cfg.sv` (MAME's values plus the flip
+corrections above). Nothing in the RTL has changed because of it.
+
+**Screen space.** In MAME and in the RTL, +1 on any X offset moves that plane
+one dot right on screen, flipped or not: tiles take `x += 0x10 - xoffs` before
+the mirror, sprites `(sx + xoffs) & 0x1ff` after it. The flipped and unflipped
+constants are therefore directly comparable. Layer 0 and layer 1 are equal in
+every game.
+
+| set | layers noflip / flip | sprites noflip / flip | sprite - tile noflip / flip |
+|-|-|-|-|
+| stg, rezon, extdwnhl, sokonuke, zombraid, msgundam, kamenrid, magspeed | -2 / -2 | 0 / 0 | 2 / 2 |
+| qzkklogy, jjsquawk, oisipuzl | -1 / -1 | 1 / 1 | 2 / 2 |
+| gundhara | 0 / 0 | 0 / 0 | 0 / 0 |
+| daioh | -2 / -2 | 0 / 2 | 2 / 4 |
+| blandia | -2 / 6 | 0 / 8 | 2 / 2 |
+| qzkklgy2 | -3 / -1 | 0 / 2 | 3 / 3 |
+| drgnunit | -2 / -2 | 2 / -2 | 4 / 0 |
+| zingzip | -1 / -2 | 0 / 1 | 1 / 3 |
+| madshark | 0 / -3 | 0 / 1 | 0 / 4 |
+| wrofaero | 0 / -4 | 0 / 0 | 0 / 4 |
+| eightfrc | 0 / -4 | 3 / 4 | 3 / 8 |
+
+What a delay model accounts for:
+
+- **Sprite to tile, 2 dots**, on 12 of the 19 layered boards, in both flip
+  states: the X1-001's pixels reaching the X1-011 two dot-clock registers after
+  the X1-012's. The two layers never differ: two identical X1-012 paths.
+- **Whole picture, -2, -1 or 0** on the layers: the picture against the
+  blanking window, visible only at the test grid's edge. An RGB-to-HBLANK delay,
+  which could differ between PCB revisions.
+- **Flipped equals unflipped** (slope 1, intercept 0) on 11 of 19 sets, which is
+  what a delay requires: a propagation delay cannot depend on the flip bit.
+
+What it does not:
+
+- **The eight flip exceptions** differ between games on the same chipset
+  (madshark -3 on the layers, blandia +8 on every plane), so they are not the
+  chips and not the board. Most likely each game's own flipped scroll and
+  position arithmetic; eightfrc is seen writing one flipped scroll to both
+  layers. The madshark, wrofaero, eightfrc layer values and the daioh,
+  drgnunit, qzkklgy2, zingzip, madshark sprite values were fitted in this core
+  to make the flip a true rotation. If the board is only delays, a real PCB
+  shows these games slightly misaligned when flipped and the core corrects
+  them. Unverified: no PCB reference.
+- **Y.** A delay in whole lines would need a line buffer. The sprite values,
+  14 unflipped and -10 / -18 flipped for the 240- / 224-line sets, fit
+  `flip = -2 - visible_min_y` exactly (top visible line 8 / 16): mirror
+  arithmetic about the visible window, not a delay. The floating tilemap's
+  -1 / +1 is symmetric the same way.
+
+Modelling. A constant screen-space X offset is the same picture as delaying
+that plane's pixel stream by N dot-clock registers against the others (a
+negative one delays the others, or the blanking), at 2-4 registers the cost of
+the current adders. It would reduce the eleven consistent sets to about three
+parameters per board revision (sprite delay, tile delay, RGB-to-blank delay)
+and leave the eight flip exceptions in an explicit per-game table, or drop
+them to show what a real board presumably shows. The output is unchanged only
+if the table is kept.
 
 ---
 
