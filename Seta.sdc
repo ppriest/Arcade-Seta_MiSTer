@@ -97,3 +97,26 @@ set_multicycle_path -hold  1 -from [get_clocks {sdram_clk_pin}] -to $sdram_dq_re
 set sdram_outs [get_ports {SDRAM_A[*] SDRAM_BA[*] SDRAM_DQ[*] SDRAM_DQML SDRAM_DQMH SDRAM_nRAS SDRAM_nCAS SDRAM_nWE SDRAM_nCS SDRAM_CKE}]
 set_output_delay -clock sdram_clk_pin -max [expr {$sdram_tDS + $sdram_board}]      $sdram_outs
 set_output_delay -clock sdram_clk_pin -min [expr {-$sdram_tDH + $sdram_board_min}] $sdram_outs
+
+# ---------------------------------------------------------------------------
+# Seta_Downtown, Thundercade's YM2203 (jt03:u_ym0 in seta_core): jt12
+# phase-generator multicycle 2, as Arcade-Fuuki_MiSTer's Fuuki.sdc applies it
+# to the same unmodified jt12.
+# Audit (Fuuki's): jt12_pg.v has one clocked block, under `if (clk_en)`,
+# holding keycode_II / detune_mod_II / phinc_II; jt12_sh_rst.v (u_phsh, u_pad)
+# has one clocked block under `if (clk_en)`. clk_en is jt12_div's
+# `cen & cen_int`, and cen is seta_core's dt_ym_cen at 1/24 of clk_sys, so
+# both ends tick >= 24 clk apart. jt12_reg's cur_ch / cur_op and jt12_lfo's
+# lfo_mod are under clk_en too; lfo_mod's only full-rate branch is the lfo_en
+# clear, itself changed only by cen-cadenced MMR writes. Collections name
+# registers, not subtrees. Empty in the Seta revision, which has no YM2203.
+# ---------------------------------------------------------------------------
+set jtsrc [get_registers {*|jt03:u_ym0|*jt12_reg:u_reg|cur_ch[*] *|jt03:u_ym0|*jt12_reg:u_reg|cur_op[*] *|jt03:u_ym0|*jt12_lfo:*|lfo_mod[*] *|jt03:u_ym0|*jt12_pg:u_pg|phinc_II[*] *|jt03:u_ym0|*jt12_pg:u_pg|keycode_II[*] *|jt03:u_ym0|*jt12_pg:u_pg|detune_mod_II[*] *|jt03:u_ym0|*jt12_mmr:u_mmr|effect}]
+set jtdst [get_registers {*|jt03:u_ym0|*jt12_pg:u_pg|phinc_II[*] *|jt03:u_ym0|*jt12_pg:u_pg|keycode_II[*] *|jt03:u_ym0|*jt12_pg:u_pg|detune_mod_II[*] *|jt03:u_ym0|*jt12_pg:u_pg|jt12_sh_rst:u_pad|* *|jt03:u_ym0|*jt12_pg:u_pg|jt12_sh_rst:u_phsh|*}]
+if {[get_collection_size $jtsrc] > 0 && [get_collection_size $jtdst] > 0} {
+    set_multicycle_path -setup -end 2 -from $jtsrc -to $jtdst
+    set_multicycle_path -hold  -end 1 -from $jtsrc -to $jtdst
+} else {
+    post_message -type info \
+        "Seta.sdc: no jt03 -- the jt12 phase-generator multicycle is not applied (expected in the Seta revision)"
+}

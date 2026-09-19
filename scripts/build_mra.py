@@ -121,7 +121,9 @@ LAYOUT_F_SETS = {"zombraid"}
 
 # Battery-backed RAM, bytes. zombraid: the 128 low-lane bytes of
 # 0x300100-0x3001ff, saved as the 256-byte window (docs/ROADMAP.md).
-NVRAM_SETS = {"zombraid": 256}
+NVRAM_SETS = {"zombraid": 256,
+              # calibr50_map's "nvram" share, 0x200000-0x200fff (downtown.cpp)
+              "calibr50": 4096}
 
 # Button layouts that differ from the driver's ports. jjsquawk declares
 # JOY_TYPE1_3BUTTONS, but the game uses two (attack, jump): button 3 is read
@@ -139,7 +141,9 @@ DOWNTOWN = os.path.basename(SRC) == "downtown.cpp"
 RBF_NAME = "Seta"
 if DOWNTOWN:
     CFG_SV = REPO / "rtl" / "downtown" / "downtown_board_cfg.sv"
-    OUT_DIR = REPO / "releases" / "Seta_Downtown"
+    # the same releases/ as seta.cpp's; <rbf> tells the cores apart
+    # (deploy.py picks by it)
+    OUT_DIR = REPO / "releases"
     # NOT "Seta_Downtown": MiSTer resolves <rbf>X</rbf> to Arcade-X or X
     # followed by '.' or '_' (Main_MiSTer mra_loader.cpp get_rbf), so the Seta
     # .mra files' <rbf>Seta</rbf> would also match Seta_Downtown_*.rbf
@@ -559,6 +563,85 @@ def esc(s):
     return escape(str(s), {'"': "&quot;"})
 
 
+# MiSTer's OSD draws a DIP as " name:" padded to 28 columns with the value
+# right-aligned (Main_MiSTer menu.cpp, MENU_ARCADE_DIP1):
+#     l = 28 - strlen(value) - strlen(" name:"); while (l--) strcat(s, " ");
+# l is a signed char, so a line that does not fit pads until it wraps and the
+# value is pushed off the screen -- it still cycles, invisibly (issue #6:
+# Arbalester's "Coin A (Mode 1|2)" = "2C/3C|4C/1C" showed only 1C/1C).
+OSD_COLS = 28
+# Hand abbreviations, tried before cutting: names...
+OSD_NAME = {
+    "Highlight Right Answer (Cheat)": "Show Answer (Cheat)",
+    "CPU Player During Multi-Player Game": "CPU in Multiplayer Game",
+    "Stage & Weapon Select (Cheat)": "Stage/Weapon (Cheat)",
+    "2 Coins to Start/1 to Continue": "2C Start/1C Continue",
+    "Skip Real DAT Rom Check?": "Skip DAT ROM Check",
+    "Copyright / License": "License",
+    "(C) / License": "License",
+    "Licensed To": "License",
+}
+# ...and settings
+OSD_ID = {
+    "Half Continue: Start 2C / Continue 1C": "Half (2C/1C cont)",
+    "Normal: Start 1C / Continue 1C": "Normal (1C/1C)",
+    "Semi-Finals & Finals": "Semis & Finals",
+    "800k and 2000k only": "800k & 2000k",
+    "300k and every 800k": "300k/every 800k",
+    "500k and every 1000k": "500k/every 1000k",
+    "Upright 1 Controller": "Upright 1 Ctrl",
+    "Upright 2 Controllers": "Upright 2 Ctrls",
+    "Seta (Romstar License)": "Seta/Romstar",
+    "Seta (Visco License)": "Seta/Visco",
+    "Taito Corp. Japan": "Taito Japan",
+    "Taito America Corp.": "Taito America",
+    "Seta USA / Taito America": "Seta USA/Taito USA",
+    "Athena / Taito (Japan)": "Athena/Taito Japan",
+    "Taito America / Romstar": "Taito USA/Romstar",
+}
+OSD_MIN_NAME = 8
+
+
+def osd_fit(name, ids):
+    """(name, ids) that fit OSD_COLS: the table first, then the name cut,
+    then -- only if the name would drop below OSD_MIN_NAME -- the settings."""
+    base, paren, tag = name.partition(" (")
+    folded = paren and "|" in tag
+    name = (OSD_NAME.get(name) or OSD_NAME.get(base, base) + (paren + tag if paren else ""))
+
+    def fit_id(i):
+        if "|" in i:
+            return "|".join(OSD_ID.get(p, p) for p in i.split("|"))
+        return OSD_ID.get(i, i)
+    ids = [fit_id(i) for i in ids]
+    # a folded switch (extract_dips._fold) whose two readings cannot share a
+    # line keeps the one for the other switch's default, which it lists
+    # first: the licence switches the manuals mark "Don't Touch"
+    if folded and any(2 + len(name) + len(i) > OSD_COLS for i in ids):
+        name = OSD_NAME.get(base, base)
+        ids = [i.split("|")[0] for i in ids]
+    widest = max(len(i) for i in ids)
+    room = OSD_COLS - 2 - widest                     # " name:" minus the space and colon
+    if len(name) > room:
+        name = name[:max(room, OSD_MIN_NAME)].rstrip()
+    room = OSD_COLS - 2 - len(name)
+    if widest > room:
+        ids = [i[:room].rstrip() for i in ids]
+        real = [i for i in ids if i != "-"]
+        if len(set(real)) != len(real):
+            sys.exit(f"dip '{name}': settings are not distinct once cut to "
+                     f"{room} columns -- add them to OSD_ID")
+    if any("," in i for i in ids) or "," in name:
+        sys.exit(f"dip '{name}': a comma in a shortened name or setting splits the list")
+    return name, ids
+
+
+# Sets with no Flip Screen DIP in MAME's ports (gundhara's program has no
+# flip setting either): the .mra gets the core's own, gated to these games in
+# seta_core.
+CORE_FLIP_SETS = ("gundhara", "oisipuzl")
+
+
 def dip_xml(ports):
     """Derive `bits`, `ids` and the default bytes from MAME's encoding.
 
@@ -601,8 +684,9 @@ def dip_xml(ports):
                 sys.exit(f"dip '{name}': mask {mask:#04x} is not contiguous")
             lo = 8 * byte_index + bit_positions[0]
             hi = 8 * byte_index + bit_positions[-1]
-            out.append((esc(name), str(lo) if lo == hi else f"{lo},{hi}",
-                        esc(",".join(ids))))
+            oname, oids = osd_fit(name, ids)
+            out.append((esc(oname), str(lo) if lo == hi else f"{lo},{hi}",
+                        esc(",".join(oids))))
         default_bytes.append(default & 0xFF)
     return out, default_bytes
 
@@ -663,9 +747,11 @@ BUTTON_LAYOUTS = {
 
 def dt_buttons(setname, block):
     """downtown.cpp: Seta.sv's input_layout 0 (common_type1) or 1 (common_type2),
-    and DownTown's rotary joystick on buttons 3 and 4."""
+    and a rotary joystick on buttons 3 and 4 -- DownTown's 12-position switch
+    (IPT_POSITIONAL) or Caliber 50's uPD4701 count (IPT_DIAL), both stepped
+    by rtl/downtown/rotary_input.sv."""
     names = ["Button 1", "Button 2"]
-    if 'PORT_START("ROT1")' in block and "IPT_POSITIONAL" in block:
+    if 'PORT_START("ROT1")' in block and ("IPT_POSITIONAL" in block or "IPT_DIAL" in block):
         names += ["Rotate Left", "Rotate Right"]
     n = len(names)
     names = names + ["-"] * (6 - n) + ["Start", "Coin", "Pause", "Service"]
@@ -801,6 +887,12 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         if unknown:
             sys.exit(f"{setname}/{region}: unrecognised load line(s): {unknown[:2]}")
         if not recs and region_size(body, region) is None:
+            # tndrcade has neither: X1-001 only, and YM sound on the 65C02.
+            # The image pads over them to the next region's base.
+            if DOWNTOWN and region in ("tiles", "x1snd"):
+                truths[region] = b""
+                all_groups[region] = []
+                continue
             sys.exit(f"{setname}: no {region} region")
         gs = groups_for(recs, region, setname, body)
         blob = bytearray()
@@ -958,7 +1050,7 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
                                  f'{cuts[k] if cuts else cut} map="{mp}"/>')
                 lines.append('        </interleave>')
             pos += g["size"]
-        declared = region_size(body, region)
+        declared = region_size(body, region) or 0      # absent: tndrcade's tiles, x1snd
         gs = all_groups[region]
         got = (gs[-1]["dest"] + gs[-1]["size"]) if gs else 0
         if got < declared:
@@ -973,6 +1065,11 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         sys.exit(f"DEF_STR not in extract_dips' table: {', '.join(sorted(unknown))}")
     sw = split_ports(ports, setname)
     dips, defaults = dip_xml(sw)
+    if setname in CORE_FLIP_SETS:
+        # sw[3] bit 0: the core rotates the picture 180 degrees (seta_video
+        # force_flip). These boards have no flip DIP.
+        defaults.append(0x00)
+        dips.append(("Flip Screen", "24", "Off,On"))
     lines.append(f'    <switches default="{",".join(f"{b:02X}" for b in defaults)}" base="0">')
     for name, bits, ids in dips:
         dip = f'<dip name="{name}" bits="{bits}" ids="{ids}"/>'

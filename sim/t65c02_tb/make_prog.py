@@ -148,6 +148,16 @@ labels["TARGET"] = pc()
 emit(0xA9, 0x22, 0x85, 0x3F)
 expect[0x3F] = 0x22
 
+# JMP (abs,x) with the entry straddling a page: X=1, table $C7FE -> entry at
+# $C7FF/$C800. The 65C02 carries into the high byte (Caliber 50's sub CPU
+# jump tables can land there).
+emit(0xA2, 0x01)
+emit(0x7C, 0xFE, 0xC7, cyc=6)
+emit(0xA9, 0xEE, 0x85, 0x41)      # skipped
+labels["TARGET2"] = pc()
+emit(0xA9, 0x33, 0x85, 0x41)
+expect[0x41] = 0x33
+
 # BRK clears D on the 65C02: SED ; BRK ; handler pushes P
 emit(0xF8, 0x00, 0x00)            # SED ; BRK #0
 labels["AFTER_BRK"] = pc()
@@ -172,7 +182,10 @@ for off, lab in fixups:
     code[off + 1] = labels[lab] >> 8
 
 rom = bytearray(0x4000)
+assert len(code) < 0x7FF, "the page-crossing table at $C7FF would overlap the code"
 rom[:len(code)] = code
+rom[0x7FF] = labels["TARGET2"] & 0xFF
+rom[0x800] = labels["TARGET2"] >> 8
 vec = lambda a, v: (rom.__setitem__(a - ORG, v & 0xFF), rom.__setitem__(a - ORG + 1, v >> 8))
 vec(0xFFFC, ORG)
 vec(0xFFFE, labels["IRQ"])

@@ -29,12 +29,14 @@ PARENTS_ONLY = ("thunderl", "wits", "blockcar", "umanclub", "neobattl", "atehate
                 "downtown", "twineagl", "metafox", "arbalest")
 
 
-def run(game, skip, frames, coin=0, tag=""):
+def run(game, skip, frames, coin=0, tag="", extra=""):
     out = REPO / "debug" / "wtiming" / f"{game}{tag}.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
     regions = FAMILIES[GAMES[game]][0]
     taps = ",".join(f"{r}:{lo:06x}:{lo + ln - 1:06x}" for r, (lo, ln) in regions.items()
                     if r in REGIONS)
+    if extra:
+        taps += "," + extra
     env = dict(os.environ, WT_OUT=out.as_posix(), WT_TAPS=taps,
                WT_SKIP=str(skip), WT_FRAMES=str(frames), WT_COIN=str(coin), WT_SNAP="1")
     subprocess.run([str(MAME_EXE), game, "-skip_gameinfo", "-nodebug", "-nothrottle",
@@ -94,13 +96,16 @@ def main():
     ap.add_argument("--coin", type=int, default=0,
                     help="insert a coin at this frame and play (P1 Right held, "
                          "Button 1 pulsed); counting still starts at --skip")
+    ap.add_argument("--extra", default="",
+                    help="more taps, name:hexlo:hexhi[,...] (twineagl's tile "
+                         "bank: tbank:400000:400007)")
     ap.add_argument("--tag", default="", help="suffix for the result file")
     ap.add_argument("--reuse", action="store_true", help="report existing results only")
     a = ap.parse_args()
     for g in a.sets or PARENTS_ONLY:
         path = REPO / "debug" / "wtiming" / f"{g}{a.tag}.txt"
         if not a.reuse or not path.exists():
-            run(g, a.skip, a.frames, a.coin, a.tag)
+            run(g, a.skip, a.frames, a.coin, a.tag, a.extra)
         if not path.exists():
             print(f"{g}: no result (MAME failed?)\n")
             continue

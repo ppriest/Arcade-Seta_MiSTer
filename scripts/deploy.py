@@ -243,7 +243,8 @@ def main():
                          "(sets that are built but known not to run yet)")
     ap.add_argument("--core", choices=("seta", "downtown"), default="seta",
                     help="downtown: the Seta_Downtown core -- SetaDowntown_N.rbf "
-                         "and releases/Seta_Downtown/ to _Arcade/_Seta_Downtown")
+                         "and the .mra files whose <rbf> is SetaDowntown, to "
+                         "_Arcade/_Seta_Downtown")
     ap.add_argument("--mra-only", action="store_true")
     ap.add_argument("--rbf-only", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
@@ -260,7 +261,6 @@ def main():
         # not Seta_*: the Seta .mra files' <rbf>Seta</rbf> would match it
         RBF_STEM = "SetaDowntown"
         REMOTE_ARCADE = "/media/fat/_Arcade/_Seta_Downtown"
-        rel = REPO / "releases" / "Seta_Downtown"
 
     env = load_env(REPO / "mister.env")
     m = Mister(env, a.dry_run)
@@ -290,9 +290,11 @@ def main():
 
     # ---- .mra files ----
     if not a.rbf_only:
-        # the Seta core's .mra files exclude releases/Seta_Downtown/
+        # both cores' .mra files share releases/; each core takes the ones
+        # that name it
+        want = f"<rbf>{RBF_STEM}</rbf>"
         mras = sorted(f for f in rel.rglob("*.mra")
-                      if a.core == "downtown" or "Seta_Downtown" not in f.parts)
+                      if want in f.read_text(encoding="utf-8", errors="replace"))
         if not mras:
             sys.exit("no .mra files in releases/ -- run scripts/build_mra.py")
 

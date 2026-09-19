@@ -548,6 +548,12 @@ begin
             -- BA Inc
             AD <= std_logic_vector(unsigned(AD) + 1);
             BAL <= std_logic_vector(unsigned(BAL) + 1);
+            -- 65C02 JMP (abs,x): the pointer's high byte is read from the
+            -- next address, carrying into the page (added for Caliber 50's
+            -- jump tables; see rtl/cpu/t65/PROVENANCE.md)
+            if Mode_r /= "00" and IR = x"7C" and BAL(7 downto 0) = x"FF" then
+              BAH <= std_logic_vector(unsigned(BAH) + 1);
+            end if;
           when "10" =>
             -- BA Add
             BAL <= std_logic_vector(resize(unsigned(BAL(7 downto 0)),9) + resize(unsigned(BusA),9));

@@ -75,7 +75,7 @@ def main():
         sys.exit(f"{a.game}: not configured in x1_001_model.GAMES")
     cfg = GAMES[a.game]
 
-    gfx, gfx_size, zippath = region_image(a.game, "gfx1")
+    gfx, gfx_size, zippath = region_image(a.game, cfg.get("region", "gfx1"))
     code, ylow, ctrl, pal, tag = load_capture(cfg, a.capdir)
     if a.flip:
         ctrl = list(ctrl)

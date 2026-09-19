@@ -82,8 +82,13 @@ localparam DEBUG_MENU_HIDE = 1'b1;
 wire debug_menu_hide = DEBUG_MENU_HIDE;
 `ifdef SETA_DOWNTOWN
 localparam CORE_NAME = "Seta_Downtown";
+// rotary joysticks as the Ikari Warriors core has them (rtl/downtown/rotary_input.sv)
+`define CONF_ROT "H4O[114:113],Rotary Speed,Normal,Slow,Fast,Very Fast;", "H4O[115],GRS Super JoyStick (Keystroke Mode),Off,On;", "H4-;",
+`define CONF_J1 "J1,Button 1,Button 2,Rotate Left,Rotate Right,Button 5,Button 6,Start,Coin,Pause,Service;",
 `else
 localparam CORE_NAME = "Seta";
+`define CONF_ROT
+`define CONF_J1 "J1,Button 1,Button 2,Button 3,Button 4,Button 5,Button 6,Start,Coin,Pause,Service;",
 `endif
 localparam CONF_STR = {
 	CORE_NAME, ";;",
@@ -102,6 +107,7 @@ localparam CONF_STR = {
 	"H3O[106:100],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"H3O[112:107],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"-;",
+	`CONF_ROT
 	// gun games (H2)
 	"H2O[86:85],Crosshair,Off,P1,P2,P1+P2;",
 	// left stick per player: Auto (full deflection acts as a d-pad, partial
@@ -124,7 +130,7 @@ localparam CONF_STR = {
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
 	// entry i is joystick bit 4 + i, matching the .mra <buttons>
-	"J1,Button 1,Button 2,Button 3,Button 4,Button 5,Button 6,Start,Coin,Pause,Service;",
+	`CONF_J1
 	"jn,A,B,Start,Select,R;",
 	"v,0;",
 	"V,v",`BUILD_DATE
@@ -151,6 +157,9 @@ wire        ioctl_upload;
 wire  [1:0] dbg_nv_state;
 wire  [7:0] dbg_nv_saves;
 
+// H4: the rotary options, shown for DownTown and Caliber 50 only (set below)
+wire rot_menu_hide;
+
 hps_io #(.CONF_STR(CONF_STR)) hps_io
 (
 	.clk_sys(clk_sys),
@@ -162,7 +171,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({12'd0, ~status[94], ~gun_game, debug_menu_hide, 1'b0}),  // H1 Debug, H2 gun, H3 CRT adjust
+	.status_menumask({11'd0, rot_menu_hide, ~status[94], ~gun_game, debug_menu_hide, 1'b0}),  // H1 Debug, H2 gun, H3 CRT adjust, H4 rotary
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -279,8 +288,16 @@ reg [7:0] mod_byte = 8'd0;
 always @(posedge clk_sys)
 	if (ioctl_wr && (ioctl_index == 16'd1)) mod_byte <= ioctl_dout;
 
+// downtown_board_cfg.sv: DT_DOWNTOWN..DT_DOWNTOWNP 0-3, DT_CALIBR50 7
+`ifdef SETA_DOWNTOWN
+assign rot_menu_hide = !(mod_byte[4:0] <= 5'd3 || mod_byte[4:0] == 5'd7);
+`else
+assign rot_menu_hide = 1'b1;
+`endif
+
 // <switches> (index 254): sw[0] = DSW offset 0 (high byte, SW1), sw[1] =
-// offset 1 (SW2), sw[2] = DIP bits in the COINS port's top nibble.
+// offset 1 (SW2), sw[2] = DIP bits in the COINS port's top nibble, sw[3]
+// bit 0 = the core's Flip Screen on sets with no flip DIP (seta_core).
 reg [7:0] sw[8];
 always @(posedge clk_sys)
 	if (ioctl_wr && (ioctl_index == 16'd254) && !ioctl_addr[24:3])
@@ -348,25 +365,42 @@ function automatic [7:0] dt_port(input [31:0] j, input [2:0] layout);
 	dt_port = (layout == 3'd1) ? {j[10], 1'b0, j[5], j[4], j[0], j[1], j[2], j[3]}
 	                           : seta_port(j, 3'd0);
 endfunction
+// downtown.cpp's coins are PORT_IMPULSE(5): a press is five frames of coin,
+// however long the button is held (a held coin miscounted on DownTown and
+// Twin Eagle). dt_coin[i] is player i+1's, driven below after core_vb.
+reg  [1:0] dt_coin = 2'b00;
 wire [15:0] p1_in = ~{8'h00, dt_port(joystick_0, input_layout)};
 wire [15:0] p2_in = ~{8'h00, dt_port(joystick_1, input_layout)};
 wire [15:0] coins_in = (input_layout == 3'd1)
-	? ~{8'h00, joystick_0[11], joystick_1[11], joystick_0[13], 1'b0, 4'h0}
-	: ~{8'h00, 2'b00, 1'b0, joystick_0[13], joystick_1[10], joystick_0[10], joystick_1[11], joystick_0[11]};
+	? ~{8'h00, dt_coin[0], dt_coin[1], joystick_0[13], 1'b0, 4'h0}
+	: ~{8'h00, 2'b00, 1'b0, joystick_0[13], joystick_1[10], joystick_0[10], dt_coin[1], dt_coin[0]};
 
-// DownTown's 12-position rotary joysticks: buttons 3 and 4 step them
+// Rotary joysticks: Rotate Left / Rotate Right (buttons 3 and 4), stepping
+// while held, as the Ikari Warriors core. DownTown reads a 12-position switch;
+// Caliber 50 a uPD4701 count, 4 counts a position.
+wire [1:0] rot_step_l, rot_step_r;
+rotary_input u_rot (
+	.clk(clk_sys), .reset(reset),
+	.speed(status[114:113]), .grs(status[115]), .ps2_key(ps2_key),
+	.btn_left({joystick_1[6], joystick_0[6]}),
+	.btn_right({joystick_1[7], joystick_0[7]}),
+	.step_left(rot_step_l), .step_right(rot_step_r)
+);
 reg  [3:0] rot_pos [0:1];
-reg  [1:0] rot_btn_d [0:1];
-wire [1:0] rot_btn [0:1];
-assign rot_btn[0] = joystick_0[7:6];
-assign rot_btn[1] = joystick_1[7:6];
+reg [11:0] rot_cnt [0:1];
 integer ri;
 always @(posedge clk_sys) begin
 	for (ri = 0; ri < 2; ri = ri + 1) begin
-		rot_btn_d[ri] <= rot_btn[ri];
-		if (reset) rot_pos[ri] <= 4'd0;
-		else if (rot_btn[ri][0] & ~rot_btn_d[ri][0]) rot_pos[ri] <= (rot_pos[ri] == 4'd0)  ? 4'd11 : rot_pos[ri] - 4'd1;
-		else if (rot_btn[ri][1] & ~rot_btn_d[ri][1]) rot_pos[ri] <= (rot_pos[ri] == 4'd11) ? 4'd0  : rot_pos[ri] + 4'd1;
+		if (reset) begin
+			rot_pos[ri] <= 4'd0;
+			rot_cnt[ri] <= 12'd0;
+		end else if (rot_step_l[ri]) begin
+			rot_pos[ri] <= (rot_pos[ri] == 4'd0) ? 4'd11 : rot_pos[ri] - 4'd1;
+			rot_cnt[ri] <= rot_cnt[ri] - 12'd4;
+		end else if (rot_step_r[ri]) begin
+			rot_pos[ri] <= (rot_pos[ri] == 4'd11) ? 4'd0 : rot_pos[ri] + 4'd1;
+			rot_cnt[ri] <= rot_cnt[ri] + 12'd4;
+		end
 	end
 end
 `else
@@ -466,6 +500,25 @@ generate
 	end
 endgenerate
 reg core_vb_d;
+`ifdef SETA_DOWNTOWN
+reg [1:0] dt_coin_btn_d = 2'b00;
+reg [2:0] dt_coin_left [0:1];
+always @(posedge clk_sys) begin
+	for (int c = 0; c < 2; c++) begin
+		dt_coin_btn_d[c] <= c ? joystick_1[11] : joystick_0[11];
+		if (reset) begin
+			dt_coin[c]      <= 1'b0;
+			dt_coin_left[c] <= 3'd0;
+		end else if ((c ? joystick_1[11] : joystick_0[11]) && !dt_coin_btn_d[c] && !dt_coin[c]) begin
+			dt_coin[c]      <= 1'b1;
+			dt_coin_left[c] <= 3'd5;
+		end else if (dt_coin[c] && core_vb && !core_vb_d) begin
+			if (dt_coin_left[c] == 3'd1) dt_coin[c] <= 1'b0;
+			dt_coin_left[c] <= dt_coin_left[c] - 3'd1;
+		end
+	end
+end
+`endif
 always @(posedge clk_sys) begin
 	core_vb_d <= core_vb;
 	for (int g = 0; g < 2; g++) begin
@@ -581,11 +634,13 @@ seta_core seta_core
 	.ldr_ddr_rdata(ldr_ddr_rdata),
 
 	.p1_in(p1_in), .p2_in(p2_in), .coins_in(coins_in), .extra_in(extra_in),
-	.p3_in(p3_in), .p4_in(p4_in), .dsw_in(dsw_in),
+	.p3_in(p3_in), .p4_in(p4_in), .dsw_in(dsw_in), .flip_sw(sw[3][0]),
 `ifdef SETA_DOWNTOWN
 	.rot1(rot_pos[0]), .rot2(rot_pos[1]),
+	.dial1(rot_cnt[0]), .dial2(rot_cnt[1]),
 `else
 	.rot1(4'd0), .rot2(4'd0),
+	.dial1(12'd0), .dial2(12'd0),
 `endif
 	.gun_ch(gun_ch),
 

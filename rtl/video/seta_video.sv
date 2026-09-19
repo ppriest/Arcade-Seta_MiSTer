@@ -32,6 +32,11 @@ module seta_video #(
 	input  wire        buffer_sprites,
 	input  wire        copy_then_draw,
 	input  wire  [9:0] spr_snap_line,
+	// tndrcade: a sprite snapshot only after a control byte write
+	// (x1_001.sv snap_ctrl_gate)
+	input  wire        snap_ctrl_gate,
+	// Flip Screen for sets with no flip DIP: the picture rotated 180 degrees
+	input  wire        force_flip,
 	input  wire [LB_W-1:0] colorbase_fg, colorbase_bg,
 	input  wire  [8:0] screen_h, vis_max_y,
 	input  wire [LB_W-1:0] backdrop,
@@ -97,6 +102,8 @@ module seta_video #(
 	input  wire  [7:0] vregs,
 	// twineagl_tile_offset (layer 0)
 	input  wire        tile_bank_en,
+	// calibr50: layer 0 scroll per line, VRAM live (x1_012.sv raster)
+	input  wire        tile_raster,
 	input  wire [31:0] tile_bank,
 	// set_tilemaps_flip(1) (oisipuzl): layers flip on sprite flip XOR this
 	input  wire        tilemaps_flip,
@@ -137,6 +144,9 @@ module seta_video #(
 	output logic       vga_ce,
 
 	output wire        irq_vblank_line, irq_mid_line, vblank_rise,
+	// every line start, with the line starting (MAME's numbering)
+	output wire        scan_start,
+	output wire  [9:0] scan_line,
 
 	output wire [23:3] dbg_l0_last_addr,
 	output wire [63:0] dbg_l0_last_data,
@@ -153,6 +163,7 @@ module seta_video #(
 	wire [9:0] hcount, vcount;
 	wire       hsync, vsync, hblank, vblank, de;
 	wire       line_start;
+	assign scan_start = line_start;
 	wire [8:0] line;
 
 	// declared before the instance (ModelSim)
@@ -171,12 +182,26 @@ module seta_video #(
 		.vact_start(vact_start), .vact_end(vact_end),
 		.hcount(hcount), .vcount(vcount),
 		.hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank), .de(de),
-		.line_start(line_start), .line(line),
+		.line_start(line_start), .line(line), .scan_line(scan_line),
 		.irq_vblank_line(irq_vblank_line), .irq_mid_line(irq_mid_line),
 		.vblank_rise(vblank_rise), .snap_start(snap_start), .snap_pre(snap_pre)
 	);
 
 	logic  [8:0] lb_addr;
+
+	// force_flip: gundhara and oisipuzl have no flip DIP, and setting the
+	// X1-001 flip bit alone flips each sprite in place and moves the
+	// tilemaps -- the games that do flip move everything else themselves.
+	// So the picture is rotated here instead (as Arcade-Psikyo 9f70427):
+	// every engine renders the visible line mirrored about the visible area,
+	// and the line buffers are read right to left. Latched at vblank.
+	logic        rot180 = 1'b0;
+	always_ff @(posedge clk) if (vblank_rise) rot180 <= force_flip;
+	wire   [9:0] vis_line = {1'b0, line};
+	wire         line_vis = vis_line >= vact_start && vis_line <= vact_end;
+	wire   [9:0] line_mir = vact_start + vact_end - vis_line;
+	wire   [8:0] eng_line = (rot180 && line_vis) ? line_mir[8:0] : line;
+	wire   [9:0] x_mir    = hact_start + hact_end - hcount;
 	wire [LB_W-1:0] lb_data;
 	wire         lb_hit;
 	wire         flipscr_l0;
@@ -203,13 +228,14 @@ module seta_video #(
 		.bank_size(bank_size), .spritelimit(spritelimit), .transpen(transpen),
 		.bgflag_opaque(bgflag_opaque),
 		.buffer_sprites(buffer_sprites), .copy_then_draw(copy_then_draw),
-		.snap_at_line(snap_at_line),
+		.snap_at_line(snap_at_line), .snap_line_mode(spr_snap_line != 10'd0),
+		.snap_ctrl_gate(snap_ctrl_gate),
 		.vblank_rise(vblank_rise), .snap_pre(snap_pre),
 		.snap_start(snap_start),
 		.colorbase_fg(colorbase_fg), .colorbase_bg(colorbase_bg),
 		.screen_h(screen_h), .vis_max_y(vis_max_y), .backdrop(backdrop),
 		.code_mask(code_mask), .line_budget(line_budget),
-		.line_start(line_start), .line(line), .line_done(), .busy(),
+		.line_start(line_start), .line(eng_line), .line_done(), .busy(),
 		.rom_req(rom_req), .rom_addr(rom_addr),
 		.rom_valid(rom_valid), .rom_data(rom_data),
 		.lb_addr(lb_addr), .lb_data(lb_data), .lb_hit(lb_hit),
@@ -247,7 +273,7 @@ module seta_video #(
 			vga_de <= de_d;
 			vga_ce <= 1'b1;
 
-			lb_addr <= hcount[8:0];
+			lb_addr <= rot180 ? x_mir[8:0] : hcount[8:0];
 			hs_d <= hsync;  vs_d <= vsync;
 			hb_d <= hblank; vb_d <= vblank;
 			de_d <= de;
@@ -273,8 +299,8 @@ module seta_video #(
 		.vis_dimy(vis_dimy), .colorbase(l0_colorbase), .code_limit(l0_code_limit),
 		.tile_bank_en(tile_bank_en), .tile_bank(tile_bank),
 		.bpp6(l0_bpp6),
-		.vblank_rise(vblank_rise),
-		.line_start(line_start & has_l0), .line(line),
+		.vblank_rise(vblank_rise), .raster(tile_raster),
+		.line_start(line_start & has_l0), .line(eng_line),
 		.line_budget(line_budget), .cache_en(tile_cache_en),
 		.line_done(), .busy(),
 		.rom_req(tile_req), .rom_addr(tile_addr),
@@ -302,8 +328,8 @@ module seta_video #(
 		.vis_dimy(vis_dimy), .colorbase(l1_colorbase), .code_limit(l1_code_limit),
 		.tile_bank_en(1'b0), .tile_bank(32'd0),
 		.bpp6(l1_bpp6),
-		.vblank_rise(vblank_rise),
-		.line_start(line_start & has_l1), .line(line),
+		.vblank_rise(vblank_rise), .raster(1'b0),
+		.line_start(line_start & has_l1), .line(eng_line),
 		.line_budget(line_budget), .cache_en(tile_cache_en),
 		.line_done(), .busy(),
 		.rom_req(tile1_req), .rom_addr(tile1_addr),

@@ -140,6 +140,7 @@ def parse_ports(body, all_blocks, missing, depth=0):
     ports = {}
     cur = None
     last = None
+    modifying = False
 
     for raw in body.split("\n"):
         line = raw.split("//")[0].strip()
@@ -155,9 +156,10 @@ def parse_ports(body, all_blocks, missing, depth=0):
                 ports.setdefault(k, []).extend(v)
             continue
 
-        m = re.match(r'PORT_(?:START|MODIFY)\(\s*"([^"]+)"', line)
+        m = re.match(r'PORT_(START|MODIFY)\(\s*"([^"]+)"', line)
         if m:
-            cur = m.group(1)
+            cur = m.group(2)
+            modifying = m.group(1) == "MODIFY"
             ports.setdefault(cur, [])
             last = None
             continue
@@ -171,6 +173,10 @@ def parse_ports(body, all_blocks, missing, depth=0):
             if "PORT_CONDITION" in line:
                 sys.exit(f"conditional PORT_DIPNAME is not handled: {line}")
             last = (_label(m.group(3), missing), _num(m.group(1)), _num(m.group(2)), {})
+            # PORT_MODIFY: a field replaces the included fields its mask
+            # overlaps, as ioport's field_alloc does (tndrcadj's Coin A/B)
+            if modifying:
+                ports[cur] = [f for f in ports[cur] if not (f[1] & last[1])]
             ports[cur].append(last)
             continue
 
@@ -291,13 +297,23 @@ def _fold(dip, ports):
         a, b = _short(first.get(v, "-")), _short(second.get(v, "-"))
         folded[v] = a if a == b else f"{a}|{b}"
     ca, cb = cdip[0][3].get(cdef, "?"), cdip[0][3].get(cdef ^ cmask, "?")
+    ca, cb = FOLD_TAG.get(ca, ca), FOLD_TAG.get(cb, cb)
+    # only the words that differ: "Coin Mode 1" / "Coin Mode 2" -> (1|2). The
+    # OSD line is 28 columns (build_mra.py osd_fit), and the folded settings
+    # already take eleven of them.
     wa, wb = ca.split(), cb.split()
     k = 0
     while k < min(len(wa), len(wb)) - 1 and wa[k] == wb[k]:
         k += 1
-    tag = (f"{wa[k - 1]} {' '.join(wa[k:])}|{' '.join(wb[k:])}" if k
-           else f"{ca}|{cb}")
+    tag = f"{' '.join(wa[k:])}|{' '.join(wb[k:])}"
     return (f"{name} ({tag})", mask, dflt, folded)
+
+
+# The controlling switch's labels, shortened for a folded name's tag
+FOLD_TAG = {
+    "Taito Corp. Japan": "JP",           # tndrcade's Licensed To
+    "Taito America Corp.": "US",
+}
 
 
 GROUP_A = ["thunderl", "wits", "blockcar", "umanclub", "neobattl",

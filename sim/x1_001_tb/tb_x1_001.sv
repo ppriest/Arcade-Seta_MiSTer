@@ -120,7 +120,7 @@ module tb_x1_001;
 		.code_mask(cfgv[C_CODEMASK][15:0]),
 		.vblank_rise(vblank_rise), .snap_start(snap_start), .snap_pre(snap_pre),
 		.buffer_sprites(copy_test), .copy_then_draw(1'b0),
-		.snap_at_line(1'b0),
+		.snap_at_line(1'b0), .snap_line_mode(1'b0), .snap_ctrl_gate(1'b0),
 		.line_start(line_start), .line(line),
 		.line_done(line_done), .busy(busy),
 		.rom_req(rom_req), .rom_addr(rom_addr),
@@ -376,8 +376,10 @@ module tb_x1_001;
 				$display("  buffered pairing: %0d of 24 checks wrong", pair_bad);
 			end
 			for (i = 0; i < 8192; i++) cpu_code_write(i[12:0], codeimg[i]);
-			copy_test = 1'b0;
 		end
+		// the rest runs with the copy off, whether or not it was tested (a
+		// capture with ctrl2 bit 5 set -- tndrcade -- skips it)
+		copy_test = 1'b0;
 
 		// THE COPY MUST NOT MIX TWO FRAMES. The game's handler rewrites the
 		// sprite list during blanking and the copy walks it one word a cycle,
@@ -446,6 +448,9 @@ module tb_x1_001;
 			cpu_code_write((c1[6] ^ 1'b1) ? 13'h1100 : 13'h0100, 16'hBAAD);
 			repeat (40) @(posedge clk);
 			if ({dut.codesh_hi[{dut.rbuf, 11'h100}], dut.codesh_lo[{dut.rbuf, 11'h100}]} !== 16'hF00D) flip_bad++;
+			// a game that never flips its own page (tndrcade) renders with
+			// own_flip clear: bit 5 low clears it, then the capture's value
+			cpu_ctrl_write(2'd1, ctrlimg[1] & 8'hdf);
 			cpu_ctrl_write(2'd1, ctrlimg[1]);
 			while (dut.snap_busy || dut.snap_pending) @(posedge clk);
 			vblank_rise <= 1'b1; @(posedge clk); vblank_rise <= 1'b0;

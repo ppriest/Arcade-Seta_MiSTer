@@ -95,7 +95,7 @@ module tb_seta_core;
 		.ioctl_wait(ioctl_wait),
 		// Active low, nothing pressed, DIPs all on -- the driver's defaults.
 		.p1_in(16'hffff), .p2_in(16'hffff), .coins_in(16'hffff),
-		.p3_in(16'hffff), .p4_in(16'hffff), .dsw_in(16'hffff), .gun_ch(32'h80808080),
+		.p3_in(16'hffff), .p4_in(16'hffff), .dsw_in(16'hffff), .flip_sw(1'b0), .gun_ch(32'h80808080),
 		.pause_cpu(1'b0), .en_spr(1'b1), .en_pcm(1'b1),
 		.video_r(video_r), .video_g(video_g), .video_b(video_b),
 		.video_hs(video_hs), .video_vs(video_vs), .video_hb(video_hb),

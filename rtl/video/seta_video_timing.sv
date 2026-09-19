@@ -27,6 +27,8 @@ module seta_video_timing (
 	output logic       line_start,
 	output logic [8:0] line,
 
+	// the line starting, as MAME numbers it (scanline timers), with line_start
+	output logic [9:0] scan_line = 10'd0,
 	output logic       irq_vblank_line,   // MAME scanline 240
 	output logic       irq_mid_line,      // MAME scanline 112
 	output logic       vblank_rise,
@@ -65,6 +67,7 @@ module seta_video_timing (
 			if (h_last) begin
 				line_start <= 1'b1;
 				line       <= line_plus2[8:0];
+				scan_line  <= line_next;
 
 				if (line_next == 10'd240) irq_vblank_line <= 1'b1;
 				if (line_next == 10'd112) irq_mid_line    <= 1'b1;

@@ -28,6 +28,18 @@ hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
 
 ## History
 
+* **Arcade-Seta_20260919.rbf / Arcade-SetaDowntown_20260919.rbf**
+  * Seta_Downtown: Caliber 50 and Thundercade / Twin Formation added
+    * Caliber 50: X1-010 sound on the 65C02, loop joysticks through the uPD4701, battery RAM, tile scroll per line
+    * Thundercade: YM2203 + YM3812 on the 65C02 (jt03 and jtopl2, from Jotego's jtcores)
+  * Rotary joysticks for DownTown and Caliber 50 with the Ikari Warriors core's controls: Rotate Left / Rotate Right buttons, Rotary Speed, GRS Super Joystick (keystroke mode). The options only show for those games
+  * Downtown core: a coin press is five frames of coin, as MAME's `PORT_IMPULSE(5)`. DownTown and Twin Eagle took only one coin when the button was held
+  * Twin Eagle: the carrier no longer flickers (the sprite snapshot fell among the vblank handler's sprite Y writes), and its tile bank is taken at vblank, as MAME draws
+  * Thundercade: sprite flicker fixed in the first attract scene; see Known issues
+  * Gundhara and Oishii Puzzle: a Flip Screen DIP. Neither board has one, so the core rotates the picture 180 degrees
+  * MRA DIP names and settings fit MiSTer's 28-column OSD line ([#6](https://github.com/ppriest/Arcade-Seta_MiSTer/issues/6))
+  * 65C02: `JMP (abs,x)` carries into the pointer's high byte
+
 * **Arcade-Seta_20260918.rbf / Arcade-SetaDowntown_20260918.rbf**
   * Seta_Downtown core added: DownTown / Mokugeki (four sets), Twin Eagle, Arbalester, Meta Fox
   * 68000 is now fx68k, cycle-accurate; TG68K ran 3.5x too fast, and was causing issues
@@ -87,14 +99,16 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp` 
 
 ### Supported
 
-Seta_Downtown games are a separate core, `SetaDowntown_*.rbf`; all four are ROT270, with X1-010 sound on the 68000.
+Seta_Downtown games are a separate core, `SetaDowntown_*.rbf`. All are ROT270 with a W65C02 sub CPU; sound is the X1-010 on the 68000, except Caliber 50 (X1-010 on the 65C02) and Thundercade (YM2203 + YM3812 on the 65C02).
 
 | Name | Year | Manufacturer | Core | Main CPU | Tilemaps | Notes |
 |-|-|-|-|-|-|-|
+| Thundercade / Twin Formation | 1987 | Seta (Taito license) | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 0 | YM2203 + YM3812 |
 | Twin Eagle - Revenge Joe's Brother | 1988 | Seta (Taito license) | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Protection |
 | Wit's | 1989 | Athena (Visco license) | Seta | M68000 @ 8 MHz | 0 | Four players |
 | Dragon Unit / Castle of Dragon | 1989 | Athena / Seta | Seta | M68000 @ 8 MHz | 1× 4bpp | |
 | DownTown / Mokugeki | 1989 | Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Rotary joysticks, Protection |
+| Caliber 50 | 1989 | Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Loop joysticks, battery RAM |
 | Arbalester | 1989 | Jordan I.S. / Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | |
 | Meta Fox | 1989 | Jordan I.S. / Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Protection |
 | Thunder & Lightning | 1990 | Seta | Seta | M68000 @ 8 MHz | 0 | Has protection |
@@ -148,9 +162,7 @@ Seta_Downtown games are a separate core, `SetaDowntown_*.rbf`; all four are ROT2
 | Ultra Toukon Densetsu (Japan) | X1-010 + Z80 and YM3438 |
 | Crazy Fight | YM3812 + OKI M6295 |
 | Daioh (prototype, earliest) | missing program ROMs |
-| Caliber 50 (`downtown.cpp`) | Not yet: X1-010 on the 65C02, uPD4701 loop joysticks, battery RAM, scroll written mid-frame |
 | U.S. Classic (`downtown.cpp`) | Not yet: two trackballs through a uPD4701, colour PROMs, 6bpp tiles |
-| Thundercade / Twin Formation, Tokusyu Butai U.A.G. (`downtown.cpp`) | Not yet: YM2203 + YM3812 on the 65C02 |
 
 ## Hardware
 
@@ -176,7 +188,7 @@ Every game runs an 8 MHz dot clock (16 MHz / 2), 512 dots per line and 272 lines
 
 MAME gives only refresh rates. The one marked "verified on PCB" in `seta.cpp` is Daioh's 57.42 Hz; the 60 Hz sets carry no comment.
 
-Confirmed on a PCB: Guru's measurement of Caliber 50 (`downtown.cpp`, same X1-001 / X1-007 / X1-012 chipset, not in this core) is **HSync 15.6250 kHz, VSync 57.4449 Hz** on X1-007 pins 22 and 23, the calculated values exactly.
+Confirmed on a PCB: Guru's measurement of Caliber 50 (`downtown.cpp`, same X1-001 / X1-007 / X1-012 chipset, Seta_Downtown core) is **HSync 15.6250 kHz, VSync 57.4449 Hz** on X1-007 pins 22 and 23, the calculated values exactly.
 
 Not every board measures the same:
 
@@ -185,7 +197,7 @@ Not every board measures the same:
 | Caliber 50 | 15.6250 kHz | 57.4449 Hz | `downtown.cpp`, Guru |
 | SD Gundam Neo Battling (in this core) | 15.22 kHz | 58 Hz | `seta.cpp`, Guru |
 | Crazy Fight (out of scope) | 15.1433 kHz | 59.1851 Hz | `seta.cpp`, Guru |
-| Thundercade (older board, not in this core) | 15.21 kHz | 59.1845 Hz | `downtown.cpp`, Guru |
+| Thundercade (Seta_Downtown core) | 15.21 kHz | 59.1845 Hz | `downtown.cpp`, Guru |
 
 Some links discussing the hardware:
 * https://www.arcade-museum.com/manuf/Seta.html
@@ -406,7 +418,8 @@ Some links discussing the hardware:
 
 Known issues:
 * **Thunder & Lightning** - Character sprites in attract glitch in at the edge of the screen. The same in MAME. Appears to be an original game bug.
-* **Seta_Downtown** - Not yet run on hardware since the sprite snapshot (page flip) and tile VRAM queue changes shared with the Seta core. Twin Eagle's water, drawn from its tile bank, is not yet checked on hardware.
+* **Thundercade** - Sprites still flicker in the second attract scene. The game's vblank handler copies half of its sprite list to sprite RAM each frame, and there the list changes between the two halves' copies on most frames, so sprite RAM holds two versions of the list. MAME shows the same. In the first scene the list only changes every other frame, and the core skips the mixed frames (`docs/MAME_DIVERGENCE.md`).
+* **Twin Eagle** - The guns on the carrier deck run a frame behind the tilemap when it moves side to side. The same in MAME.
 
 See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
 
@@ -417,6 +430,7 @@ See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, a
 - [ ] `zombraidp` / `zombraidpj` `.mra` files -- ERASE00 regions loaded in three byte lanes
 - [ ] `daiohc` — the `wrofaero` machine config with `daioh`-sized graphics, needs its own arm
 - [ ] The three 14.318181 MHz games (`orbs`, `keroppi`, `krzybowl`) need a Bresenham clock enable
+- [ ] Upstream to MAME: Thundercade's sprites updated only on frames after a control byte write (`docs/MAME_DIVERGENCE.md`, "Thundercade: sprites update at 30 Hz")
 - [ ] Upstream to MAME: flip screen as the unflipped frame rotated 180 -- the x1_012 tilemap mirror about the 512x256 bitmap, and the per-game flip offsets (`fg_yoffs`, `fg_xoffs`, layer `xoffs`) in `docs/MAME_DIVERGENCE.md`
 
 ### Resource usage

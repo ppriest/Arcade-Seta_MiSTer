@@ -50,14 +50,60 @@ module tb_downtown_sub;
 	end
 
 	logic inj_nmi = 0, inj_irq = 0;
+
+	// tndrcade: writes reaching each YM (cs 0 YM2203, cs 1 YM3812)
+	wire  [1:0] ym_cs;
+	wire        ym_we;
+	int         ym_w0 = 0, ym_w1 = 0;
+	wire        ym_a0;
+	wire  [7:0] ym_wdata, ym0_q;
+	// the YMs as seta_core wires them: 16 MHz / 4 from 96 MHz
+	logic [4:0] ym_div = 0;
+	always_ff @(posedge clk) ym_div <= (ym_div == 5'd23) ? 5'd0 : ym_div + 5'd1;
+	wire signed [15:0] ym0_snd, ym1_snd;
+	jt03 u_ym0 (
+		.rst(reset), .clk(clk), .cen(ym_div == 5'd0),
+		.din(ym_wdata), .addr(ym_a0), .cs_n(~ym_cs[0]), .wr_n(~ym_we),
+		.dout(ym0_q), .irq_n(), .IOA_in(8'hf7), .IOB_in(8'h7f),   // the mra's default DSW
+		.IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
+		.psg_A(), .psg_B(), .psg_C(), .fm_snd(), .psg_snd(),
+		.snd(ym0_snd), .snd_sample(), .debug_view());
+	jtopl2 u_ym1 (
+		.rst(reset), .clk(clk), .cen(ym_div == 5'd0),
+		.din(ym_wdata), .addr(ym_a0), .cs_n(~ym_cs[1]), .wr_n(~ym_we),
+		.dout(), .irq_n(), .snd(ym1_snd), .sample());
+	int ym0_peak = 0, ym1_peak = 0;
+	always_ff @(posedge clk) begin
+		if ((ym0_snd < 0 ? -ym0_snd : ym0_snd) > ym0_peak) ym0_peak <= (ym0_snd < 0 ? -ym0_snd : ym0_snd);
+		if ((ym1_snd < 0 ? -ym1_snd : ym1_snd) > ym1_peak) ym1_peak <= (ym1_snd < 0 ? -ym1_snd : ym1_snd);
+	end
+	always_ff @(posedge clk) begin
+		if (ym_we && ym_cs[0]) ym_w0 <= ym_w0 + 1;
+		if (ym_we && ym_cs[1]) ym_w1 <= ym_w1 + 1;
+	end
+
+	// the X1-010's CPU port as x1_010.sv presents it: address registered,
+	// then the read registered
+	wire        x1_req, x1_we;
+	wire [12:0] x1_addr;
+	wire  [7:0] x1_wdata;
+	logic [7:0] x1_mem [0:8191];
+	logic [12:0] x1_a_q;
+	logic  [7:0] x1_q;
+	initial for (int i = 0; i < 8192; i++) x1_mem[i] = 8'h00;
+	always_ff @(posedge clk) begin
+		x1_a_q <= x1_addr;
+		if (x1_req && x1_we) x1_mem[x1_addr] <= x1_wdata;
+		x1_q <= x1_mem[x1_a_q];
+	end
 	int   inj_done = -1;
 
 	// the set's downtown_board_cfg.sv values (prep.py --game)
-	logic [1:0] sub_map = 2'd0;
+	logic [2:0] sub_map = 3'd0;
 	logic [4:0] bank_entries = 5'd16;
 	int pa;
 	initial begin
-		if ($value$plusargs("SUB_MAP=%d", pa)) sub_map = pa[1:0];
+		if ($value$plusargs("SUB_MAP=%d", pa)) sub_map = pa[2:0];
 		if ($value$plusargs("BANK_ENTRIES=%d", pa)) bank_entries = pa[4:0];
 	end
 
@@ -67,8 +113,14 @@ module tb_downtown_sub;
 		.m_shr_req(1'b0), .m_shr_we(1'b0), .m_shr_addr(11'd0), .m_shr_wdata(8'd0),
 		.m_shr_rdata(),
 		.m_ctrl_we(1'b0), .m_ctrl_addr(2'd0), .m_ctrl_wdata(8'd0),
+		.m_ltc_we(inj_nmi && sub_map == 3'd3), .m_ltc_wdata(8'h00), .m_ltc_q(), .sub_hold(1'b0),
 		.p1_in(8'hff), .p2_in(8'hff), .coins_in(8'hff), .rot1(4'd0), .rot2(4'd0),
-		.line_112(inj_irq), .line_240(inj_nmi),
+		.irq_pulse(inj_irq), .nmi_pulse(inj_nmi),
+		// calibr50: the X1-010's RAM, as the 65C02's zero page and stack
+		.x1_req(x1_req), .x1_we(x1_we), .x1_addr(x1_addr), .x1_wdata(x1_wdata),
+		.x1_rdata(x1_q), .pcm_on(),
+		// tndrcade: status reads 0 (not busy)
+		.ym_cs(ym_cs), .ym_we(ym_we), .ym_a0(ym_a0), .ym_wdata(ym_wdata), .ym_rdata(ym0_q),
 		.rom_req(rom_req), .rom_addr(rom_addr), .rom_valid(rom_valid), .rom_data(rom_data)
 	);
 
@@ -120,6 +172,8 @@ module tb_downtown_sub;
 		end
 		n++;
 		if (n == total || (first_bad >= 0 && n > first_bad + 8)) begin
+			if (sub_map == 3'd4) $display("YM writes: YM2203 %0d, YM3812 %0d; output peak YM2203 %0d, YM3812 %0d",
+			                              ym_w0, ym_w1, ym0_peak, ym1_peak);
 			if (first_bad < 0) $display("PASS: %0d instructions match MAME", n);
 			else               $display("%0d instructions matched before the first difference", first_bad);
 			$finish;

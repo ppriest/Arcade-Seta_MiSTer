@@ -99,6 +99,12 @@ GAMES = {
     # Group C: the same sprite offsets as Group A, 1536 palette entries. Here
     # for the setac_eof copy, which msgundam alone of the supported sets uses.
     "msgundam":  dict(_GROUP_A, rot=0, palette_entries=1536),
+    # downtown.cpp tndrcade: sprites only (screen_update fills 0x1f0, draws
+    # with 0x1000); set_fg_yoffsets(-0x12, 0x0e) kept as MAME has it (224
+    # lines, as the 224-line seta.cpp sets); visarea 2*8..30*8-1. Its sprite
+    # region is "sprites" (MAME_SRC=.../downtown.cpp).
+    "tndrcade":  dict(_GROUP_A, rot=270, fg_yoffs=(-0x12, 0x0e),
+                      visarea=(0, 383, 16, 239), region="sprites"),
 }
 
 
@@ -608,8 +614,9 @@ def main():
         gfx = Path(a.gfx).read_bytes()
     else:
         from build_region import region_image
-        gfx, _, zippath = region_image(a.game, "gfx1")
-        print(f"gfx1 {len(gfx):#x} bytes from {zippath}")
+        rname = GAMES[a.game].get("region", "gfx1")
+        gfx, _, zippath = region_image(a.game, rname)
+        print(f"{rname} {len(gfx):#x} bytes from {zippath}")
 
     code, ylow, ctrl, pal, tag = load_capture(cfg, a.capdir, a.tag)
     print(f"capture {tag}: spritectrl {' '.join(f'{c:02x}' for c in ctrl)}"

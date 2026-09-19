@@ -91,6 +91,13 @@ def check(path, xml_cache):
             continue
         used.add((lo, hi))
         dname, ids = dips[(lo, hi)]
+        # the OSD's 28 columns (build_mra.py osd_fit): past them the value
+        # is drawn off the screen
+        for i in ids:
+            if 1 + len(dname.rstrip()) + 1 + len(i) > 28:
+                probs.append(f"'{dname}' = '{i}': {1 + len(dname.rstrip()) + 1 + len(i)} "
+                             f"columns, the OSD shows 28")
+                break
         if norm(dname) != norm(name):
             notes.append(f"'{name}': mra name '{dname}'")
         dflt_idx = None
@@ -112,6 +119,9 @@ def check(path, xml_cache):
             probs.append(f"'{name}': default option {got} ('{ids[got] if got < len(ids) else '?'}'),"
                          f" MAME {dflt_idx} ('{ids[dflt_idx] if dflt_idx < len(ids) else '?'}')")
     for key, (dname, _) in dips.items():
+        # sw[3] bit 0: the core's Flip Screen (build_mra.py CORE_FLIP_SETS)
+        if key == (24, 24) and dname == "Flip Screen":
+            continue
         if key not in used:
             probs.append(f"mra dip '{dname}' at bits {key[0]},{key[1]} is not a MAME switch")
 

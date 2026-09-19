@@ -32,6 +32,7 @@ BOARDS = {
     # downtown.cpp (BOARD_DOWNTOWN)
     "downtown": 18, "downtown2": 18, "downtownj": 18, "downtownp": 18,
     "twineagl": 18, "metafox": 18, "arbalest": 18,
+    "calibr50": 19, "tndrcade": 20, "tndrcadej": 20,
     "rezon": 0, "rezono": 0, "zingzip": 0, "wrofaero": 0, "gundhara": 0,
     "gundharac": 0, "jjsquawk": 0, "jjsquawko": 0, "zombraid": 17,
     "zombraidp": 17, "zombraidpj": 17, "daiohc": 0, "daiohp": 0, "daiohp2": 0,

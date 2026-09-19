@@ -1,0 +1,68 @@
+<misterromdescription>
+    <name>Caliber 50 (Ver. 1.01)</name>
+    <setname>calibr50</setname>
+    <rbf>SetaDowntown</rbf>
+    <mameversion>0286</mameversion>
+    <year>1989</year>
+    <manufacturer>Seta</manufacturer>
+    <category>Arcade</category>
+    <rotation>vertical</rotation>
+
+    <rom index="1"><part>07</part></rom>
+
+    <rom index="0" zip="calibr50.zip" md5="none" address="0x30000000">
+        <!-- maincpu -->
+        <interleave output="16">
+            <part name="uh-002-001.3b" crc="eb92e7ed" map="01"/>
+            <part name="uh-002-004.11b" crc="5a0ed31e" map="10"/>
+        </interleave>
+        <interleave output="16">
+            <part name="uh_001_003.9b" crc="0d30d09f" map="01"/>
+            <part name="uh_001_002.7b" crc="7aecc3f9" map="10"/>
+        </interleave>
+        <!-- pad to 0x100000 -->
+        <part repeat="393216">00</part>
+        <!-- sprites -->
+        <interleave output="16">
+            <part name="uh-001-006.2m" crc="fff52f91" map="01"/>
+            <part name="uh-001-007.4m" crc="b6c19f71" map="10"/>
+        </interleave>
+        <interleave output="16">
+            <part name="uh-001-008.5m" crc="7aae07ef" map="01"/>
+            <part name="uh-001-009.6m" crc="f85da2c5" map="10"/>
+        </interleave>
+        <!-- tiles -->
+        <interleave output="16">
+            <part name="uh-001-010.8m" crc="f986577a" map="01"/>
+            <part name="uh-001-011.9m" crc="08620052" map="10"/>
+        </interleave>
+        <!-- pad to 0x500000 -->
+        <part repeat="1048576">00</part>
+        <!-- x1snd -->
+        <part name="uh-001-013.12m" crc="09ec0df6"/>
+        <part name="uh-001-012.11m" crc="bb996547"/>
+        <!-- sub -->
+        <part repeat="16384">00</part>
+        <part name="uh-001-005.17e" crc="4a54c085" offset="0x0" length="0x8000"/>
+        <part name="uh-001-005.17e" crc="4a54c085" offset="0x0" length="0x40000"/>
+    </rom>
+
+    <switches default="FD,FF,FF" base="0">
+        <dip name="Difficulty" bits="0,1" ids="Hard,Normal,Easy,Easiest"/>
+        <dip name="Score Digits" bits="2" ids="3,7"/>
+        <dip name="Lives" bits="3" ids="4,3"/>
+        <dip name="Display Score" bits="4" ids="Off,On"/>
+        <dip name="Erase Backup Ram" bits="5" ids="Off,On"/>
+        <dip name="Licensor Option" bits="6" ids="Option 2,Option 1"/>
+        <dip name="Coinage Type" bits="7" ids="Coin Mode 2,Coin Mode 1"/>
+        <dip name="License" bits="8" ids="Seta / Taito,Seta USA/Taito USA"/>
+        <dip name="Flip Screen" bits="9" ids="On,Off"/>
+        <dip name="Service Mode" bits="10" ids="On,Off"/>
+        <dip name="Demo Sounds" bits="11" ids="Off,On"/>
+        <dip name="Coin A (1|2)" bits="12,13" ids="2C/3C|4C/1C,2C/1C|3C/1C,1C/2C|2C/1C,1C/1C"/>
+        <dip name="Coin B (1|2)" bits="14,15" ids="2C/3C|1C/6C,2C/1C|1C/4C,1C/2C|1C/3C,1C/1C|1C/2C"/>
+    </switches>
+
+    <buttons names="Button 1,Button 2,Rotate Left,Rotate Right,-,-,Start,Coin,Pause,Service" default="A,B,X,Y,Start,Select,L,R" count="4"/>
+    <nvram index="4" size="4096"/>
+</misterromdescription>

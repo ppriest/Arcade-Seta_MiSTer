@@ -57,8 +57,12 @@ module seta_core (
 	input  wire [15:0] extra_in,
 	input  wire [15:0] p3_in, p4_in,     // wits only
 	input  wire [15:0] dsw_in,
+	// the .mra's Flip Screen on sets whose board has no flip DIP (sw[3] bit 0)
+	input  wire        flip_sw,
 	// downtown.cpp: DownTown's rotary joysticks, positions 0..11
 	input  wire  [3:0] rot1, rot2,
+	// Caliber 50's loop joysticks as the uPD4701 counts them, 4 a position
+	input  wire [11:0] dial1, dial2,
 	// zombraid ADC0834 channels: {GUNY2, GUNX2, GUNY1, GUNX1}
 	input  wire [31:0] gun_ch,
 
@@ -176,18 +180,25 @@ module seta_core (
 
 	// downtown.cpp's tile bank, declared before seta_video uses it (ModelSim)
 	logic [31:0] dt_tile_bank;
+	// calibr50: the 65C02's side of the X1-010 port, declared before x1_010
+	wire        dt_x1_req, dt_x1_we, dt_pcm_on;
+	wire [12:0] dt_x1_addr;
+	wire  [7:0] dt_x1_wdata, dt_x1_q;
 `ifndef SETA_DOWNTOWN
 	wire         dt_tile_bank_en = 1'b0;
+	wire         dt_tile_raster  = 1'b0;
+	wire         dt_snap_ctrl_gate = 1'b0;
 `endif
 
 `ifdef SETA_DOWNTOWN
-	wire  [1:0] dt_sub_map;
+	wire  [2:0] dt_sub_map;
 	wire  [4:0] dt_sub_bank_entries;
-	wire        dt_tile_bank_en;
+	wire        dt_tile_bank_en, dt_tile_raster, dt_snap_ctrl_gate;
 	wire  [1:0] dt_prot;
 	downtown_board_cfg u_cfg (
 		.sub_map(dt_sub_map), .sub_bank_entries(dt_sub_bank_entries),
 		.tile_bank_en(dt_tile_bank_en), .dt_prot(dt_prot),
+		.tile_raster(dt_tile_raster), .snap_ctrl_gate(dt_snap_ctrl_gate),
 `else
 	seta_board_cfg u_cfg (
 `endif
@@ -388,6 +399,14 @@ module seta_core (
 	end
 	assign gun_aim = {aim_y2, aim_x2, aim_y1, aim_x1};
 
+	// gundhara and oisipuzl have no flip DIP (build_mra.py CORE_FLIP_SETS);
+	// gated so a stale sw[3] from another set does nothing
+`ifndef SETA_DOWNTOWN
+	wire         force_flip = flip_sw && (game == GAME_GUNDHARA || game == GAME_OISIPUZL);
+`else
+	wire         force_flip = 1'b0;
+`endif
+
 `ifndef SETA_DOWNTOWN
 	// Second work RAM block, 64 KB (zingzip_map's 0x300000; wits' 0xe04000).
 	logic [15:0] wram2 [0:32767];
@@ -489,15 +508,10 @@ module seta_core (
 		code_tail_q <= code_tail[t_addr];
 	end
 `else
-	// not on the downtown.cpp boards
+	// not on the downtown.cpp boards (calibr50's battery RAM is in the
+	// downtown.cpp block)
 	wire [15:0] wram2_q = 16'h0, xram_q = 16'h0;
 	wire [15:0] l0_tail_q = 16'h0, l1_tail_q = 16'h0, code_tail_q = 16'h0;
-	assign ioctl_din  = 8'h00;
-	assign dbg_nv_state = 2'b00;
-	always_ff @(posedge clk) begin
-		nvram_save   <= 1'b0;
-		dbg_nv_saves <= 8'd0;
-	end
 `endif
 
 	wire         tile_req, tile1_req;
@@ -541,6 +555,8 @@ module seta_core (
 	wire  [7:0] ylow_rdata, ctrl_rdata;
 	assign dbg_spr_rd = {ctrl_rdata, ylow_rdata, code_rdata};
 	wire        irq_vbl_pulse, irq_sl240_pulse, irq_sl112_pulse;
+	wire        scan_start;
+	wire  [9:0] scan_line;
 
 	// en_spr withholds the sprite engine's ROM data; the engine keeps running
 	wire spr_valid_g = spr_valid & en_spr;
@@ -601,6 +617,8 @@ module seta_core (
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.vregs(vregs), .tilemaps_flip(tilemaps_flip),
 		.tile_bank_en(dt_tile_bank_en), .tile_bank(dt_tile_bank),
+		.tile_raster(dt_tile_raster), .snap_ctrl_gate(dt_snap_ctrl_gate),
+		.force_flip(force_flip),
 
 		.code_we(io_req && io_we && io_sel[IO_SPRCODE] && !io_addr[14]),
 		.code_addr(dbg_rd_en ? dbg_rd_idx : io_addr[13:1]), .code_wdata(io_wdata),
@@ -623,6 +641,7 @@ module seta_core (
 		.vga_vb(video_vb), .vga_de(video_de), .vga_ce(video_ce),
 		.irq_vblank_line(irq_sl240_pulse), .irq_mid_line(irq_sl112_pulse),
 		.vblank_rise(irq_vbl_pulse),
+		.scan_start(scan_start), .scan_line(scan_line),
 		.dbg_l0_last_addr(dbg_l0_last_addr),
 		.dbg_l0_last_data(dbg_l0_last_data),
 		.dbg_l0_cut(dbg_l0_cut), .dbg_l0_hits(dbg_l0_hits),
@@ -637,12 +656,107 @@ module seta_core (
 
 `ifdef SETA_DOWNTOWN
 	// ---- downtown.cpp: the 65C02 system and the board's own registers ----
+	// map_board: 18 downtown_map, 19 calibr50_map, 20 tndrcade_map
+	wire dt_dtm = (map_board == 5'd18);
+	wire dt_c50 = (map_board == 5'd19);
+	wire dt_tc  = (map_board == 5'd20);
 	wire [23:0] dt_byte = {io_addr, 1'b0};
-	wire dt_subctrl = io_req && io_we && io_lds && io_addr[23:4] == 20'hA0000;  // 0xa00000-7
-	wire dt_shared  = io_addr[23:12] == 12'hB00;                                // 0xb00000-0xb00fff
-	wire dt_tbank_w = io_req && io_we && io_lds && io_addr[23:4] == 20'h40000;  // 0x400000-7
+	// sub_ctrl_w and the shared RAM: 0xa00000 / 0xb00000 (downtown_map),
+	// 0x800000 / 0xa00000 (tndrcade_map); calibr50_map has neither
+	wire dt_subctrl = io_req && io_we && io_lds
+	               && ((dt_dtm && io_addr[23:4] == 20'hA0000) || (dt_tc && io_addr[23:4] == 20'h80000));
+	wire dt_shared  = (dt_dtm && io_addr[23:12] == 12'hB00) || (dt_tc && io_addr[23:12] == 12'hA00);
+	wire dt_tbank_w = dt_tile_bank_en && io_req && io_we && io_lds && io_addr[23:4] == 20'h40000;  // 0x400000-7
 	// twineagl_ctrl_w at 0x500001: bits 5-4 clear -> levels 1 and 3 cleared
-	wire dt_ctrl_w  = io_req && io_we && io_lds && io_addr[23:1] == 23'h280000 && io_wdata[5:4] == 2'b00;
+	wire dt_ctrl_w  = dt_dtm && io_req && io_we && io_lds && io_addr[23:1] == 23'h280000 && io_wdata[5:4] == 2'b00;
+
+	// calibr50_map: the latches at 0xb00001 (write: to the 65C02, read: from
+	// it), the 65C02's reset at 0x500001 bit 4, the uPD4701 at 0xa00010-0xa00019
+	wire dt_c50_ltc  = dt_c50 && io_addr[23:1] == 23'h580000;
+	wire dt_c50_upd  = dt_c50 && io_addr[23:4] == 20'hA0001;
+	logic dt_sub_hold = 1'b0;
+	always_ff @(posedge clk)
+		if (reset) dt_sub_hold <= 1'b0;
+		else if (dt_c50 && io_req && io_we && io_lds && io_addr[23:1] == 23'h280000)
+			dt_sub_hold <= !io_wdata[4];
+
+	// uPD4701: the counts since the last reset_xy_r (0xa00019), latched by each
+	// read; read_xy: X low, X high, Y low, Y high at 0xa00011/3/5/7 (switches
+	// none, so the high nibble of the high byte is 0)
+	logic [11:0] dt_upd_x0 = 12'd0, dt_upd_y0 = 12'd0;
+	wire  [11:0] dt_upd_x  = dial1 - dt_upd_x0;
+	wire  [11:0] dt_upd_y  = dial2 - dt_upd_y0;
+	always_ff @(posedge clk)
+		if (reset) begin
+			dt_upd_x0 <= dial1; dt_upd_y0 <= dial2;
+		end else if (dt_c50_upd && io_req && !io_we && io_addr[3:1] == 3'd4) begin
+			dt_upd_x0 <= dial1; dt_upd_y0 <= dial2;
+		end
+	logic [7:0] dt_upd_q;
+	always_comb case (io_addr[2:1])
+		2'd0: dt_upd_q = dt_upd_x[7:0];
+		2'd1: dt_upd_q = {4'h0, dt_upd_x[11:8]};
+		2'd2: dt_upd_q = dt_upd_y[7:0];
+		default: dt_upd_q = {4'h0, dt_upd_y[11:8]};
+	endcase
+
+	// calibr50: 4 KB RAM behind the tile VRAM (0x904000-0x904fff)
+	logic [15:0] dt_vx [0:2047];
+	logic [15:0] dt_vx_q;
+	wire         dt_vx_hit = dt_c50 && io_addr[23:12] == 12'h904;
+	always_ff @(posedge clk) begin
+		if (io_req && io_we && dt_vx_hit && io_lds) dt_vx[io_addr[11:1]][7:0]  <= io_wdata[7:0];
+		if (io_req && io_we && dt_vx_hit && io_uds) dt_vx[io_addr[11:1]][15:8] <= io_wdata[15:8];
+		dt_vx_q <= dt_vx[io_addr[11:1]];
+	end
+
+	// calibr50's battery RAM, 0x200000-0x200fff (maincpu's IO_WRAM2), saved
+	// to the .mra's <nvram index="4" size="4096"/> file: restored by an
+	// index-4 download, and an upload requested on every write -- MiSTer
+	// services it when the OSD next opens. Big-endian bytes in the file. The
+	// download goes through the CPU's port (the CPU is in reset for any
+	// download; Quartus will not infer a second write port).
+	logic [15:0] dt_nv [0:2047];
+	logic [15:0] dt_nv_q;
+	wire         dt_nv_cpu = dt_c50 && io_req && io_we && io_sel[IO_WRAM2];
+	wire         dt_nv_dl  = dt_c50 && ioctl_download && ioctl_index == 16'd4;
+	logic        dt_nv_we, dt_nv_lo, dt_nv_hi;
+	logic [10:0] dt_nv_a;
+	logic [15:0] dt_nv_d;
+	always_ff @(posedge clk) begin
+		if (dt_nv_dl) begin
+			dt_nv_we <= ioctl_wr; dt_nv_lo <= ioctl_addr[0]; dt_nv_hi <= ~ioctl_addr[0];
+			dt_nv_a  <= ioctl_addr[11:1]; dt_nv_d <= {ioctl_dout, ioctl_dout};
+		end else begin
+			dt_nv_we <= dt_nv_cpu; dt_nv_lo <= io_lds; dt_nv_hi <= io_uds;
+			dt_nv_a  <= io_addr[11:1]; dt_nv_d <= io_wdata;
+		end
+	end
+	always_ff @(posedge clk) begin
+		if (dt_nv_we && dt_nv_lo) dt_nv[dt_nv_a][7:0]  <= dt_nv_d[7:0];
+		if (dt_nv_we && dt_nv_hi) dt_nv[dt_nv_a][15:8] <= dt_nv_d[15:8];
+		dt_nv_q <= dt_nv[dt_nv_a];
+	end
+	logic [15:0] dt_nv_up;
+	always_ff @(posedge clk) dt_nv_up <= dt_nv[ioctl_addr[11:1]];
+	assign ioctl_din = ioctl_addr[0] ? dt_nv_up[7:0] : dt_nv_up[15:8];
+	always_ff @(posedge clk) begin
+		nvram_save <= dt_nv_cpu;
+		if (reset) dbg_nv_saves <= 8'd0;
+		else if (dt_nv_cpu && dbg_nv_saves != 8'hff) dbg_nv_saves <= dbg_nv_saves + 8'd1;
+	end
+	assign dbg_nv_state = 2'b00;
+
+	// calibr50_interrupt: level 4 at scanlines 0, 64, 128, 192 (ASSERT, acked
+	// by reading 0x100000); the 65C02's IRQ 4 a frame: from_hz(240), not the
+	// screen's
+	wire dt_l4_pulse = dt_c50 && scan_start && scan_line[5:0] == 6'd0 && scan_line < 10'd256;
+	logic [18:0] dt_t240 = '0;
+	wire dt_t240_hit = (dt_t240 == 19'd399_999);                   // 96 MHz / 240
+	always_ff @(posedge clk) dt_t240 <= dt_t240_hit ? 19'd0 : dt_t240 + 19'd1;
+	// tndrcade_sub_interrupt: IRQ every 16 scanlines, NMI at 240
+	wire dt_tc_irq = scan_start && scan_line[3:0] == 4'd0 && scan_line < 10'd256;
+	wire dt_sub_irq = dt_c50 ? dt_t240_hit : dt_tc ? dt_tc_irq : irq_sl112_pulse;
 
 	initial dt_tile_bank = 32'd0;
 	always_ff @(posedge clk) begin
@@ -654,19 +768,55 @@ module seta_core (
 	logic [5:0] sub_div = 6'd0;
 	always_ff @(posedge clk) sub_div <= (sub_div == 6'd47) ? 6'd0 : sub_div + 6'd1;
 
-	wire [7:0] dt_shr_q;
+	wire [7:0] dt_shr_q, dt_ltc_q;
+	wire [1:0] dt_ym_cs;
+	wire       dt_ym_we, dt_ym_a0;
+	wire [7:0] dt_ym_wdata;
+	wire [7:0] dt_ym0_q;
 	downtown_sub u_sub (
 		.clk(clk), .reset(reset), .ce(sub_div == 6'd0),
 		.sub_map(dt_sub_map), .bank_entries(dt_sub_bank_entries),
 		.m_shr_req(io_req && dt_shared), .m_shr_we(io_we && io_lds),
 		.m_shr_addr(io_addr[11:1]), .m_shr_wdata(io_wdata[7:0]), .m_shr_rdata(dt_shr_q),
 		.m_ctrl_we(dt_subctrl), .m_ctrl_addr(io_addr[2:1]), .m_ctrl_wdata(io_wdata[7:0]),
+		.m_ltc_we(dt_c50_ltc && io_req && io_we && io_lds), .m_ltc_wdata(io_wdata[7:0]),
+		.m_ltc_q(dt_ltc_q), .sub_hold(dt_sub_hold),
 		.p1_in(p1_in[7:0]), .p2_in(p2_in[7:0]), .coins_in(coins_in[7:0]),
 		.rot1(rot1), .rot2(rot2),
-		.line_112(irq_sl112_pulse), .line_240(irq_sl240_pulse),
+		.irq_pulse(dt_sub_irq), .nmi_pulse(irq_sl240_pulse),
+		.x1_req(dt_x1_req), .x1_we(dt_x1_we), .x1_addr(dt_x1_addr),
+		.x1_wdata(dt_x1_wdata), .x1_rdata(dt_x1_q), .pcm_on(dt_pcm_on),
+		.ym_cs(dt_ym_cs), .ym_we(dt_ym_we), .ym_a0(dt_ym_a0),
+		.ym_wdata(dt_ym_wdata), .ym_rdata(dt_ym0_q),
 		.rom_req(sub_rom_req), .rom_addr(sub_rom_addr),
 		.rom_valid(sub_rom_valid), .rom_data(sub_rom_data)
 	);
+
+	// tndrcade: YM2203 (DSW 1 on port A, DSW 2 on port B: dsw1_r / dsw2_r)
+	// and YM3812, both 16 MHz / 4; mixed 0.35 and 0.5 as MAME routes them
+	logic [4:0] dt_ym_div = 5'd0;
+	wire        dt_ym_cen = (dt_ym_div == 5'd0);
+	always_ff @(posedge clk) dt_ym_div <= (dt_ym_div == 5'd23) ? 5'd0 : dt_ym_div + 5'd1;
+	wire signed [15:0] dt_ym0_snd, dt_ym1_snd;
+	jt03 u_ym0 (
+		.rst(reset | ~dt_tc), .clk(clk), .cen(dt_ym_cen),
+		.din(dt_ym_wdata), .addr(dt_ym_a0), .cs_n(~dt_ym_cs[0]), .wr_n(~dt_ym_we),
+		.dout(dt_ym0_q), .irq_n(),
+		.IOA_in(dsw_in[15:8]), .IOB_in(dsw_in[7:0]),
+		.IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
+		.psg_A(), .psg_B(), .psg_C(), .fm_snd(), .psg_snd(),
+		.snd(dt_ym0_snd), .snd_sample(), .debug_view()
+	);
+	jtopl2 u_ym1 (
+		.rst(reset | ~dt_tc), .clk(clk), .cen(dt_ym_cen),
+		.din(dt_ym_wdata), .addr(dt_ym_a0), .cs_n(~dt_ym_cs[1]), .wr_n(~dt_ym_we),
+		.dout(), .irq_n(),
+		.snd(dt_ym1_snd), .sample()
+	);
+	// 0.35 ~ 3/8, 0.5 = 1/2
+	wire signed [17:0] dt_ym_sum = (18'(dt_ym0_snd) * 3) / 8 + 18'(dt_ym1_snd) / 2;
+	wire signed [15:0] dt_ym_mix = (dt_ym_sum >  18'sd32767) ? 16'sd32767
+	                             : (dt_ym_sum < -18'sd32768) ? -16'sd32768 : dt_ym_sum[15:0];
 
 	// downtown_protection_r/w: 256 bytes at 0x200000, power-on 0xff; with job
 	// byte (0x2000f8) 0xa3, 0x200100-0x20010a read "WALTZ0"
@@ -709,6 +859,11 @@ module seta_core (
 `else
 	assign dt_tile_bank = 32'd0;
 	wire        dt_ctrl_w = 1'b0;
+	wire        dt_l4_pulse = 1'b0;
+	wire        dt_c50 = 1'b0, dt_tc = 1'b0;
+	wire signed [15:0] dt_ym_mix = 16'sd0;
+	assign dt_x1_req = 1'b0; assign dt_x1_we = 1'b0; assign dt_pcm_on = 1'b1;
+	assign dt_x1_addr = 13'd0; assign dt_x1_wdata = 8'd0; assign dt_x1_q = 8'd0;
 	assign sub_rom_req = 1'b0;
 	assign sub_rom_addr = 19'd0;
 `endif
@@ -732,6 +887,8 @@ module seta_core (
 
 		// PIT OUT0 rising edge -> IPL 4, ASSERT_LINE
 		if (pit_rise) irq_set[3'd4] = 1'b1;
+		// calibr50: level 4 four times a frame, ASSERT_LINE
+		if (dt_l4_pulse) irq_set[3'd4] = 1'b1;
 
 		if (irq_vbl_level   != 3'd0) irq_hold[irq_vbl_level]   = irq_vbl_hold;
 		// seta_interrupt_1_and_2: HOLD_LINE
@@ -804,11 +961,16 @@ module seta_core (
 	wire [15:0] x1_rdata;
 	wire signed [15:0] x1_l, x1_r;
 
+	// calibr50: the X1-010 is on the 65C02's bus (low lane: the register
+	// byte), not the 68000's
 	x1_010 u_snd (
 		.clk(clk), .reset(reset), .ce(snd_ce),
-		.cpu_req(io_req && io_sel[IO_X1SND]), .cpu_we(io_we),
-		.cpu_addr(io_addr[13:1]), .cpu_wdata(io_wdata),
-		.cpu_uds(io_uds), .cpu_lds(io_lds), .cpu_rdata(x1_rdata),
+		.cpu_req(dt_c50 ? dt_x1_req : io_req && io_sel[IO_X1SND]),
+		.cpu_we(dt_c50 ? dt_x1_we : io_we),
+		.cpu_addr(dt_c50 ? dt_x1_addr : io_addr[13:1]),
+		.cpu_wdata(dt_c50 ? {8'h00, dt_x1_wdata} : io_wdata),
+		.cpu_uds(dt_c50 ? 1'b0 : io_uds), .cpu_lds(dt_c50 ? 1'b1 : io_lds),
+		.cpu_rdata(x1_rdata),
 		.rom_req(snd_rom_req), .rom_addr(snd_rom_addr),
 		.rom_valid(snd_rom_valid), .rom_data(snd_rom_data),
 		.audio_l(x1_l), .audio_r(x1_r), .audio_stb(),
@@ -816,8 +978,12 @@ module seta_core (
 		.dbg_rom_reads(dbg_snd_rom_reads)
 	);
 
-	assign audio_l = en_pcm ? x1_l : 16'sd0;
-	assign audio_r = en_pcm ? x1_r : 16'sd0;
+	// tndrcade: the YMs; calibr50: the X1-010 behind /PCMMUTE
+`ifdef SETA_DOWNTOWN
+	assign dt_x1_q = x1_rdata[7:0];
+`endif
+	assign audio_l = !en_pcm ? 16'sd0 : dt_tc ? dt_ym_mix : (dt_c50 && !dt_pcm_on) ? 16'sd0 : x1_l;
+	assign audio_r = !en_pcm ? 16'sd0 : dt_tc ? dt_ym_mix : (dt_c50 && !dt_pcm_on) ? 16'sd0 : x1_r;
 
 	wire [15:0] prot_rdata;
 	seta_prot_pairlove u_prot (
@@ -850,6 +1016,10 @@ module seta_core (
 		else if (dt_prot_hit)        io_rdata = {8'h00, dt_waltz_hit ? dt_waltz : dt_prot_q};
 		else if (dt_xram_hit)        io_rdata = {8'h00, dt_xram[io_addr[3:1]]};
 		else if (dt_mf_in)           io_rdata = dt_mf_q;
+		else if (dt_c50_ltc)         io_rdata = {8'h00, dt_ltc_q};
+		else if (dt_c50_upd)         io_rdata = {8'h00, dt_upd_q};
+		else if (dt_vx_hit)          io_rdata = dt_vx_q;
+		else if (dt_c50 && io_sel[IO_WRAM2]) io_rdata = dt_nv_q;
 		else
 `endif
 		if      (tl_prot_rd_hit)     io_rdata = {8'h00, tl_prot_value};

@@ -148,6 +148,7 @@ confirms it:
 | X1-001 code, Y, control, unbuffered boards | snapshot 5 lines before the frame wraps, ~19 lines into vblank | the games write their lists in the first lines after vblank start (Mad Shark: over 90% in 8 lines); a snapshot at vblank drew sprites with each other's tiles | yes |
 | X1-001, a hand-flipped page (26 of 31 parents) | codes copied at the flip, from the half it selects; they go live with Y and control at the board's usual point (below) | with `setac_eof` off the game owns the two halves and the flip is its "list complete"; stg flips at line 113 and writes across the whole frame, so no point near vblank is clean for both halves | Strike Gunner right, attract including the asteroid scene (9d830c7); the other 25 not yet re-checked |
 | X1-001, other buffered boards | copy and snapshot at vblank, in each board's order | "`setac_eof`: the copy and the draw, in each board's order" | Quiz Kokology, Blandia, Mobile Suit Gundam right (e92059d); Strike Gunner's ship wrong on every order so far, the snapshot before vblank (0a0e86b) not yet built; Dragon Unit not yet tested |
+| X1-001, `downtown.cpp` boards | snapshot on one line per board (`downtown_board_cfg.sv` `spr_snap_line`), MAME's draw point: 248 on DownTown, Twin Eagle, Caliber 50; 240 on Thundercade, which also skips frames (below) | the usual point (5 lines before the wrap, 267 in the 272-line frame) fell among Twin Eagle's and DownTown's sprite Y writes, 8-24 lines after vblank start | Twin Eagle's carrier steady at 248 (SetaDowntown_10000012); its deck guns then trail the tilemap by a frame, as in MAME. A snapshot after the writes (render line 2) was tried and reverted in favour of MAME's alignment |
 
 The chip reads scroll per scanline (MAME's comment cites Caliber 50's raster
 effect), so a game that changes scroll mid-frame on purpose would not show it
@@ -461,6 +462,69 @@ drgnunit family) are snapshotted 5 lines before the core's frame wraps, about
 frame before MAME does. Mad Shark, for one, writes over 90% of its Y in the
 first 8 lines. No per-line measurement of the core yet (probe G gives only
 the last write line).
+
+### Thundercade: sprites update at 30 Hz, on the frames whose list is whole
+
+The game keeps its sprite list in work RAM (codes 0xe02000, X 0xe02400, Y
+0xe02c00; 0x200 slots) and its vblank handler copies half of it to sprite RAM
+each frame, alternating: slots 0x000-0x0ff with the four control bytes and
+the column scroll (PC 0x103a2), then slots 0x100-0x1ff (PC 0x10430). MAME,
+`scripts/mame/wpc.lua`, `scripts/mame/sprdump.lua`, frames 640-660.
+
+In the first attract scene the main program rebuilds the whole list every
+other frame, between the half-0 and the half-1 copy (lines 18-193), and on
+the frames between rewrites only slots 2-28. So on alternate frames sprite
+RAM holds half of one list version and half of the next, and any object that
+changed slot shows twice or not at all: MAME's flicker (its TODO: "tndrcade:
+lots of flickering sprites"), and the core's before this. The frames after
+the half-0 copy, the one that writes the control bytes, hold one version.
+
+`x1_001.sv` `snap_ctrl_gate`, on for tndrcade and tndrcadej only: the sprite
+snapshot is taken only if a control byte was written since the last one;
+other frames keep the previous snapshot. Sprites update at 30 Hz, the rate
+the game computes them. Nothing is lost: the slots updated between rebuilds
+are in half 0, which reaches sprite RAM every other frame anyway. The first
+scene is right on hardware (SetaDowntown_10000012).
+
+This is a rule about this game's program order, not a model of the X1-001:
+nothing is known that makes the real chip skip those frames. Tried and
+rejected:
+
+* Reading sprite RAM live, per line, as Jotego's X1-001 does
+  (`jtkiwi_gfx.v`): worse on hardware. It draws the same mixed RAM.
+* The rule for every set: most write the control bytes on 98.6-100% of
+  frames, where it does nothing, but eightfrc and msgundam never write them
+  after boot (their sprites would freeze), and rezon, metafox and oisipuzl
+  in attract write sprite codes on frames without a control write
+  (`debug/wtiming` counts). Not measured whether those frames change what
+  is on screen.
+
+**Still wrong: the second attract scene** (frames 1921-2760, and 4801-5640 on
+the next loop). There the list changes on most frames and on both sides of
+the copies; counting only writes that change a value
+(`scripts/mame/tc_consist.lua`), 70-90% of frames hold two versions whichever
+parity is taken, and 28-60 of each 60 frames the rule takes are mixed. The
+mixing is in what the game writes to sprite RAM, so anything drawing from
+sprite RAM shows it; MAME does. Drawing from the work-RAM list instead would
+be a video chip reading main CPU RAM, which the board cannot do; not done.
+
+For MAME the same rule is a driver change (downtown.cpp `tndrcade_state`):
+a handler on 0x600600-0x600607 that forwards to `spritectrl_w16` and sets a
+flag, a vblank callback that redraws a cached sprite bitmap only when the
+flag is set, and `screen_update` copying the cache. Not written yet.
+
+### Flip Screen on Gundhara and Oishii Puzzle is the core's own
+
+Neither board has a flip DIP (MAME's ports), and Gundhara's program has no
+flip setting (no flip or screen strings in its main CPU ROMs). Their `.mra`s
+get a Flip Screen switch in a fourth switch byte (`build_mra.py`
+`CORE_FLIP_SETS`, `sw[3]` bit 0), and `seta_video.sv` rotates the whole
+picture 180 degrees for it: every engine renders the visible line mirrored
+about the visible area and the line buffers are read right to left, latched
+at vblank (as Arcade-Psikyo 9f70427). Setting the X1-001's flip bit instead
+flipped each sprite in place and moved the tilemaps off screen: the games
+that flip move everything else themselves. Right on hardware for both
+(Seta_10000070).
 
 ### atehate work RAM is 64 KB, not 1 MB
 

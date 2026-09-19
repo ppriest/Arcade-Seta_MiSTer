@@ -1,0 +1,171 @@
+# jt10 (YM2610) provenance
+
+**In this repository:** copied from Arcade-Fuuki_MiSTer's `rtl/sound/jt12/` at its commit 8e70617, unchanged, for Thundercade's YM2203 (jt03) and YM3812 (jtopl2) on the Seta_Downtown core. The notes below are that repository's.
+
+**In this repository:** copied on 2026-09-06 from the Psikyo core's `rtl/sound/jt10/` (the jt12
+repository's `hdl/` tree, which that project named after the chip it used) -- unchanged, and
+renamed `jt12` here because FG-2 uses `jt03` (YM2203) out of the same tree. The notes below are
+Psikyo's.
+
+Vendored from https://github.com/jotego/jt12, commit `dc9be7c` (2026-09-01; originally
+`1aff35dc6611b2f842666ddacce40734896cb1a4`, 2026-08-17 -- see "Update 2026-09-01" below),
+for use as the YM2610 sound chip on the SH201B/KA302C boards (sngkace/gunbird/
+btlkroad). Only the `hdl/` directory (and `LICENSE`) was pulled -- not `cc/`, `cfg/`, `doc/`,
+`ise/`, `jt89/`, `octave/`, `out/`, `quartus/`, `sgdk/`, `target/`, `ver/` -- those are jotego's
+own build/test/toolchain scaffolding for the jt12 repo as a standalone project, not needed here.
+Kept the *entire* `hdl/` directory rather than hand-pruning to jt10's exact dependency graph (74
+files, 474KB) -- same reasoning as `rtl/cpu/t80/PROVENANCE.md`'s decision to keep T80's full file
+set: avoids having to re-derive the true dependency graph by hand and risk silently dropping
+something jt10.v actually needs.
+
+**Correction (2026-08-22): `jt49/` was also excluded by the original vendoring pass above, and
+that was a real mistake, not a safe scaffolding trim.** `jt12_top.v` instantiates a module named
+`jt49` directly (the SSG/AY-3-8910-compatible tone generator jt10 needs for `use_ssg=1`) -- it
+is jt12's own git submodule dependency, not part of the jt12 repo's own `hdl/` tree, so excluding
+the `jt49/` subdirectory silently left jt10 unable to elaborate at all. Found while building the
+first real jt10 testbench (`sim/jt10_tb/`, see "Status" below) -- `jt49` simply didn't exist
+anywhere in this repo. Fixed by vendoring it separately: `rtl/sound/jt49/` (its own
+`PROVENANCE.md`), from `https://github.com/jotego/jt49` at commit
+`47301ed51374d6d41db4db846b7643fecf75e417` (2026-08-22), GPL-3.0 (same posture as jt10 itself,
+no new licensing question). With it in place, the full jt10/jt12_top dependency tree compiles
+clean under ModelSim -- see "Status".
+
+**License: GPL-3.0**, not the permissive/LGPL licenses of TG68K.C or T80 -- copyleft, with an
+explicit "you are obliged to publish your code if you use mine" provision per the jotego project's
+own stated terms. This is a real, meaningfully different licensing posture from this project's
+other vendored cores and should be treated as a deliberate choice, not a detail to skim past:
+since this is (and is intended to remain) a fully open-source hobby FPGA project, GPL-3.0
+compatibility is not expected to be a practical problem, but it does mean the whole core --
+not just this module -- inherits GPL-3.0's copyleft obligations once this file is actually
+integrated into a build. Author: Jose Tejada Gomez (@topapate).
+
+**Top-level module: `jt10.v`**, a thin wrapper around the shared `jt12_top` engine
+(`use_lfo=1, use_ssg=1, num_ch=6, use_pcm=0, use_adpcm=1, JT49_DIV=3`) exposing the actual
+YM2610-shaped interface: standard 4-address-line CPU register bus (`din`/`addr[1:0]`/`cs_n`/
+`wr_n`/`dout`/`irq_n`, the classic OPN-family register protocol), plus **ADPCM-A and ADPCM-B ROM
+interfaces** (`adpcma_addr[19:0]`/`adpcma_bank[4:0]`/`adpcma_roe_n`/`adpcma_data[7:0]` and the
+equivalent `adpcmb_*` set) -- real YM2610 hardware has dedicated sample ROMs for these channels,
+so this project's sound subsystem will need to wire up SDRAM/ROM banking for them, not just the
+FM/SSG side -- **confirmed required**, not optional: checked `psikyo.cpp`'s `ROM_START` blocks
+directly rather than assuming. `sngkace` has a `ymsnd:adpcma` region (0x100000, ADPCM-A samples
+only). `gunbird` has both `ymsnd:adpcma` (0x100000) and `ymsnd:adpcmb` (0x080000, "DELTA-T
+Samples") -- full ADPCM-A+B usage. So the ADPCM ROM interfaces on `jt10.v` are load-bearing for
+Phase 1, not a corner this project can cut.
+
+## Update 2026-09-01: refreshed to upstream `dc9be7c`
+
+Pulled to chase the scratchy ADPCM audio in Gun Bird and Samurai Aces, which is a
+known jt10 defect rather than an integration fault here (see
+`docs/ROADMAP.md`'s "Fix sound" item -- ADPCM starvation was measured directly
+and ruled out on this side). Eight upstream commits, of which the relevant one is
+**`dc9be7c` "jt10_adpcm_drvB: din is also gated by cen"**:
+
+```verilog
+// before: the ADPCM-B nibble was latched EVERY clock
+always @(posedge clk) din <= !nibble_sel ? data[7:4] : data[3:0];
+
+// after: latched on the chip's clock enable, with a reset
+end else if( cen ) begin
+    roe_n <= ~(adv & cen55);
+    din   <= !nibble_sel ? data[7:4] : data[3:0];
+end
+```
+
+Sampling the sample nibble at full clock rate rather than on `cen` lets it change
+between the ticks the decoder consumes, so the decoder can read a nibble that was
+never the intended one -- audibly, noise on ADPCM-B. `roe_n` is now reset-aware
+and cen-gated too. Gun Bird uses ADPCM-A + ADPCM-B, so it is in this core's path.
+
+**BREAKING INTERFACE CHANGE**, handled here: `4cf1c5b` split `jt10.v`'s single
+`fm_snd` output into `fm_left`/`fm_right` (the FM+ADPCM sum a real YM2610 feeds
+to its external YM3016 DAC). This core consumes the already-combined
+`snd_left`/`snd_right`, so both are left unconnected -- updated in
+`rtl/psikyo_top.sv` and in `sim/jt10_tb/tb_jt10_ssg.sv`.
+
+Also in the range, not affecting this core's configuration: YM2610B support
+(`jt10b.v`, `jt10b_mixer.v` -- new files, deliberately NOT added to either .qsf
+since we instantiate `jt10`, not `jt10b`), a `FULLFM` parameter on `jt10_acc`
+(default 0 = the YM2610 behaviour we had; the 7.25x ADPCM-A gain is unchanged),
+an ADPCM status-flag mask fix, and an mmr guard against data writes when the
+address port does not match. No files were removed upstream, so no .qsf entry
+was invalidated.
+
+Verified after the update: the whole jt10 + jt49 tree compiles clean, and
+`sim/jt10_tb/tb_jt10_ssg.sv` still measures exactly 16384 and 8192 clk cycles for
+its two tone periods (unchanged from before the update). NOT yet verified by ear
+on hardware -- that is the whole point of the change and remains open.
+
+## Reverted local modification: ADPCM-A saturation (2026-09-01)
+
+This directory is a PRISTINE copy of upstream again. A local change was made
+here and has been backed out; recording it because the reasoning is still
+useful and someone may be tempted to re-apply it.
+
+The ADPCM-A contribution is amplified by 7.25x, and `adpcmA_l`/`adpcmA_r` are
+signed 16-bit, so that product needs 19 bits. Every operand in
+
+```verilog
+acc_input_l = (adpcmA_l <<< 2) + (adpcmA_l <<< 1) + adpcmA_l + (adpcmA_l >>> 2);
+```
+
+is 16 bits, so the sum is evaluated at 16 bits and WRAPS -- verified
+exhaustively: the safe input range is only +/-4519 (32767/7.25), so 56,497 of
+the 65,536 possible values overflow. That is a real defect, and jotego's own
+comment beside it anticipates it ("I suppose ADPCM-A would saturate if taken up
+a factor of 8 instead of 4").
+
+It was NOT the cause of this core's scratchy audio, and the change was reverted
+for three reasons: hardware testing showed no improvement; a JTAG capture of the
+core's own audio measured a peak of 19.5% of full scale during normal play and
+73.5% during a noise burst, so the signal never reaches the range where the
+wrap occurs; and the widen-and-saturate logic cost about 0.2 ns of clk_sys
+slack, which on this design took a build from +0.166 to +0.008 and produced a
+video mode the monitor could not sync to.
+
+The actual cause was in this project's own glue, not in jt10: the ADPCM sample
+ADDRESS was passed to `sdram_narrow_bridge` live rather than latched with the
+request, violating that bridge's stated contract. See `rtl/psikyo_top.sv`.
+
+If the saturation is ever wanted on its own merits, it belongs upstream in
+jotego/jt12 rather than as a local patch here -- it is a genuine fix to a
+genuine overflow, just not to this symptom.
+
+## Status
+
+- [x] Source vendored (with the `jt49` gap above found and fixed)
+- [x] Compiles under ModelSim-Altera 10.5b -- the full jt10/jt12_top dependency tree (this
+      directory's `hdl/`, minus `alt/`/`deprecated/`, which nothing here instantiates, plus
+      `rtl/sound/jt49/hdl/`) compiles with 0 errors, 0 warnings.
+- [x] **SSG (jt49) verified against a real, derived-not-assumed frequency reference** --
+      `sim/jt10_tb/tb_jt10_ssg.sv`. Drives jt10 through its real CPU register-write protocol
+      (the same addr[1:0] latch/data scheme a real sound driver uses) to configure SSG channel A
+      for two different tone periods, then measures the actual generated square wave on the real
+      `psg_A` output and checks it against a frequency formula derived by reading
+      `jt12_div.v`/`jt49_cen.v`/`jt49_div.v` directly (not assumed from a datasheet): with `cen`
+      tied high, `clk_en_ssg = clk/4` (div_setting's reset value), `cen16 = clk_en_ssg/8`
+      (`CLKDIV=3`, `sel=1`), and the tone divider toggles once per `period` `cen16` ticks, giving
+      one full square-wave period = `64 * period` raw clk cycles. Both test cases (period=256 and
+      128) matched the formula **exactly** (16384 and 8192 clk cycles, zero error), and their 2:1
+      ratio confirmed the relationship independent of the absolute formula. First run actually
+      failed at exactly half the expected value in both cases -- a real bug, but in the
+      testbench's own `measure_period` task (it spanned only a half-period, falling edge to the
+      next rising edge, not a full period), not in jt49; the exact 2x factor and preserved 2:1
+      ratio between the two cases were what pointed at a measurement-window bug rather than a
+      real one. Fixed and re-verified exact.
+- [ ] **FM channel and ADPCM-A/B ROM interface: not yet verified.** Explicitly out of scope for
+      this pass -- FM synthesis correctness (envelope curves, operator algorithms, LFO) isn't
+      something a simple register-write-and-measure test can validate the way a tone generator's
+      frequency can, and needs its own dedicated pass (e.g. a real VGM playback comparison or a
+      MAME audio trace), not a token check reported as "verified." A real, open issue was found
+      in passing and is NOT yet root-caused: `jt12_top.v`'s `jt10_acc` instantiation
+      (`gen_adpcm` block, the ADPCM-A/FM accumulator) throws `** Warning: (vsim-3015) ... Port
+      size (14) does not match connection size (1) for port 'op_result'` even though the
+      connected wire (`op_result_hd`) is declared `[13:0]` (14 bits) at `jt12_top.v` module
+      scope -- upstream code, unrelated to the jt49 fix above, and not exercised by the SSG-only
+      test (which passed with an exact match), so it's tracked here rather than either ignored or
+      falsely folded into "jt10 is verified."
+- [x] Confirmed Phase 1 games exercise the ADPCM-A/B paths (`sngkace`: ADPCM-A only;
+      `gunbird`: ADPCM-A + ADPCM-B) -- not optional to implement
+- [ ] Synthesizes/fits on the real Cyclone V -- not yet attempted; jt10 isn't instantiated in
+      `Psikyo.sv` yet (`ym_din` tied to `0`, see `docs/ROADMAP.md`'s "`Psikyo.sv` top-level
+      built" entry), so this is separate from that module's own real Quartus verification.

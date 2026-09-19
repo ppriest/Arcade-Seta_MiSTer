@@ -34,7 +34,11 @@ fi
 
 OUT="obj_verilator/$TB"
 mkdir -p "$OUT"
-verilator --binary --timing -j 0 -O3 -DSIMULATION \
+# OPT_FAST, OPT_GLOBAL: verilated.mk builds the model and the runtime at -Os
+# (Verilator's -O3 is not the C++ build), and MSYS2's g++ 16.2.0-3 cannot link
+# -Os code that moves a std::string (undefined basic_string(&&), a C4
+# constructor its libstdc++ does not export). -O2 links. As KonamiGX.
+verilator --binary --timing -j 0 -O3 -DSIMULATION 	-MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_GLOBAL=-O2 \
 	-Wno-fatal -Wno-lint -Wno-style -Wno-TIMESCALEMOD \
 	--top-module "tb_${TB%_tb}" --Mdir "$OUT" -f "sim/$TB/verilator.files" \
 	> "$OUT/build.log" 2>&1 || { grep -E "%Error|error:" "$OUT/build.log" | head -30; exit 1; }

@@ -35,8 +35,11 @@ upstream.
 - **Fixed:** INC A / DEC A put S through the ALU instead of A; PLX / PLY
   loaded X/Y through ROR/INC instead of passing the pulled byte.
 - **Not added:** Rockwell BBR/BBS/RMB/SMB, WAI, STP, and 65C02 NOP decoding of
-  the undefined opcodes. JMP (abs,x) does not carry into the high byte when
-  the table entry's low byte is at $xxFF.
+  the undefined opcodes.
+- **JMP (abs,x) page carry:** an entry whose low byte is at $xxFF reads its
+  high byte from the next page, as on the 65C02 (`T65.vhd`, BA Inc). Caliber
+  50's sub CPU dispatches through `jmp ($c8f1,x)`, whose entry at x = 0x0e is
+  $c8ff; `sim/t65c02_tb` checks a table entry at $C7FF.
 - **Checked by** `sim/t65c02_tb` (ModelSim): a program built by
   `make_prog.py` exercising each added and fixed instruction, 27 memory
   results and 21 cycle counts against the WDC W65C02S datasheet. Not yet
