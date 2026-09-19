@@ -207,6 +207,12 @@ Some links discussing the hardware:
 
 ## Screenshots
 
+### Thundercade / Twin Formation
+
+![tndrcade 20260919_232100-screen](docs/screenshots/tndrcade/20260919_232100-screen.png)
+![tndrcade 20260919_232108-screen](docs/screenshots/tndrcade/20260919_232108-screen.png)
+![tndrcade 20260919_232133-screen](docs/screenshots/tndrcade/20260919_232133-screen.png)
+
 ### Twin Eagle - Revenge Joe's Brother
 
 ![twineagl 20260918_213915-screen](docs/screenshots/twineagl/20260918_213915-screen.png)
@@ -230,6 +236,13 @@ Some links discussing the hardware:
 ![downtown 20260918_214209-screen](docs/screenshots/downtown/20260918_214209-screen.png)
 ![downtown 20260918_214227-screen](docs/screenshots/downtown/20260918_214227-screen.png)
 ![downtown 20260918_214337-screen](docs/screenshots/downtown/20260918_214337-screen.png)
+
+### Caliber 50
+
+![calibr50 20260919_232347-screen](docs/screenshots/calibr50/20260919_232347-screen.png)
+![calibr50 20260919_232426-screen](docs/screenshots/calibr50/20260919_232426-screen.png)
+![calibr50 20260919_232522-screen](docs/screenshots/calibr50/20260919_232522-screen.png)
+![calibr50 20260919_232540-screen](docs/screenshots/calibr50/20260919_232540-screen.png)
 
 ### Arbalester
 
