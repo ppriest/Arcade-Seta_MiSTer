@@ -29,16 +29,12 @@ hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
 ## History
 
 * **Arcade-Seta_20260919.rbf / Arcade-SetaDowntown_20260919.rbf**
-  * Seta_Downtown: Caliber 50 and Thundercade / Twin Formation added
-    * Caliber 50: X1-010 sound on the 65C02, loop joysticks through the uPD4701, battery RAM, tile scroll per line
-    * Thundercade: YM2203 + YM3812 on the 65C02 (jt03 and jtopl2, from Jotego's jtcores)
+  * Seta_Downtown: Thundercade / Twin Formation and Caliber 50 (even though Jotego core exists already) added
+  * Note: Thundercade sprites flicker still in some scenes. It's better than MAME as the page flipping is tied to the register writes (it only updates sprites every other frame)
   * Rotary joysticks for DownTown and Caliber 50 with the Ikari Warriors core's controls: Rotate Left / Rotate Right buttons, Rotary Speed, GRS Super Joystick (keystroke mode). The options only show for those games
-  * Downtown core: a coin press is five frames of coin, as MAME's `PORT_IMPULSE(5)`. DownTown and Twin Eagle took only one coin when the button was held
-  * Twin Eagle: the carrier no longer flickers (the sprite snapshot fell among the vblank handler's sprite Y writes), and its tile bank is taken at vblank, as MAME draws
-  * Thundercade: sprite flicker fixed in the first attract scene; see Known issues
-  * Gundhara and Oishii Puzzle: a Flip Screen DIP. Neither board has one, so the core rotates the picture 180 degrees
-  * MRA DIP names and settings fit MiSTer's 28-column OSD line ([#6](https://github.com/ppriest/Arcade-Seta_MiSTer/issues/6))
-  * 65C02: `JMP (abs,x)` carries into the pointer's high byte
+  * Downtown core: Use an impulse for reliable coin entry
+  * Twin Eagle: the carrier no longer flickers
+  * Gundhara and Oishii Puzzle: add a fake Flip Screen DIP
 
 * **Arcade-Seta_20260918.rbf / Arcade-SetaDowntown_20260918.rbf**
   * Seta_Downtown core added: DownTown / Mokugeki (four sets), Twin Eagle, Arbalester, Meta Fox
@@ -85,6 +81,13 @@ hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
 The goal is to support the collection of hardware covered by MAME in `seta.cpp` and `downtown.cpp`. Minus bootlegs on different hardware, and betting hardware.
 
 ### Game Notes
+
+* **DownTown** and **Caliber 50** - The "GRS Super Joystick" option is for players using the GRS Super Joystick, set to its keystroke mode. 
+
+  * When it's on: Keyboard keys turn the stick. The Left and Right arrow keys rotate Player 1's stick, and C and V rotate Player 2's. In keystroke mode the GRS sends its spinner movement as exactly those key presses. When the setting is off, the core ignores these keys.
+  * The rotation runs at the fastest rate. A held key steps the stick every 39 ms, the same as "Very Fast". It overrides the Rotary Speed setting, for the Rotate Left/Right buttons as well.
+
+  * The Rotate Left and Rotate Right buttons work either way. The layout copies the Ikari Warriors core's option of the same name.
 
 * **Daioh** - You can flip between the USA 6 button and the Japanese 2 button arrangement from the DIP menu
 
