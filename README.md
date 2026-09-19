@@ -30,7 +30,7 @@ hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
 
 * **Arcade-Seta_20260919.rbf / Arcade-SetaDowntown_20260919.rbf**
   * Seta_Downtown: Thundercade / Twin Formation and Caliber 50 (even though Jotego core exists already) added
-  * Note: Thundercade sprites flicker still in some scenes. It's better than MAME as the page flipping is tied to the register writes (it only updates sprites every other frame)
+  * Note: Thundercade sprites still flicker in some scenes. It's better than MAME, as the sprite snapshot is tied to the game's control register writes (sprites update every other frame, the rate the game computes them)
   * Rotary joysticks for DownTown and Caliber 50 with the Ikari Warriors core's controls: Rotate Left / Rotate Right buttons, Rotary Speed, GRS Super Joystick (keystroke mode). The options only show for those games
   * Downtown core: Use an impulse for reliable coin entry
   * Twin Eagle: the carrier no longer flickers
