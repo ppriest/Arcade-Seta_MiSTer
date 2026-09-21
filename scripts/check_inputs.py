@@ -166,7 +166,7 @@ def check(path):
 
 def main():
     want = set(sys.argv[1:])
-    paths = sorted((REPO / "releases").rglob("*.mra"))
+    paths = sorted([*(REPO / "releases").rglob("*.mra"), *(REPO / "unsupported").rglob("*.mra")])
     bad = 0
     for p in paths:
         s = ET.parse(p).getroot().findtext("setname")

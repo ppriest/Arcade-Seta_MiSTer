@@ -32,9 +32,9 @@ hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
   * Thundercade: Revert the attempt to fix the sprite flickering. It turns out that it's correct precisely as it was (it draws the sprites to RAM every other frame/30Hz whilst rendering at 60Hz, leading to rendering mid-write [PCB recording](https://www.youtube.com/watch?v=g4TswNhGXjM))
 
 * **Arcade-Seta_20260919.rbf / Arcade-SetaDowntown_20260919.rbf**
-  * Seta_Downtown: Added Thundercade / Twin Formation and Caliber 50 (even though a Jotego core exists already)
+  * Seta_Downtown: Added Thundercade / Twin Formation
   * Note: Thundercade sprites still flicker in some scenes. The sprite snapshot is tied to the game's control register writes, so sprites update every other frame (removed in 20260921)
-  * Rotary joysticks for DownTown and Caliber 50 with the Ikari Warriors core's controls: Rotate Left / Rotate Right buttons, Rotary Speed, GRS Super Joystick (keystroke mode). The options only show for those games
+  * Rotary joysticks for DownTown with the Ikari Warriors core's controls: Rotate Left / Rotate Right buttons, Rotary Speed, GRS Super Joystick (keystroke mode). The options only show for DownTown
   * Downtown core: Use an impulse for reliable coin entry
   * Twin Eagle: the carrier no longer flickers
   * Gundhara and Oishii Puzzle: add a fake Flip Screen DIP
@@ -85,7 +85,7 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp` 
 
 ### Game Notes
 
-* **DownTown** and **Caliber 50** - The "GRS Super Joystick" option is for players using the GRS Super Joystick, set to its keystroke mode. 
+* **DownTown** - The "GRS Super Joystick" option is for players using the GRS Super Joystick, set to its keystroke mode. 
 
   * When it's on: Keyboard keys turn the stick. The Left and Right arrow keys rotate Player 1's stick, and C and V rotate Player 2's. In keystroke mode the GRS sends its spinner movement as exactly those key presses. When the setting is off, the core ignores these keys.
   * The rotation runs at the fastest rate. A held key steps the stick every 39 ms, the same as "Very Fast". It overrides the Rotary Speed setting, for the Rotate Left/Right buttons as well.
@@ -105,7 +105,7 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp` 
 
 ### Supported
 
-Seta_Downtown games are a separate core, `SetaDowntown_*.rbf`. All are ROT270 with a W65C02 sub CPU; sound is the X1-010 on the 68000, except Caliber 50 (X1-010 on the 65C02) and Thundercade (YM2203 + YM3812 on the 65C02).
+Seta_Downtown games are a separate core, `SetaDowntown_*.rbf`. All are ROT270 with a W65C02 sub CPU; sound is the X1-010 on the 68000, except Thundercade (YM2203 + YM3812 on the 65C02).
 
 | Name | Year | Manufacturer | Core | Main CPU | Tilemaps | Notes |
 |-|-|-|-|-|-|-|
@@ -114,7 +114,6 @@ Seta_Downtown games are a separate core, `SetaDowntown_*.rbf`. All are ROT270 wi
 | Wit's | 1989 | Athena (Visco license) | Seta | M68000 @ 8 MHz | 0 | Four players |
 | Dragon Unit / Castle of Dragon | 1989 | Athena / Seta | Seta | M68000 @ 8 MHz | 1× 4bpp | |
 | DownTown / Mokugeki | 1989 | Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Rotary joysticks, Protection |
-| Caliber 50 | 1989 | Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Loop joysticks, battery RAM |
 | Arbalester | 1989 | Jordan I.S. / Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | |
 | Meta Fox | 1989 | Jordan I.S. / Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Protection |
 | Thunder & Lightning | 1990 | Seta | Seta | M68000 @ 8 MHz | 0 | Has protection |
@@ -194,7 +193,7 @@ Every game runs an 8 MHz dot clock (16 MHz / 2), 512 dots per line and 272 lines
 
 MAME gives only refresh rates. The one marked "verified on PCB" in `seta.cpp` is Daioh's 57.42 Hz; the 60 Hz sets carry no comment.
 
-Confirmed on a PCB: Guru's measurement of Caliber 50 (`downtown.cpp`, same X1-001 / X1-007 / X1-012 chipset, Seta_Downtown core) is **HSync 15.6250 kHz, VSync 57.4449 Hz** on X1-007 pins 22 and 23, the calculated values exactly.
+Confirmed on a PCB: Guru's measurement of Caliber 50 (`downtown.cpp`, same X1-001 / X1-007 / X1-012 chipset) is **HSync 15.6250 kHz, VSync 57.4449 Hz** on X1-007 pins 22 and 23, the calculated values exactly.
 
 Not every board measures the same:
 
@@ -239,13 +238,6 @@ Some links discussing the hardware:
 ![downtown 20260918_214209-screen](docs/screenshots/downtown/20260918_214209-screen.png)
 ![downtown 20260918_214227-screen](docs/screenshots/downtown/20260918_214227-screen.png)
 ![downtown 20260918_214337-screen](docs/screenshots/downtown/20260918_214337-screen.png)
-
-### Caliber 50
-
-![calibr50 20260919_232347-screen](docs/screenshots/calibr50/20260919_232347-screen.png)
-![calibr50 20260919_232426-screen](docs/screenshots/calibr50/20260919_232426-screen.png)
-![calibr50 20260919_232522-screen](docs/screenshots/calibr50/20260919_232522-screen.png)
-![calibr50 20260919_232540-screen](docs/screenshots/calibr50/20260919_232540-screen.png)
 
 ### Arbalester
 

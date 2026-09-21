@@ -69,6 +69,9 @@ SDRAM_SV = REPO / "rtl" / "memory" / "seta_sdram_top.sv"
 CFG_SV = REPO / "rtl" / "seta_board_cfg.sv"
 ROMS = REPO / "roms"
 OUT_DIR = REPO / "releases"
+# Sets whose .mra goes to unsupported/, outside releases/ so deploy.py does
+# not install it: calibr50 has Jotego's cal50 core.
+UNSUPPORTED_SETS = ("calibr50",)
 
 # The order the regions occupy in the image. Their offsets come from the RTL.
 # ONE ORDER AND ONE BASE TABLE PER LAYOUT, because the two differ in more than
@@ -1106,7 +1109,9 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     # A parent sits directly in the Arcade folder; a clone goes into
     # _alternatives/_<parent>, so the top level lists one entry per game rather
     # than one per ROM revision.
-    if info["parent"] != "0":
+    if setname in UNSUPPORTED_SETS:
+        folder = REPO / "unsupported"
+    elif info["parent"] != "0":
         pinfo = gl.get(info["parent"])
         # the parent's title as a folder name: mra_filename's replacements
         ptitle = mra_filename(pinfo["title"] if pinfo else info["parent"])[:-4]

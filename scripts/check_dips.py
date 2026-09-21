@@ -136,7 +136,7 @@ def check(path, xml_cache):
 
 
 def main():
-    paths = [Path(p) for p in sys.argv[1:]] or sorted((REPO / "releases").rglob("*.mra"))
+    paths = [Path(p) for p in sys.argv[1:]] or sorted([*(REPO / "releases").rglob("*.mra"), *(REPO / "unsupported").rglob("*.mra")])
     cache, bad = {}, 0
     for p in paths:
         s, probs, notes = check(p, cache)
