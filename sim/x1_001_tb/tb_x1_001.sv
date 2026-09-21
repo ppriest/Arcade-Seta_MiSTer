@@ -120,7 +120,7 @@ module tb_x1_001;
 		.code_mask(cfgv[C_CODEMASK][15:0]),
 		.vblank_rise(vblank_rise), .snap_start(snap_start), .snap_pre(snap_pre),
 		.buffer_sprites(copy_test), .copy_then_draw(1'b0),
-		.snap_at_line(1'b0), .snap_line_mode(1'b0), .snap_ctrl_gate(1'b0),
+		.snap_at_line(1'b0), .snap_line_mode(1'b0),
 		.line_start(line_start), .line(line),
 		.line_done(line_done), .busy(busy),
 		.rom_req(rom_req), .rom_addr(rom_addr),

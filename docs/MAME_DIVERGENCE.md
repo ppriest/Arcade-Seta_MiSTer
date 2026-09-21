@@ -463,7 +463,11 @@ frame before MAME does. Mad Shark, for one, writes over 90% of its Y in the
 first 8 lines. No per-line measurement of the core yet (probe G gives only
 the last write line).
 
-### Thundercade: sprites update at 30 Hz, on the frames whose list is whole
+### Thundercade's sprite flicker is the game's, and the board shows it
+
+Not a divergence: the core draws every frame from sprite RAM, as MAME does.
+This entry records why the flicker is there, and why the core does not hide
+it.
 
 The game keeps its sprite list in work RAM (codes 0xe02000, X 0xe02400, Y
 0xe02c00; 0x200 slots) and its vblank handler copies half of it to sprite RAM
@@ -476,42 +480,23 @@ other frame, between the half-0 and the half-1 copy (lines 18-193), and on
 the frames between rewrites only slots 2-28. So on alternate frames sprite
 RAM holds half of one list version and half of the next, and any object that
 changed slot shows twice or not at all: MAME's flicker (its TODO: "tndrcade:
-lots of flickering sprites"), and the core's before this. The frames after
-the half-0 copy, the one that writes the control bytes, hold one version.
+lots of flickering sprites"). In the second attract scene the list changes on
+most frames and on both sides of the copies: counting only writes that change
+a value (`scripts/mame/tc_consist.lua`), 70-90% of frames hold two versions.
 
-`x1_001.sv` `snap_ctrl_gate`, on for tndrcade and tndrcadej only: the sprite
-snapshot is taken only if a control byte was written since the last one;
-other frames keep the previous snapshot. Sprites update at 30 Hz, the rate
-the game computes them. Nothing is lost: the slots updated between rebuilds
-are in half 0, which reaches sprite RAM every other frame anyway. The first
-scene is right on hardware (SetaDowntown_10000012).
+A PCB recording flickers the same way (README, History), so this is what the
+board does, and every frame is drawn as it comes.
 
-This is a rule about this game's program order, not a model of the X1-001:
-nothing is known that makes the real chip skip those frames. Tried and
-rejected:
+Tried on hardware and reverted:
 
+* `snap_ctrl_gate`: the sprite snapshot taken only on frames after a control
+  byte write, which is the copy that leaves both halves from one list
+  version. That removed the flicker in the first attract scene (sprites at
+  30 Hz, the rate the game computes them) and could not help in the second,
+  where no frame parity is clean. Removed once the recording showed the real
+  board flickering.
 * Reading sprite RAM live, per line, as Jotego's X1-001 does
   (`jtkiwi_gfx.v`): worse on hardware. It draws the same mixed RAM.
-* The rule for every set: most write the control bytes on 98.6-100% of
-  frames, where it does nothing, but eightfrc and msgundam never write them
-  after boot (their sprites would freeze), and rezon, metafox and oisipuzl
-  in attract write sprite codes on frames without a control write
-  (`debug/wtiming` counts). Not measured whether those frames change what
-  is on screen.
-
-**Still wrong: the second attract scene** (frames 1921-2760, and 4801-5640 on
-the next loop). There the list changes on most frames and on both sides of
-the copies; counting only writes that change a value
-(`scripts/mame/tc_consist.lua`), 70-90% of frames hold two versions whichever
-parity is taken, and 28-60 of each 60 frames the rule takes are mixed. The
-mixing is in what the game writes to sprite RAM, so anything drawing from
-sprite RAM shows it; MAME does. Drawing from the work-RAM list instead would
-be a video chip reading main CPU RAM, which the board cannot do; not done.
-
-For MAME the same rule is a driver change (downtown.cpp `tndrcade_state`):
-a handler on 0x600600-0x600607 that forwards to `spritectrl_w16` and sets a
-flag, a vblank callback that redraws a cached sprite bitmap only when the
-flag is set, and `screen_update` copying the cache. Not written yet.
 
 ### Flip Screen on Gundhara and Oishii Puzzle is the core's own
 

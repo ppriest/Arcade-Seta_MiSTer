@@ -76,14 +76,6 @@ module x1_001 #(
 	// an extra trigger beside the usual one, and the usual one -- later in
 	// vblank -- overwrote it every frame (tndrcade, calibr50).
 	input  wire         snap_line_mode,
-	// A snapshot is taken only if a control byte was written since the last
-	// one; otherwise the frame keeps the previous snapshot. tndrcade: its
-	// vblank handler copies half of a work-RAM list each frame, and the list
-	// is rebuilt every other frame between the two halves' copies, so sprite
-	// RAM holds two list versions on alternate frames (MAME: PC 0x10430 and
-	// 0x103a2; the flicker MAME shows). Only the copy that leaves both halves
-	// from one version also writes the control bytes.
-	input  wire         snap_ctrl_gate,
 	input  wire         vblank_rise,
 	// snapshot, late in vblank (unbuffered boards)
 	input  wire         snap_start,
@@ -262,7 +254,6 @@ module x1_001 #(
 	logic        snap_ready = 1'b0;     // flip copy filled, waiting for vblank
 	logic        snap_flip  = 1'b0;     // this snapshot is a flip's
 	logic        flip_pending = 1'b0;
-	logic        ctrl_written = 1'b0;    // since the last snapshot (snap_ctrl_gate)
 	wire         snap_hold = snap_busy && ((c_we && (c_uds || c_lds)) || y_we);
 	always_ff @(posedge clk) begin
 		snap_wr_code <= 1'b0;
@@ -271,18 +262,12 @@ module x1_001 #(
 		if (reset) begin
 			snap_pending <= 1'b0;
 			flip_pending <= 1'b0;
-			ctrl_written <= 1'b0;
 			snap_busy    <= 1'b0;
 			snap_flip    <= 1'b0;
 		end else begin
-			if (k_we) ctrl_written <= 1'b1;
-			if ((snap_line_mode ? snap_at_line
+			if (snap_line_mode ? snap_at_line
 			    : !buffer_sprites ? snap_start
-			    : copy_then_draw ? eof_done : snap_pre)
-			    && (!snap_ctrl_gate || ctrl_written || k_we)) begin
-				snap_pending <= 1'b1;
-				ctrl_written <= 1'b0;
-			end
+			    : copy_then_draw ? eof_done : snap_pre) snap_pending <= 1'b1;
 			if (page_flip) flip_pending <= 1'b1;
 			if (snap_busy) begin
 				if (!snap_hold) begin

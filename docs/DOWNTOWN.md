@@ -91,12 +91,11 @@ ROM_START reading, the capture and sweep tooling.
 - **Checked:** the 65C02 against MAME's trace, 95017 instructions to the
   point where MAME's 68000 resets it through sub_ctrl, which the bench does
   not model.
-- **Sprites:** snapshot at line 240, and only on frames after a control
-  byte write, so sprites update at 30 Hz: the vblank handler copies half of
-  a work-RAM list each frame and every other frame the halves are from
-  different list versions. Right in the first attract scene; the second
-  still flickers, as in MAME. `docs/MAME_DIVERGENCE.md`, "Thundercade:
-  sprites update at 30 Hz".
+- **Sprites:** snapshot at line 240, where MAME draws. They flicker in
+  attract because the vblank handler copies half of a work-RAM list each
+  frame and the list is rebuilt between the two copies; a PCB recording
+  flickers the same way. `docs/MAME_DIVERGENCE.md`, "Thundercade's sprite
+  flicker is the game's".
 
 ## Order
 

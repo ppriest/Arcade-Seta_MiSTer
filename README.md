@@ -28,9 +28,12 @@ hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
 
 ## History
 
+* **Arcade-SetaDowntown_20260921.rbf**
+  * Thundercade: every frame drawn as it comes again. A [PCB recording](https://www.youtube.com/watch?v=g4TswNhGXjM) flickers the same way, so the 20260919 build's sprite frame skipping is removed
+
 * **Arcade-Seta_20260919.rbf / Arcade-SetaDowntown_20260919.rbf**
   * Seta_Downtown: Added Thundercade / Twin Formation and Caliber 50 (even though a Jotego core exists already)
-  * Note: Thundercade sprites still flicker in some scenes. It's better than MAME, as the sprite snapshot is tied to the game's control register writes as they don't update every frame
+  * Note: Thundercade sprites still flicker in some scenes. The sprite snapshot is tied to the game's control register writes, so sprites update every other frame (removed in 20260921)
   * Rotary joysticks for DownTown and Caliber 50 with the Ikari Warriors core's controls: Rotate Left / Rotate Right buttons, Rotary Speed, GRS Super Joystick (keystroke mode). The options only show for those games
   * Downtown core: Use an impulse for reliable coin entry
   * Twin Eagle: the carrier no longer flickers
@@ -434,7 +437,7 @@ Some links discussing the hardware:
 
 Known issues:
 * **Thunder & Lightning** - Character sprites in attract glitch in at the edge of the screen. The same in MAME. Appears to be an original game bug.
-* **Thundercade** - Sprites still flicker in the second attract scene. The game's vblank handler copies half of its sprite list to sprite RAM each frame, and there the list changes between the two halves' copies on most frames, so sprite RAM holds two versions of the list. MAME shows the same. In the first scene the list only changes every other frame, and the core skips the mixed frames (`docs/MAME_DIVERGENCE.md`).
+* **Thundercade** - Sprites flicker in attract. The game's vblank handler copies half of its sprite list to sprite RAM each frame and the list is rebuilt between the two copies, so sprite RAM holds two versions of it. MAME shows the same, and so does a [PCB recording](https://www.youtube.com/watch?v=g4TswNhGXjM), so the core draws every frame as it comes (`docs/MAME_DIVERGENCE.md`).
 * **Twin Eagle** - The guns on the carrier deck run a frame behind the tilemap when it moves side to side. The same in MAME.
 
 See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
@@ -446,7 +449,6 @@ See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, a
 - [ ] `zombraidp` / `zombraidpj` `.mra` files -- ERASE00 regions loaded in three byte lanes
 - [ ] `daiohc` — the `wrofaero` machine config with `daioh`-sized graphics, needs its own arm
 - [ ] The three 14.318181 MHz games (`orbs`, `keroppi`, `krzybowl`) need a Bresenham clock enable
-- [ ] Upstream to MAME: Thundercade's sprites updated only on frames after a control byte write (`docs/MAME_DIVERGENCE.md`, "Thundercade: sprites update at 30 Hz")
 - [ ] Upstream to MAME: flip screen as the unflipped frame rotated 180 -- the x1_012 tilemap mirror about the 512x256 bitmap, and the per-game flip offsets (`fg_yoffs`, `fg_xoffs`, layer `xoffs`) in `docs/MAME_DIVERGENCE.md`
 
 ### Resource usage

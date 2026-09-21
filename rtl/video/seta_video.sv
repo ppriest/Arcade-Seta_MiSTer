@@ -32,9 +32,6 @@ module seta_video #(
 	input  wire        buffer_sprites,
 	input  wire        copy_then_draw,
 	input  wire  [9:0] spr_snap_line,
-	// tndrcade: a sprite snapshot only after a control byte write
-	// (x1_001.sv snap_ctrl_gate)
-	input  wire        snap_ctrl_gate,
 	// Flip Screen for sets with no flip DIP: the picture rotated 180 degrees
 	input  wire        force_flip,
 	input  wire [LB_W-1:0] colorbase_fg, colorbase_bg,
@@ -229,7 +226,6 @@ module seta_video #(
 		.bgflag_opaque(bgflag_opaque),
 		.buffer_sprites(buffer_sprites), .copy_then_draw(copy_then_draw),
 		.snap_at_line(snap_at_line), .snap_line_mode(spr_snap_line != 10'd0),
-		.snap_ctrl_gate(snap_ctrl_gate),
 		.vblank_rise(vblank_rise), .snap_pre(snap_pre),
 		.snap_start(snap_start),
 		.colorbase_fg(colorbase_fg), .colorbase_bg(colorbase_bg),

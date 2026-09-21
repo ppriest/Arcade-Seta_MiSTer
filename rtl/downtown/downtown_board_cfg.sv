@@ -94,9 +94,7 @@ module downtown_board_cfg (
 	output logic  [1:0] dt_prot,
 	// calibr50: tile scroll taken each line, tile VRAM written live (its
 	// scroll is changed mid-frame; MAME redraws at each write)
-	output logic        tile_raster,
-	// sprite snapshot only after a control byte write (x1_001.sv)
-	output logic        snap_ctrl_gate
+	output logic        tile_raster
 );
 
 	// ROT270 everywhere; one X1-012; xRGB_555 x 512 with no colour bases.
@@ -179,7 +177,6 @@ module downtown_board_cfg (
 		tile_bank_en  = 1'b1;
 		tile_raster   = 1'b0;
 		spr_snap_line = 10'd0;
-		snap_ctrl_gate = 1'b0;
 		sub_map       = 3'd0;
 		input_layout  = 3'd1;                   // common_type2
 		dt_prot       = 2'd0;
@@ -284,12 +281,11 @@ module downtown_board_cfg (
 				// MAME draws at vblank start, 240, inside the quiet window:
 				// take it as the engine starts rendering line 240.
 				spr_snap_line = 10'd240;
-				// Its vblank handler copies half its sprite list each frame, and
-				// every other frame the two halves are from different list
-				// versions (x1_001.sv snap_ctrl_gate): those frames keep the
-				// last snapshot. Reading sprite RAM live instead made the flicker
-				// worse (hardware).
-				snap_ctrl_gate = 1'b1;
+				// Its sprites flicker: the vblank handler copies half its sprite
+				// list each frame and the list is rebuilt between the two
+				// copies, so alternate frames hold two list versions. A PCB
+				// recording flickers the same way (README), so the frames are
+				// drawn as they come, as MAME does. docs/MAME_DIVERGENCE.md.
 			end
 			default: ;
 		endcase

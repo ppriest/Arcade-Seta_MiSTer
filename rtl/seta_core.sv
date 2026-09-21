@@ -187,18 +187,17 @@ module seta_core (
 `ifndef SETA_DOWNTOWN
 	wire         dt_tile_bank_en = 1'b0;
 	wire         dt_tile_raster  = 1'b0;
-	wire         dt_snap_ctrl_gate = 1'b0;
 `endif
 
 `ifdef SETA_DOWNTOWN
 	wire  [2:0] dt_sub_map;
 	wire  [4:0] dt_sub_bank_entries;
-	wire        dt_tile_bank_en, dt_tile_raster, dt_snap_ctrl_gate;
+	wire        dt_tile_bank_en, dt_tile_raster;
 	wire  [1:0] dt_prot;
 	downtown_board_cfg u_cfg (
 		.sub_map(dt_sub_map), .sub_bank_entries(dt_sub_bank_entries),
 		.tile_bank_en(dt_tile_bank_en), .dt_prot(dt_prot),
-		.tile_raster(dt_tile_raster), .snap_ctrl_gate(dt_snap_ctrl_gate),
+		.tile_raster(dt_tile_raster),
 `else
 	seta_board_cfg u_cfg (
 `endif
@@ -617,7 +616,7 @@ module seta_core (
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.vregs(vregs), .tilemaps_flip(tilemaps_flip),
 		.tile_bank_en(dt_tile_bank_en), .tile_bank(dt_tile_bank),
-		.tile_raster(dt_tile_raster), .snap_ctrl_gate(dt_snap_ctrl_gate),
+		.tile_raster(dt_tile_raster),
 		.force_flip(force_flip),
 
 		.code_we(io_req && io_we && io_sel[IO_SPRCODE] && !io_addr[14]),

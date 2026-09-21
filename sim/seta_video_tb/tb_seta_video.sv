@@ -215,7 +215,7 @@ module tb_seta_video;
 		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.vregs(cfgv[C_VREGS][7:0]), .tilemaps_flip(cfgv[C_TMFLIP][0]),
-		.tile_bank_en(1'b0), .tile_bank(32'd0), .tile_raster(1'b0), .snap_ctrl_gate(1'b0), .force_flip(1'b0),
+		.tile_bank_en(1'b0), .tile_bank(32'd0), .tile_raster(1'b0), .force_flip(1'b0),
 		.vga_r(vga_r), .vga_g(vga_g), .vga_b(vga_b),
 		.vga_hs(vga_hs), .vga_vs(vga_vs), .vga_hb(vga_hb), .vga_vb(vga_vb),
 		.vga_de(vga_de), .vga_ce(vga_ce),
