@@ -29,7 +29,7 @@ hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
 ## History
 
 * **Arcade-SetaDowntown_20260921.rbf**
-  * Thundercade: every frame drawn as it comes again. A [PCB recording](https://www.youtube.com/watch?v=g4TswNhGXjM) flickers the same way, so the 20260919 build's sprite frame skipping is removed
+  * Thundercade: Revert the attempt to fix the sprite flickering. It turns out that it's correct precisely as it was (it draws the sprites to RAM every other frame/30Hz whilst rendering at 60Hz, leading to rendering mid-write [PCB recording](https://www.youtube.com/watch?v=g4TswNhGXjM))
 
 * **Arcade-Seta_20260919.rbf / Arcade-SetaDowntown_20260919.rbf**
   * Seta_Downtown: Added Thundercade / Twin Formation and Caliber 50 (even though a Jotego core exists already)
@@ -438,7 +438,8 @@ Some links discussing the hardware:
 Known issues:
 * **Thunder & Lightning** - Character sprites in attract glitch in at the edge of the screen. The same in MAME. Appears to be an original game bug.
 * **Thundercade** - Sprites flicker in attract. The game's vblank handler copies half of its sprite list to sprite RAM each frame and the list is rebuilt between the two copies, so sprite RAM holds two versions of it. MAME shows the same, and so does a [PCB recording](https://www.youtube.com/watch?v=g4TswNhGXjM), so the core draws every frame as it comes (`docs/MAME_DIVERGENCE.md`).
-* **Twin Eagle** - The guns on the carrier deck run a frame behind the tilemap when it moves side to side. The same in MAME.
+* **Twin Eagle** - The guns on the carrier deck run a frame behind the tilemap when it moves side to side. Want to confirm on a real PCB.
+* **Thundercade** - Yes, the sprites are really that buggy. It draws the sprites to RAM every other frame/30Hz whilst rendering at 60Hz, leading to rendering mid-write ([PCB recording](https://www.youtube.com/watch?v=g4TswNhGXjM))
 
 See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
 
