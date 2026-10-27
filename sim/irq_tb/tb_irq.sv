@@ -1,4 +1,4 @@
-// Interrupts, end to end: seta_irq driving the real TG68K through maincpu.sv,
+// Interrupts, end to end: seta_irq driving fx68k through maincpu.sv,
 // running a real 68000 interrupt service routine out of a hand-assembled ROM.
 //
 //     scripts/run_sim.sh irq_tb                (from the repository root)
@@ -6,9 +6,8 @@
 // WHY THIS EXISTS. Everything about seta_irq.sv can be reasoned about except
 // the one thing it depends on: that maincpu.sv's `iack` -- FC = 111 during an
 // access -- actually fires when the kernel takes an interrupt, and that
-// A3..A1 carries the level it took. That is a claim about TG68KdotC_Kernel.vhd
-// and it can only be checked by running it. Reading the VHDL is how the claim
-// was FORMED; this is how it is tested.
+// A3..A1 carries the level it took. That is a claim about the CPU core, and
+// it can only be checked by running it.
 //
 // The program is eight instructions, assembled by hand below and commented with
 // its own encoding, because a test whose stimulus you cannot read is not much

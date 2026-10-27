@@ -29,7 +29,7 @@ its own `--help` and docstring.
 | `build.sh` | works | in-tree compile for the case that must see uncommitted work. Fails on negative slack rather than on the Fitter's opinion. `--map` is a fast syntax-only check |
 | `deploy.py` | works | copy the `.rbf` and `.mra` files to a MiSTer. Prints every clock's slack first and refuses a bitstream the build did not actually produce. Cores land as `Arcade-Seta_NNNNNNNN.rbf`, numbered from 10000001 and read back from the device, so earlier builds stay as fallbacks — rename the newest to `.held` to drop back one |
 | `report_worst_paths.tcl` | works | `quartus_sta -t scripts/report_worst_paths.tcl Seta` — the 15 worst `clk_sys` setup paths from the compiled database, no recompile |
-| `run_sim.sh` | works | compile the RTL and run one testbench, from the repository root. Rebuilds the `work` library every run (a killed run leaves `work/_lock`, on which every later `vlog` waits silently). Adapted: a vcom step for TG68K.C (kernel only, not the bus wrapper), no T80, no jotego cores |
+| `run_sim.sh` | works | compile the RTL and run one testbench, from the repository root. Rebuilds the `work` library every run (a killed run leaves `work/_lock`, on which every later `vlog` waits silently). |
 | `cfg.py` | works\* | set OSD status bits in a per-core `.CFG` by read-modify-write, so untouched bits survive. \*The bit map is PROVISIONAL until `Seta.sv` has a CONF_STR |
 | `read_issp.tcl` | works\* | read the JTAG probe / write its source bus. \*The field table is PROVISIONAL — replace it from the real probe bus when one exists |
 
@@ -102,7 +102,6 @@ while an autoboot script still appears to run. `mame_capture.py` passes
 
 | bench | what it proves |
 | - | - |
-| `sim/tg68k_smoke_tb` | the vendored TG68K kernel elaborates and runs: reset vectors in order, real instructions executed, no X on the bus |
 | `sim/maincpu_tb` | `maincpu.sv` boots a real program ROM and matches MAME's own fetches, against a behavioural ROM with a swept latency. 35/35 mapped sets |
 | `sim/maincpu_sdram_tb` | the same boot through the PRODUCTION transport — real download path, arbiter, phy, controller and a command-decoding chip model. The latency sweep above is a proxy for this, not a substitute |
 | `sim/x1_010_tb` | the X1-010 against `scripts/x1_010_model.py`, sample for sample. Both modes, envelopes, one-shot, divider; key-on edge semantics checked directly |

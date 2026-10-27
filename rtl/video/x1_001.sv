@@ -71,10 +71,10 @@ module x1_001 #(
 	// a pulse as seta_board_cfg's spr_snap_line begins: a line where a game
 	// that writes its list all frame does not write
 	input  wire         snap_at_line,
-	// the board takes its snapshot at that line ONLY (seta_board_cfg /
-	// downtown_board_cfg spr_snap_line nonzero). Without this the line was
-	// an extra trigger beside the usual one, and the usual one -- later in
-	// vblank -- overwrote it every frame (tndrcade, calibr50).
+	// the board takes its snapshot at that line ONLY (seta_board_cfg
+	// spr_snap_line nonzero). Without this the line was an extra trigger
+	// beside the usual one, and the usual one -- later in vblank --
+	// overwrote it every frame.
 	input  wire         snap_line_mode,
 	input  wire         vblank_rise,
 	// snapshot, late in vblank (unbuffered boards)

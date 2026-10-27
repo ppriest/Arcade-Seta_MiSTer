@@ -389,7 +389,7 @@ See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, a
 
 ### Todo
 
-- [x] 68000 pace: TG68K ran a `nop; dbra` loop 3.5x faster than a 68000 (`sim/tg68k_pace_tb`), and Twin Eagle's boot reached its error handler. Replaced by fx68k (`sim/fx68k_pace_tb`); Twin Eagle boots
+- [x] 68000 pace: TG68K ran a `nop; dbra` loop 3.5x faster than a 68000, and Twin Eagle's boot reached its error handler. Replaced by fx68k (`sim/fx68k_pace_tb`); Twin Eagle boots
 - [ ] `hiscore.v` support, savestates
 - [ ] `zombraidp` / `zombraidpj` `.mra` files -- ERASE00 regions loaded in three byte lanes
 - [ ] `daiohc` — the `wrofaero` machine config with `daioh`-sized graphics, needs its own arm
@@ -463,7 +463,7 @@ Standard [Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer) stru
 
 GPL v3 (see `LICENSE`). Imported components keep their own licences and are GPLv3-compatible:
 TG68K.C (LGPLv3+), the adapted SDR SDRAM controller (Sorgelig, GPL-3.0-or-later),
-`screen_rotate_two.sv` (Sorgelig, GPLv2), `crt_adjust.sv` (rmonic79, GPL-3.0-or-later), and the MiSTer framework in `sys/`.
+`screen_rotate_two.sv` (Sorgelig, GPLv2 or later), `crt_adjust.sv` (rmonic79, GPL-3.0-or-later), and the MiSTer framework in `sys/`.
 
 Game ROMs contain copyrighted material and are not included. Obtaining them is your
 responsibility.

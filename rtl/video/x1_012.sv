@@ -50,15 +50,17 @@ module x1_012 #(
 	input  wire [LB_W-1:0] colorbase,       // the GFXDECODE_ENTRY base
 	// code %= elements(), not a mask
 	input  wire  [15:0] code_limit,
-	// downtown.cpp twineagl_tile_offset: codes 0x3exx take bits 13-7 from
-	// one of four bank bytes (>> 1), selected by code bits 8-7
+	// twineagl_tile_offset (MAME downtown.cpp; tied off on this core's
+	// boards): codes 0x3exx take bits 13-7 from one of four bank bytes (>> 1),
+	// selected by code bits 8-7
 	input  wire         tile_bank_en,
 	input  wire  [31:0] tile_bank,
 	input  wire         bpp6,
 
 	// bank select and scroll are latched at vblank_rise, as MAME draws the frame
 	input  wire         vblank_rise,
-	// raster: latched at every line_start instead, and a scroll or bank write
+	// raster (calibr50 in MAME downtown.cpp; tied off on this core's boards):
+	// latched at every line_start instead, and a scroll or bank write
 	// also releases the queued VRAM writes -- MAME redraws the lines above at
 	// each such write (calibr50's trampoline), so the lines after it see the
 	// VRAM as it stood then. VRAM stays queued otherwise: in attract calibr50

@@ -16,6 +16,6 @@ off-by-one in burst-read CAS timing.
 **Use the *wide* copy.** The narrower original folds row addresses to 8 bits,
 which makes regions whose base addresses share `word_addr[16:9]` alias onto the
 same cells. On Fuuki that silently corrupted a downloaded program and left the
-rest as never-written X, and the resulting flood of TG68K "X in arithmetic
+rest as never-written X, and the resulting flood of "X in arithmetic
 operand" warnings was mistaken for a CPU bug. This copy uses the real 13-bit row
 width, matching `rtl/memory/sdram/sdram.sv`'s own `row = a[22:10]` split.

@@ -5,9 +5,7 @@
 //     python scripts/prep_maincpu_tb.py thunderl debug/bt/thunderl/thunderl_boot.trace
 //     scripts/run_sim.sh maincpu_tb                (from the repository root)
 //
-// This is Phase 0 spike 1's functional half. The smoke test
-// (sim/tg68k_smoke_tb) proved the kernel runs a hand-written program; this
-// proves maincpu.sv runs a real one and agrees with MAME instruction for
+// This checks that maincpu.sv runs a real program and agrees with MAME instruction for
 // instruction -- which catches a wrong interleave, a wrong reset vector, a
 // wrong byte order and a wrong decode in one test, and names the first address
 // where it stops agreeing.
@@ -274,8 +272,8 @@ module tb_maincpu;
 
 	// ORDERED MATCH WITH A REORDERING WINDOW.
 	//
-	// Three ways TG68K.C and MAME's 68000 differ on the same correct program,
-	// each found by a test that first reported it as "the CPU stalled":
+	// Three ways the RTL's access stream can differ from MAME's on the same
+	// correct program:
 	//
 	//   1. extra reads      after the reset vectors the RTL reads 0x000008,
 	//                       which MAME never does;

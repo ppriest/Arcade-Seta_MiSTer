@@ -14,17 +14,13 @@ only test here that can follow a game past its own start-up.
 
 WHY THIS IS AN ALIGNMENT, NOT A LINE-FOR-LINE COMPARISON
 --------------------------------------------------------
-TG68K is not a cycle-accurate 68000 and its prefetch is not MAME's. Extra
-reads, duplicated reads and short reorderings are all expected and are not
-faults -- sim/maincpu_tb hit all three before this existed.
+The core's prefetch is not MAME's. Extra reads, duplicated reads and short
+reorderings are expected and are not faults (sim/maincpu_tb sees all three).
 
-The first version of this script tried to handle that with a sliding window
-and a single cursor into MAME's trace. It stalled on the first access MAME
-never makes and reported 27 matches out of 20,000, which reads as a completely
-broken core and was a completely broken matcher: the lookahead has to be able
-to skip on BOTH sides. difflib does that correctly but is quadratic and ran for
-ten minutes on 100,000 entries without finishing, so `align` below is a bounded
-two-pointer walk instead -- O(n * window), and the window only has to cover a
+The lookahead has to be able to skip on BOTH sides; a single cursor into
+MAME's trace stalls on the first access MAME never makes. difflib skips both
+ways but is quadratic (100,000 entries did not finish in ten minutes), so
+`align` below is a bounded two-pointer walk -- O(n * window), and the window only has to cover a
 prefetch difference, which is one or two entries.
 
 WRITES ARE THE SIGNAL. A read can differ innocently -- a prefetch is still a

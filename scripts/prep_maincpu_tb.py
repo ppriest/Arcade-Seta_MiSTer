@@ -107,20 +107,16 @@ def main():
     #
     # CONSECUTIVE DUPLICATE READS ARE COLLAPSED, on this side and in the bench.
     #
-    # TG68K.C and MAME's 68000 do not prefetch identically, and the difference
+    # The RTL and MAME's 68000 do not prefetch identically, and the difference
     # runs BOTH ways: after the reset vectors the RTL reads 0x000008, which MAME
     # never does, and MAME reads 0x00013E twice in a row, which the RTL does
     # once. So neither access stream is a subsequence of the other, and a
-    # matcher that skips only on one side wedges on the first duplicate -- which
-    # is what the first version of this bench reported as "the CPU stalled",
-    # while a verbose dump showed it executing happily 400 accesses deep.
+    # matcher that skips only on one side wedges on the first duplicate.
     #
     # Collapsing a read that repeats the immediately preceding address AND data
     # costs nothing: it carries no information about whether the two cores agree
     # on what is at that address. What remains is a fair question -- did the CPU
-    # fetch the same words, in the same order -- between two cores that are
-    # cycle-different by design (TG68K's own README: "does not value cycle
-    # accuracy").
+    # fetch the same words, in the same order.
     exp = []
     for _seq, rw, addr, data in rows:
         ai = int(addr, 16)

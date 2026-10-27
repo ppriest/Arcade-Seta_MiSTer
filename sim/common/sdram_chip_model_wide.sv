@@ -8,7 +8,7 @@
 // is identical for both regions' base addresses), silently corrupting the
 // downloaded maincpu program and leaving the rest as never-written X --
 // which is what actually caused this test's first run to flood with
-// TG68K 'X in arithmetic operand' warnings for hours, not a real CPU/RTL
+// 'X in arithmetic operand' warnings for hours, not a real CPU/RTL
 // bug. Fixed here, in an isolated copy rather than the shared model, by
 // using the REAL 13-bit row width (matching rtl/memory/sdram/sdram.sv's own
 // `row=a[22:10]` split and this file's own `open_row` storage, which was

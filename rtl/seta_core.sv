@@ -631,7 +631,6 @@ module seta_core (
 
 		// PIT OUT0 rising edge -> IPL 4, ASSERT_LINE
 		if (pit_rise) irq_set[3'd4] = 1'b1;
-		// calibr50: level 4 four times a frame, ASSERT_LINE
 
 		if (irq_vbl_level   != 3'd0) irq_hold[irq_vbl_level]   = irq_vbl_hold;
 		// seta_interrupt_1_and_2: HOLD_LINE
@@ -695,8 +694,6 @@ module seta_core (
 	wire [15:0] x1_rdata;
 	wire signed [15:0] x1_l, x1_r;
 
-	// calibr50: the X1-010 is on the 65C02's bus (low lane: the register
-	// byte), not the 68000's
 	x1_010 u_snd (
 		.clk(clk), .reset(reset), .ce(snd_ce),
 		.cpu_req(io_req && io_sel[IO_X1SND]),
@@ -712,7 +709,7 @@ module seta_core (
 		.dbg_rom_reads(dbg_snd_rom_reads)
 	);
 
-	// tndrcade: the YMs; calibr50: the X1-010 behind /PCMMUTE
+	// en_pcm: the OSD's sound-channel switch
 	assign audio_l = en_pcm ? x1_l : 16'sd0;
 	assign audio_r = en_pcm ? x1_r : 16'sd0;
 
@@ -796,8 +793,6 @@ module seta_core (
 		.spr_valid(spr_valid), .spr_data(spr_data),
 		.snd_req(snd_rom_req), .snd_addr(snd_phys),
 		.snd_valid(snd_rom_valid), .snd_data(snd_rom_data),
-		.sub_req(1'b0), .sub_addr(19'd0),
-		.sub_valid(), .sub_data(),
 		.ldr_start(ldr_start), .ldr_active(ldr_active),
 		.ldr_ddr_req(ldr_ddr_req), .ldr_ddr_addr(ldr_ddr_addr),
 		.ldr_ddr_busy(ldr_ddr_busy), .ldr_ddr_valid(ldr_ddr_valid),

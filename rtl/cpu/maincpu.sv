@@ -32,15 +32,8 @@ package seta_board_pkg;
 		                          //                   plus a protection RAM
 		BOARD_MADSHARK  = 5'd16,  // madshark_map   -- kamenrid's registers,
 		                          //                   magspeed's inputs
-		BOARD_ZOMBRAID  = 5'd17,  // zombraid_map   -- zingzip_map plus the
+		BOARD_ZOMBRAID  = 5'd17   // zombraid_map   -- zingzip_map plus the
 		                          //                   gun ADC at 0xf00000
-		// downtown.cpp downtown_map (downtown, twineagl, metafox, arbalest);
-		// its sub CPU, tile bank and control registers are decoded in seta_core
-		BOARD_DOWNTOWN  = 5'd18,
-		// downtown.cpp calibr50_map: X1-010 on the 65C02, battery RAM, uPD4701
-		BOARD_CALIBR50  = 5'd19,
-		// downtown.cpp tndrcade_map: no tile layer, sound on the 65C02
-		BOARD_TNDRCADE  = 5'd20
 	} board_t;
 endpackage
 
@@ -474,60 +467,6 @@ module maincpu (
 				x1_base    = 24'hA00000;
 				in_base    = 24'h500000;  dsw_base = 24'h300000;
 				prot_base  = 24'h900000;
-				vregs_base = NONE;
-			end
-
-			BOARD_DOWNTOWN: begin                    // downtown.cpp downtown_map
-				rom_end    = 24'h09FFFF;
-				// declared 0xf00000-0xffffff; the games write 0xf00000-0xf03fff
-				// (metafox, arbalest, twineagl) and 0xffc000-0xffffff (downtown,
-				// twineagl), which a 128 KB mirror keeps apart
-				wram_base  = 24'hF00000; wram_end = 24'hFFFFFF;
-				wram_mask  = 24'h01FFFF;
-				wram2_base = NONE; has_wram2 = 1'b0;
-				pal_base   = 24'h700000; pal_end  = 24'h7003FF;
-				l0c_base   = 24'h800000; l0v_base = 24'h900000;
-				l1c_base   = NONE;       l1v_base = NONE;  has_l1 = 1'b0;
-				spry_base  = 24'hD00000; sprc_base = 24'hD00600;
-				sprcode_base = 24'hE00000;
-				x1_base    = 24'h100000;
-				in_base    = NONE;
-				vregs_base = NONE;
-			end
-
-			BOARD_CALIBR50: begin                    // downtown.cpp calibr50_map
-				rom_end    = 24'h09FFFF;
-				wram_base  = 24'hFF0000; wram_end = 24'hFFFFFF;
-				wram_mask  = 24'h00FFFF;
-				// the battery RAM, 0x200000-0x200fff (seta_core)
-				wram2_base = 24'h200000; wram2_end = 24'h200FFF;
-				has_wram2  = 1'b1;
-				pal_base   = 24'h700000; pal_end  = 24'h7003FF;
-				l0c_base   = 24'h800000; l0v_base = 24'h900000;
-				l1c_base   = NONE;       l1v_base = NONE;  has_l1 = 1'b0;
-				spry_base  = 24'hD00000; sprc_base = 24'hD00600;
-				sprcode_base = 24'hE00000;
-				x1_base    = NONE;
-				// X1-004: P1 +0, P2 +2, COINS +8
-				in_base    = 24'hA00000;
-				in_span    = 5'd10;  coins_hi = 1'b1;
-				vregs_base = NONE;
-			end
-
-			BOARD_TNDRCADE: begin                    // downtown.cpp tndrcade_map
-				rom_end    = 24'h07FFFF;
-				// 16 KB at 0xe00000, mirrored at 0xffc000
-				wram_base  = 24'hE00000; wram_end = 24'hFFFFFF;
-				wram_mask  = 24'h003FFF;
-				wram2_base = NONE; has_wram2 = 1'b0;
-				pal_base   = 24'h380000; pal_end  = 24'h3803FF;
-				l0v_base = NONE; l1v_base = NONE; l0c_base = NONE; l1c_base = NONE;
-				has_l0 = 1'b0; has_l1 = 1'b0;
-				spry_base  = 24'h600000; sprc_base = 24'h600600;
-				sprcode_base = 24'hC00000;
-				x1_base    = NONE;
-				// inputs and DSW are the 65C02's
-				in_base    = NONE;  dsw_base = NONE;
 				vregs_base = NONE;
 			end
 

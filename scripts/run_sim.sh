@@ -10,20 +10,9 @@
 # fails every check at once, which reads exactly like an RTL regression --
 # grep the log for `readmem` first (LESSONS_LEARNED, "Testbench discipline").
 #
-# PORTED FROM THE FUUKI CORE. One thing differs and the difference is
-# deliberate:
-#   * Fuuki compiled TG68K.C and T80 with vcom. This core vendors TG68K.C but
-#     NOT T80 -- no in-scope Seta board has a sound CPU, the X1-010 is driven
-#     directly by the 68000. So the vcom step below covers TG68K only. It must
-#     stay ABOVE the vlog step: ModelSim needs TG68K_Pack compiled first, and
-#     the package before the units that use it.
-#   * Fuuki compiled the jotego sound cores with
-#     `+define+SIMULATION +initreg=r+0 +initmem=r+0`, because their un-reset
-#     pipelines are X in a four-state simulator and zero in hardware, and X
-#     through an envelope generator is a chip that takes every register write
-#     and never makes a sound. This core's X1-010 is written here, so it does
-#     not need that -- but the flags are kept below, applied to everything,
-#     because they only ever make simulation match hardware more closely.
+# Everything is compiled with +define+SIMULATION +initreg=r+0 +initmem=r+0:
+# un-reset registers and memories start at zero, as they do on the FPGA,
+# rather than X.
 set -euo pipefail
 
 TB="${1:?usage: scripts/run_sim.sh <testbench-dir-name> [vsim args...]}"
@@ -35,9 +24,8 @@ shift
 # /c and cannot run Windows .exe tools at all. A Python wrapper that spawns
 # plain `bash` gets THAT one, so a script passes when you run it by hand and
 # fails from the wrapper, reporting "No such file or directory" for a path that
-# plainly exists. scripts/maincpu_sweep.py now names the Git bash explicitly;
-# this probe is the second line of defence, and covers a machine where the
-# tools simply live elsewhere.
+# plainly exists. scripts/maincpu_sweep.py names the Git bash explicitly;
+# this probe also covers a machine where the tools live elsewhere.
 MS=""
 for _c in "${MODELSIM_BIN:-}"           /c/intelFPGA_lite/17.0/modelsim_ase/win32aloem           C:/intelFPGA_lite/17.0/modelsim_ase/win32aloem           /e/msys64/c/intelFPGA_lite/17.0/modelsim_ase/win32aloem ; do
 	[ -n "$_c" ] && [ -x "$_c/vlib.exe" ] && MS="$_c" && break
@@ -66,17 +54,6 @@ fi
 rm -rf work
 "$MS/vlib.exe" work
 
-# TG68K.C is VHDL-2008 for the kernel and its ALU; the package first.
-# Order matters -- ModelSim resolves the package at compile time, not at
-# elaboration.
-if [ -d rtl/cpu/tg68k ]; then
-  echo "--- vcom: TG68K.C ---"
-  "$MS/vcom.exe" -quiet -2008 -work work       rtl/cpu/tg68k/TG68K_Pack.vhd       rtl/cpu/tg68k/TG68K_ALU.vhd       rtl/cpu/tg68k/TG68KdotC_Kernel.vhd
-  # TG68K.vhd itself is DELIBERATELY not compiled: it is an async-68000-bus
-  # adapter that assumes CLK is the CPU clock, and this core instantiates the
-  # kernel directly instead. See rtl/cpu/tg68k/PROVENANCE.md.
-fi
-
 # T65 (65C02 sub CPU of the downtown.cpp boards), VHDL-93, package first, then
 # its plain-port wrapper.
 if [ -d rtl/cpu/t65 ]; then
@@ -90,7 +67,6 @@ echo "--- vlog: RTL + testbench ---"
 # stale module" failure.
 #
 # Deliberate exclusions:
-#   synth_check/            a Quartus-only harness with its own top level
 #   screen_rotate*.sv       vendored MiSTer-devel code that references signals
 #                           before declaring them. Quartus accepts it, ModelSim
 #                           does not (vlog-2730), and it must stay UNTOUCHED --
@@ -99,16 +75,15 @@ echo "--- vlog: RTL + testbench ---"
 #   *_upstream_reference.sv pristine upstream copies kept beside the vendored
 #                           modules purely so local changes can be diffed.
 #                           They are not part of any design.
-#   cos.sv, lfsr.v, mycore.v  Template_MiSTer's demo core, DELETED once
-#                           Seta.sv became the real top level. The exclusions
-#                           are kept so a stray copy cannot creep back in.
+#   cos.sv, lfsr.v, mycore.v  Template_MiSTer's demo core, should a copy
+#                           reappear.
 RTL=$(find rtl -name '*.sv' \
-        -not -path '*/synth_check/*' \
+\
         -not -name 'screen_rotate*.sv' \
         -not -name '*_upstream_reference.sv' \
         -not -name 'cos.sv' | sort)
 VLOG=$(find rtl -name '*.v' \
-        -not -path '*/synth_check/*' \
+\
         -not -name 'pll*.v' \
         -not -name 'lfsr.v' -not -name 'mycore.v' \
         -not -name '*_upstream_reference.v' | sort)

@@ -97,9 +97,9 @@ module seta_video #(
 	input  wire [63:0] tile1_data,
 	// m_vregs: bit 0 swaps the layers, bit 1 sprites above both, bit 2 blandia's effect
 	input  wire  [7:0] vregs,
-	// twineagl_tile_offset (layer 0)
+	// a per-board tile code bank (layer 0; x1_012.sv tile_bank_en)
 	input  wire        tile_bank_en,
-	// calibr50: layer 0 scroll per line, VRAM live (x1_012.sv raster)
+	// layer 0 scroll latched per line (x1_012.sv raster)
 	input  wire        tile_raster,
 	input  wire [31:0] tile_bank,
 	// set_tilemaps_flip(1) (oisipuzl): layers flip on sprite flip XOR this
