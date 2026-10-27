@@ -31,6 +31,11 @@ this repository.
 
 ## History
 
+* **Arcade-Seta_20261027.rbf**
+  * The `downtown.cpp` boards are now their own core, [Arcade-SetaDowntown_MiSTer](https://github.com/ppriest/Arcade-SetaDowntown_MiSTer); this core is `seta.cpp` only
+  * Button names from the games in the controller mapping (Quiz Kokology 1 and 2 still read Button 1-4)
+  * MiSTer framework (`sys/`) updated to the current template
+
 * **Arcade-Seta_20260919.rbf**
   * Gundhara and Oishii Puzzle: add a fake Flip Screen DIP
 
@@ -189,7 +194,7 @@ Some links discussing the hardware:
 
 Where the logic sits on the Cyclone V, read from the compiled design with `scripts/floorplan.py` (blocks defined in `scripts/floorplan.json`). One cell per LAB, M10K or DSP site, coloured by the block owning most of it, brighter when fuller. The thin columns are M10K and DSP; the empty area at the top right is the HPS; grey is the MiSTer framework. LUT counts are combinational cells, two per ALM.
 
-Revision `Seta`, fitted 19 Sep 2026:
+Revision `Seta`, fitted 27 Oct 2026:
 
 ![Floorplan of Seta](docs/floorplan/Seta.png)
 
@@ -376,7 +381,7 @@ Revision `Seta`, fitted 19 Sep 2026:
 
 ## Installation
 
-* Take the latest `*.rbf` from `releases/` and put it in `_Arcade/cores`, renamed to drop the `Arcade-` prefix: `Arcade-Seta_20260913.rbf` becomes `Seta_20260913.rbf`. The `.mra` files' `<rbf>Seta</rbf>` matches either name, but MiSTer launches the highest-sorting match, and any `Seta_*.rbf` sorts above every `Arcade-Seta_*.rbf`, so a prefixed copy left alongside is never used
+* Take the latest `*.rbf` from `releases/` and put it in `_Arcade/cores`, renamed to drop the `Arcade-` prefix: `Arcade-Seta_20261027.rbf` becomes `Seta_20261027.rbf`. The `.mra` files' `<rbf>Seta</rbf>` matches either name, but MiSTer launches the highest-sorting match, and any `Seta_*.rbf` sorts above every `Arcade-Seta_*.rbf`, so a prefixed copy left alongside is never used
 * Take the `*.mra` files from `releases/` and subdirs and put them in `_Arcade`
 * Put the MAME merged or split ROMs in `games/mame`
 
@@ -398,14 +403,14 @@ See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, a
 
 ### Resource usage
 
-Whole core (`Arcade-Seta_20260913.rbf`), on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
+Whole core (`Arcade-Seta_20261027.rbf`), on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
 
 | resource | used | available |
 | --- | --- | --- |
-| Logic (ALMs) | 26,348 (63%) | 41,910 |
-| Block memory bits | 4,261,313 (75%) | 5,662,720 |
-| RAM blocks | 542 (98%) | 553 |
-| DSP blocks | 44 (39%) | 112 |
+| Logic (ALMs) | 26,416 (63%) | 41,910 |
+| Block memory bits | 4,242,273 (75%) | 5,662,720 |
+| RAM blocks | 540 (98%) | 553 |
+| DSP blocks | 38 (34%) | 112 |
 | PLLs | 3 | 6 |
 
 ## AI Attestation
