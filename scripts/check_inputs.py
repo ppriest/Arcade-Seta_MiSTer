@@ -7,7 +7,7 @@ MAME side: scripts/mame/ports.lua lists every I/O port field of the running
 set (port tag, mask, input token, name); cached in debug/ports/<set>.txt.
 Core side: a transcription of Seta.sv's seta_port / dt_port / coins_in /
 extra_in and each set's input_layout (rtl/seta_board_cfg.sv,
-rtl/downtown/downtown_board_cfg.sv). Keep the tables below in step with those.
+rtl/seta_board_cfg.sv). Keep the tables below in step with those.
 
 For every digital MAME field on P1-P4, COINS and EXTRA, the MiSTer joystick
 bit the core puts on that port bit must be the one the token names
@@ -35,16 +35,10 @@ SETA_PORT = {
     4: {7: 10, 4: 8, 3: 5, 2: 4, 1: 7, 0: 6},
     5: {7: 10, 5: 5, 4: 4, 3: 9, 2: 8, 1: 7, 0: 6},
 }
-# dt_port layout 1 (common_type2); layout 0 is seta_port 0
-DT_PORT1 = {7: 10, 5: 5, 4: 4, 3: 0, 2: 1, 1: 2, 0: 3}
 
 # (player, joystick bit)
 SETA_COINS = {0: (1, 11), 1: (2, 11), 2: (1, 13)}
 SETA_EXTRA = {0: (1, 7), 1: (1, 8), 2: (1, 9), 3: (2, 7), 4: (2, 8), 5: (2, 9)}
-DT_COINS = {
-    0: {0: (1, 11), 1: (2, 11), 2: (1, 10), 3: (2, 10), 4: (1, 13)},
-    1: {7: (1, 11), 6: (2, 11), 5: (1, 13)},
-}
 
 # input_layout per set (seta_board_cfg.sv; unlisted sets keep the default 0)
 SETA_LAYOUT = {
@@ -53,7 +47,6 @@ SETA_LAYOUT = {
     "gundharac": 2, "wrofaero": 2, "magspeed": 5, "atehate": 3,
     "blandia": 2, "blandiap": 2,
 }
-DT_LAYOUT = {"twineagl": 0}      # others 1
 
 # MAME inputs left unwired on purpose: (set, port, bit). jjsquawk's BUTTON3
 # is read nowhere by the game (build_mra.py LAYOUT_OVERRIDE).
@@ -91,21 +84,16 @@ def mame_fields(setname):
     return out
 
 
-def core_map(setname, downtown):
+def core_map(setname):
     """{(port, bit): (player, joystick bit)}"""
     m = {}
-    if downtown:
-        lay = DT_LAYOUT.get(setname, 1)
-        port = DT_PORT1 if lay == 1 else SETA_PORT[0]
-        coins = DT_COINS[lay]
-    else:
-        lay = SETA_LAYOUT.get(setname, 0)
-        port = SETA_PORT[lay]
-        coins = SETA_COINS
-        for b, s in SETA_EXTRA.items():
-            m[("EXTRA", b)] = s
+    lay = SETA_LAYOUT.get(setname, 0)
+    port = SETA_PORT[lay]
+    coins = SETA_COINS
+    for b, s in SETA_EXTRA.items():
+        m[("EXTRA", b)] = s
     # P3/P4: Seta.sv p3_in/p4_in, joysticks 3 and 4 (read by wits_map only)
-    for p in ((1, 2) if downtown else (1, 2, 3, 4)):
+    for p in (1, 2, 3, 4):
         for b, j in port.items():
             m[(f"P{p}", b)] = (p, j)
     for b, s in coins.items():
@@ -116,8 +104,7 @@ def core_map(setname, downtown):
 def check(path):
     root = ET.parse(path).getroot()
     setname = root.findtext("setname")
-    downtown = root.findtext("rbf") == "SetaDowntown"
-    core, lay = core_map(setname, downtown)
+    core, lay = core_map(setname)
     fields = mame_fields(setname)
     probs, notes = [], []
     by_bit = {}
@@ -166,7 +153,7 @@ def check(path):
 
 def main():
     want = set(sys.argv[1:])
-    paths = sorted([*(REPO / "releases").rglob("*.mra"), *(REPO / "unsupported").rglob("*.mra")])
+    paths = sorted((REPO / "releases").rglob("*.mra"))
     bad = 0
     for p in paths:
         s = ET.parse(p).getroot().findtext("setname")

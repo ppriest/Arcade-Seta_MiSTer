@@ -171,32 +171,7 @@ NVRAM_SETS = {"zombraid": 256,
 LAYOUT_OVERRIDE = {"jjsquawk": 0, "jjsquawko": 0}
 
 
-# ---------------------------------------------------------------------------
-# downtown.cpp (the Seta_Downtown core): selected by pointing MAME_SRC at it.
-#     MAME_SRC=E:/mame/src/mame/seta/downtown.cpp python scripts/build_mra.py
-# Its own game numbering (downtown_board_cfg.sv), one layout, its own rbf and
-# folder.
-# ---------------------------------------------------------------------------
-DOWNTOWN = os.path.basename(SRC) == "downtown.cpp"
-RBF_NAME = "Seta"
-if DOWNTOWN:
-    CFG_SV = REPO / "rtl" / "downtown" / "downtown_board_cfg.sv"
-    # the same releases/ as seta.cpp's; <rbf> tells the cores apart
-    # (deploy.py picks by it)
-    OUT_DIR = REPO / "releases"
-    # NOT "Seta_Downtown": MiSTer resolves <rbf>X</rbf> to Arcade-X or X
-    # followed by '.' or '_' (Main_MiSTer mra_loader.cpp get_rbf), so the Seta
-    # .mra files' <rbf>Seta</rbf> would also match Seta_Downtown_*.rbf
-    RBF_NAME = "SetaDowntown"
-    LAYOUTS["G"] = (["maincpu", "sprites", "tiles", "x1snd", "sub"],
-                    {"maincpu": "BASE_MAINCPU", "sprites": "BASE_GFX1_AB",
-                     "tiles": "BASE_GFX2_G", "x1snd": "BASE_X1SND_G",
-                     "sub": "BASE_SUB_G"})
-
-
 def layout_of(setname):
-    if DOWNTOWN:
-        return "G"
     if setname in LAYOUT_F_SETS:
         return "F"
     if setname in LAYOUT_E_SETS:
@@ -257,8 +232,6 @@ CLONE_OF = {
     "gundharac": "gundhara",
     "jjsquawko": "jjsquawk",
 }
-if DOWNTOWN:
-    CLONE_OF = {}      # every downtown.cpp set in scope has its own DT_* entry
 
 
 def clone_regions_match(child, parent, all_blocks):
@@ -785,21 +758,6 @@ BUTTON_LAYOUTS = {
 }
 
 
-def dt_buttons(setname, block):
-    """downtown.cpp: Seta.sv's input_layout 0 (common_type1) or 1 (common_type2),
-    and a rotary joystick on buttons 3 and 4 -- DownTown's 12-position switch
-    (IPT_POSITIONAL) or Caliber 50's uPD4701 count (IPT_DIAL), both stepped
-    by rtl/downtown/rotary_input.sv."""
-    names = ["Button 1", "Button 2"]
-    if 'PORT_START("ROT1")' in block and ("IPT_POSITIONAL" in block or "IPT_DIAL" in block):
-        names += ["Rotate Left", "Rotate Right"]
-    n = len(names)
-    names = names + ["-"] * (6 - n) + ["Start", "Coin", "Pause", "Service"]
-    default = ["A", "B", "X", "Y", "L", "R"][:n] + ["Start", "Select", "L", "R"]
-    return (f'<buttons names="{esc(",".join(names))}" '
-            f'default="{esc(",".join(default))}" count="{n}"/>')
-
-
 def input_layout(setname, block, all_blocks, depth=0):
     """Which layout a set's P1 port is, read out of the driver.
 
@@ -927,12 +885,6 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         if unknown:
             sys.exit(f"{setname}/{region}: unrecognised load line(s): {unknown[:2]}")
         if not recs and region_size(body, region) is None:
-            # tndrcade has neither: X1-001 only, and YM sound on the 65C02.
-            # The image pads over them to the next region's base.
-            if DOWNTOWN and region in ("tiles", "x1snd"):
-                truths[region] = b""
-                all_groups[region] = []
-                continue
             sys.exit(f"{setname}: no {region} region")
         gs = groups_for(recs, region, setname, body)
         blob = bytearray()
@@ -1000,7 +952,7 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     lines.append('<misterromdescription>')
     lines.append(f'    <name>{esc(info["title"])}</name>')
     lines.append(f'    <setname>{esc(setname)}</setname>')
-    lines.append(f'    <rbf>{RBF_NAME}</rbf>')
+    lines.append('    <rbf>Seta</rbf>')
     lines.append(f'    <mameversion>{mame_version()}</mameversion>')
     lines.append(f'    <year>{esc(info["year"])}</year>')
     lines.append(f'    <manufacturer>{esc(info["maker"])}</manufacturer>')
@@ -1123,11 +1075,8 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         lines.append(f'        {dip}')
     lines.append('    </switches>')
     lines.append('')
-    if DOWNTOWN:
-        lines.append('    ' + dt_buttons(setname, dip_blocks[info["inputs"]]))
-    else:
-        lines.append('    ' + buttons_xml(LAYOUT_OVERRIDE.get(setname) if setname in LAYOUT_OVERRIDE
-            else input_layout(setname, dip_blocks[info["inputs"]], dip_blocks)))
+    lines.append('    ' + buttons_xml(LAYOUT_OVERRIDE.get(setname) if setname in LAYOUT_OVERRIDE
+        else input_layout(setname, dip_blocks[info["inputs"]], dip_blocks)))
     if setname in NVRAM_SETS:
         # The framework keeps a file of this size per .mra: it downloads it
         # into the core at index 4 after the ROM and reads it back when the

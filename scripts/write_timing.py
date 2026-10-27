@@ -26,7 +26,7 @@ PARENTS_ONLY = ("thunderl", "wits", "blockcar", "umanclub", "neobattl", "atehate
                 "rezon", "wrofaero", "msgundam", "eightfrc", "oisipuzl", "kamenrid",
                 "magspeed", "gundhara", "zingzip", "jjsquawk", "extdwnhl", "sokonuke",
                 "madshark", "blandia", "zombraid",
-                "downtown", "twineagl", "metafox", "arbalest")
+                )
 
 
 def run(game, skip, frames, coin=0, tag="", extra=""):

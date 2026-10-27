@@ -1,10 +1,12 @@
 # Seta core for MiSTer
 
-MiSTer FPGA cores for [Seta](https://en.wikipedia.org/wiki/Seta_Corporation)'s X1-010 arcade
-hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
+A MiSTer FPGA core for [Seta](https://en.wikipedia.org/wiki/Seta_Corporation)'s X1-010 arcade
+hardware — MAME's `seta/seta.cpp` — built with Quartus Prime 17.0.2 Lite for the DE10-nano.
 
-* **Seta** — MAME's `seta/seta.cpp`
-* **Seta_Downtown** — MAME's `seta/downtown.cpp`: + 65C02 sub CPU
+The `seta/downtown.cpp` boards (DownTown, Twin Eagle, Thundercade), the same chipset with a
+W65C02 sub CPU, are a separate core in
+[Arcade-SetaDowntown_MiSTer](https://github.com/ppriest/Arcade-SetaDowntown_MiSTer), split out of
+this repository.
 
 ## Contents
 
@@ -29,25 +31,15 @@ hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
 
 ## History
 
-* **Arcade-SetaDowntown_20260921.rbf**
-  * Thundercade: Revert the attempt to fix the sprite flickering. It turns out that it's correct precisely as it was (it draws the sprites to RAM every other frame/30Hz whilst rendering at 60Hz, leading to rendering mid-write [PCB recording](https://www.youtube.com/watch?v=g4TswNhGXjM))
-
-* **Arcade-Seta_20260919.rbf / Arcade-SetaDowntown_20260919.rbf**
-  * Seta_Downtown: Added Thundercade / Twin Formation
-  * Note: Thundercade sprites still flicker in some scenes. The sprite snapshot is tied to the game's control register writes, so sprites update every other frame (removed in 20260921)
-  * Rotary joysticks for DownTown with the Ikari Warriors core's controls: Rotate Left / Rotate Right buttons, Rotary Speed, GRS Super Joystick (keystroke mode). The options only show for DownTown
-  * Downtown core: Use an impulse for reliable coin entry
-  * Twin Eagle: the carrier no longer flickers
+* **Arcade-Seta_20260919.rbf**
   * Gundhara and Oishii Puzzle: add a fake Flip Screen DIP
 
-* **Arcade-Seta_20260918.rbf / Arcade-SetaDowntown_20260918.rbf**
-  * Seta_Downtown core added: DownTown / Mokugeki (four sets), Twin Eagle
+* **Arcade-Seta_20260918.rbf**
   * 68000 is now fx68k, cycle-accurate; TG68K ran 3.5x too fast, and was causing issues
   * CRT width: Match 384 option removed
   * Sprites: games that flip their own sprite page (26 of 31, `scripts/sprctrl_scan.py`) have it copied at the flip. Fixes Strike Gunner's ship and asteroids, Mad Shark, and Gundhara's full-screen glitch under slowdown
   * Sprites: the vblank copy runs in each board's order, as MAME's; Quiz Kokology's bees and Blandia's intro illustration are right
   * Tile VRAM writes queued to vblank: Gundhara's occasional wrong tiles. A CPU read waits for the queue, so Blandia passes its VRAM test and boots
-  * DownTown ran too fast: the vblank interrupt was raised on both edges
   * Audio mix OSD option (Mono, None, 25%, 50%), defaulting to mono
   * DIPs with three or more bits (most coinage settings) showed only half their settings ([#6](https://github.com/ppriest/Arcade-Seta_MiSTer/issues/6))
   * Blandia, Dragon Unit: coinage labels that depend on Coinage Type show both, e.g. `Coin B (Mode 1|2)` = `5C/1C|3C/7C`
@@ -82,16 +74,9 @@ hardware, built with Quartus Prime 17.0.2 Lite for the DE10-nano:
 
 ## Games
 
-The goal is to support the collection of hardware covered by MAME in `seta.cpp` and `downtown.cpp`. Minus bootlegs on different hardware, and betting hardware.
+The goal is the hardware MAME covers in `seta.cpp`, minus bootlegs on different hardware and betting hardware.
 
 ### Game Notes
-
-* **DownTown** - The "GRS Super Joystick" option is for players using the GRS Super Joystick, set to its keystroke mode. 
-
-  * When it's on: Keyboard keys turn the stick. The Left and Right arrow keys rotate Player 1's stick, and C and V rotate Player 2's. In keystroke mode the GRS sends its spinner movement as exactly those key presses. When the setting is off, the core ignores these keys.
-  * The rotation runs at the fastest rate. A held key steps the stick every 39 ms, the same as "Very Fast". It overrides the Rotary Speed setting, for the Rotate Left/Right buttons as well.
-
-  * The Rotate Left and Rotate Right buttons work either way. The layout copies the Ikari Warriors core's option of the same name.
 
 * **Daioh** - You can flip between the USA 6 button and the Japanese 2 button arrangement from the DIP menu
 
@@ -106,40 +91,35 @@ The goal is to support the collection of hardware covered by MAME in `seta.cpp` 
 
 ### Supported
 
-Seta_Downtown games are a separate core, `SetaDowntown_*.rbf`. All are ROT270 with a W65C02 sub CPU; sound is the X1-010 on the 68000, except Thundercade (YM2203 + YM3812 on the 65C02).
-
-| Name | Year | Manufacturer | Core | Main CPU | Tilemaps | Notes |
-|-|-|-|-|-|-|-|
-| Thundercade / Twin Formation | 1987 | Seta (Taito license) | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 0 | YM2203 + YM3812 |
-| Twin Eagle - Revenge Joe's Brother | 1988 | Seta (Taito license) | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Protection |
-| Wit's | 1989 | Athena (Visco license) | Seta | M68000 @ 8 MHz | 0 | Four players |
-| Dragon Unit / Castle of Dragon | 1989 | Athena / Seta | Seta | M68000 @ 8 MHz | 1× 4bpp | |
-| DownTown / Mokugeki | 1989 | Seta | Seta_Downtown | M68000 @ 8 MHz + W65C02 @ 2 MHz | 1× 4bpp | Rotary joysticks, Protection |
-| Thunder & Lightning | 1990 | Seta | Seta | M68000 @ 8 MHz | 0 | Has protection |
-| Pairs Love | 1991 | Athena / Nihon System | Seta | M68000 @ 8 MHz | 0 | 2048 palette entries |
-| Strike Gunner S.T.G | 1991 | Athena / Tecmo | Seta | M68000 @ 8 MHz | 1× 4bpp | |
-| Rezon | 1991 | Allumer | Seta | M68000 @ 16 MHz | 2× 4bpp | |
-| Block Carnival / Thunder & Lightning 2 | 1992 | Visco | Seta | M68000 @ 8 MHz | 0 | |
-| Ultraman Club | 1992 | Banpresto | Seta | M68000 @ 16 MHz | 0 | |
-| SD Gundam Neo Battling | 1992 | Banpresto | Seta | M68000 @ 16 MHz | 0 | |
-| Quiz Kokology | 1992 | Tecmo | Seta | M68000 @ 8 MHz | 1× 4bpp | |
-| Quiz Kokology 2 | 1992 | Tecmo | Seta | M68000 @ 8 MHz | 1× 4bpp | |
-| Zing Zing Zip | 1992 | Allumer / Tecmo | Seta | M68000 @ 16 MHz | 6bpp + 4bpp | vblank IRQ is level 3 |
-| Blandia | 1992 | Allumer | Seta | M68000 @ 16 MHz | 2× 6bpp | Second palette bank and its offset effect; banked samples |
-| Athena no Hatena? | 1993 | Athena | Seta | M68000 @ 16 MHz | 0 | 2 MB of sprites, 64 KB of work RAM mirrored |
-| Daioh | 1993 | Athena | Seta | M68000 @ 16 MHz | 2× 4bpp | |
-| Mobile Suit Gundam | 1993 | Banpresto | Seta | M68000 @ 16 MHz | 2× 4bpp | 4 MB of sprites |
-| War of Aero | 1993 | Yang Cheng | Seta | M68000 @ 16 MHz | 2× 4bpp | uPD71054C timer |
-| Oishii Puzzle Ha Irimasenka | 1993 | Sunsoft / Atlus | Seta | M68000 @ 16 MHz | 2× 4bpp | |
-| Kamen Rider Club Battle Race | 1993 | Banpresto | Seta | M68000 @ 16 MHz | 2× 4bpp | Timer |
-| J. J. Squawkers | 1993 | Athena / Able | Seta | M68000 @ 16 MHz | 2× 6bpp | |
-| Mad Shark | 1993 | Allumer | Seta | M68000 @ 16 MHz | 2× 6bpp | |
-| Eight Forces | 1994 | Tecmo | Seta | M68000 @ 16 MHz | 2× 4bpp | 12 MB of ROM |
-| Magical Speed | 1994 | Allumer | Seta | M68000 @ 16 MHz | 2× 4bpp | Timer; as Kamen Rider |
-| Extreme Downhill | 1995 | Sammy | Seta | M68000 @ 16 MHz | 6bpp + 4bpp | 320 wide; a 4 MB tile region |
-| Sokonuke Taisen Game | 1995 | Sammy | Seta | M68000 @ 16 MHz | 6bpp + 4bpp | |
-| Gundhara | 1995 | Banpresto | Seta | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, a second work-RAM block |
-| Zombie Raid | 1995 | American Sammy | Seta | M68000 @ 16 MHz | 2× 6bpp | ADC0834 light gun, battery-backed RAM, 4 MB of samples |
+| Name | Year | Manufacturer | Main CPU | Tilemaps | Notes |
+|-|-|-|-|-|-|
+| Wit's | 1989 | Athena (Visco license) | M68000 @ 8 MHz | 0 | Four players |
+| Dragon Unit / Castle of Dragon | 1989 | Athena / Seta | M68000 @ 8 MHz | 1× 4bpp | |
+| Thunder & Lightning | 1990 | Seta | M68000 @ 8 MHz | 0 | Has protection |
+| Pairs Love | 1991 | Athena / Nihon System | M68000 @ 8 MHz | 0 | 2048 palette entries |
+| Strike Gunner S.T.G | 1991 | Athena / Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
+| Rezon | 1991 | Allumer | M68000 @ 16 MHz | 2× 4bpp | |
+| Block Carnival / Thunder & Lightning 2 | 1992 | Visco | M68000 @ 8 MHz | 0 | |
+| Ultraman Club | 1992 | Banpresto | M68000 @ 16 MHz | 0 | |
+| SD Gundam Neo Battling | 1992 | Banpresto | M68000 @ 16 MHz | 0 | |
+| Quiz Kokology | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
+| Quiz Kokology 2 | 1992 | Tecmo | M68000 @ 8 MHz | 1× 4bpp | |
+| Zing Zing Zip | 1992 | Allumer / Tecmo | M68000 @ 16 MHz | 6bpp + 4bpp | vblank IRQ is level 3 |
+| Blandia | 1992 | Allumer | M68000 @ 16 MHz | 2× 6bpp | Second palette bank and its offset effect; banked samples |
+| Athena no Hatena? | 1993 | Athena | M68000 @ 16 MHz | 0 | 2 MB of sprites, 64 KB of work RAM mirrored |
+| Daioh | 1993 | Athena | M68000 @ 16 MHz | 2× 4bpp | |
+| Mobile Suit Gundam | 1993 | Banpresto | M68000 @ 16 MHz | 2× 4bpp | 4 MB of sprites |
+| War of Aero | 1993 | Yang Cheng | M68000 @ 16 MHz | 2× 4bpp | uPD71054C timer |
+| Oishii Puzzle Ha Irimasenka | 1993 | Sunsoft / Atlus | M68000 @ 16 MHz | 2× 4bpp | |
+| Kamen Rider Club Battle Race | 1993 | Banpresto | M68000 @ 16 MHz | 2× 4bpp | Timer |
+| J. J. Squawkers | 1993 | Athena / Able | M68000 @ 16 MHz | 2× 6bpp | |
+| Mad Shark | 1993 | Allumer | M68000 @ 16 MHz | 2× 6bpp | |
+| Eight Forces | 1994 | Tecmo | M68000 @ 16 MHz | 2× 4bpp | 12 MB of ROM |
+| Magical Speed | 1994 | Allumer | M68000 @ 16 MHz | 2× 4bpp | Timer; as Kamen Rider |
+| Extreme Downhill | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp | 320 wide; a 4 MB tile region |
+| Sokonuke Taisen Game | 1995 | Sammy | M68000 @ 16 MHz | 6bpp + 4bpp | |
+| Gundhara | 1995 | Banpresto | M68000 @ 16 MHz | 2× 6bpp | 8 MB of sprites and 17 MB of ROM, a second work-RAM block |
+| Zombie Raid | 1995 | American Sammy | M68000 @ 16 MHz | 2× 6bpp | ADC0834 light gun, battery-backed RAM, 4 MB of samples |
 
 ### Out of scope for now
 
@@ -166,7 +146,6 @@ Seta_Downtown games are a separate core, `SetaDowntown_*.rbf`. All are ROT270 wi
 | Ultra Toukon Densetsu (Japan) | X1-010 + Z80 and YM3438 |
 | Crazy Fight | YM3812 + OKI M6295 |
 | Daioh (prototype, earliest) | missing program ROMs |
-| U.S. Classic (`downtown.cpp`) | Not yet: two trackballs through a uPD4701, colour PROMs, 6bpp tiles |
 
 ## Hardware
 
@@ -198,10 +177,10 @@ Not every board measures the same:
 
 | Board | HSync | VSync | Source |
 |-|-|-|-|
-| Caliber 50 | 15.6250 kHz | 57.4449 Hz | `downtown.cpp`, Guru |
+| Caliber 50 (`downtown.cpp`) | 15.6250 kHz | 57.4449 Hz | `downtown.cpp`, Guru |
 | SD Gundam Neo Battling (in this core) | 15.22 kHz | 58 Hz | `seta.cpp`, Guru |
 | Crazy Fight (out of scope) | 15.1433 kHz | 59.1851 Hz | `seta.cpp`, Guru |
-| Thundercade (Seta_Downtown core) | 15.21 kHz | 59.1845 Hz | `downtown.cpp`, Guru |
+| Thundercade (`downtown.cpp`) | 15.21 kHz | 59.1845 Hz | `downtown.cpp`, Guru |
 
 Some links discussing the hardware:
 * https://www.arcade-museum.com/manuf/Seta.html
@@ -214,22 +193,7 @@ Revision `Seta`, fitted 19 Sep 2026:
 
 ![Floorplan of Seta](docs/floorplan/Seta.png)
 
-Revision `Seta_Downtown`, fitted 21 Sep 2026:
-
-![Floorplan of Seta_Downtown](docs/floorplan/Seta_Downtown.png)
-
 ## Screenshots
-
-### Thundercade / Twin Formation
-
-![tndrcade 20260919_232100-screen](docs/screenshots/tndrcade/20260919_232100-screen.png)
-![tndrcade 20260919_232108-screen](docs/screenshots/tndrcade/20260919_232108-screen.png)
-![tndrcade 20260919_232133-screen](docs/screenshots/tndrcade/20260919_232133-screen.png)
-
-### Twin Eagle - Revenge Joe's Brother
-
-![twineagl 20260918_213915-screen](docs/screenshots/twineagl/20260918_213915-screen.png)
-![twineagl 20260918_213934-screen](docs/screenshots/twineagl/20260918_213934-screen.png)
 
 ### Wit's
 
@@ -243,12 +207,6 @@ Revision `Seta_Downtown`, fitted 21 Sep 2026:
 ![drgnunit 20260913_165453-screen](docs/screenshots/drgnunit/20260913_165453-screen.png)
 ![drgnunit 20260913_165456-screen](docs/screenshots/drgnunit/20260913_165456-screen.png)
 ![drgnunit 20260913_165513-screen](docs/screenshots/drgnunit/20260913_165513-screen.png)
-
-### DownTown / Mokugeki
-
-![downtown 20260918_214209-screen](docs/screenshots/downtown/20260918_214209-screen.png)
-![downtown 20260918_214227-screen](docs/screenshots/downtown/20260918_214227-screen.png)
-![downtown 20260918_214337-screen](docs/screenshots/downtown/20260918_214337-screen.png)
 
 ### Thunder & Lightning
 
@@ -419,7 +377,6 @@ Revision `Seta_Downtown`, fitted 21 Sep 2026:
 ## Installation
 
 * Take the latest `*.rbf` from `releases/` and put it in `_Arcade/cores`, renamed to drop the `Arcade-` prefix: `Arcade-Seta_20260913.rbf` becomes `Seta_20260913.rbf`. The `.mra` files' `<rbf>Seta</rbf>` matches either name, but MiSTer launches the highest-sorting match, and any `Seta_*.rbf` sorts above every `Arcade-Seta_*.rbf`, so a prefixed copy left alongside is never used
-* Seta_Downtown: the same, with its `.rbf` renamed from `Arcade-SetaDowntown_*.rbf` to `SetaDowntown_*.rbf`
 * Take the `*.mra` files from `releases/` and subdirs and put them in `_Arcade`
 * Put the MAME merged or split ROMs in `games/mame`
 
@@ -427,8 +384,6 @@ Revision `Seta_Downtown`, fitted 21 Sep 2026:
 
 Known issues:
 * **Thunder & Lightning** - Character sprites in attract glitch in at the edge of the screen. The same in MAME. Appears to be an original game bug.
-* **Thundercade** - Sprites flicker in attract. The game's vblank handler copies half of its sprite list to sprite RAM each frame and the list is rebuilt between the two copies, so sprite RAM holds two versions of it. MAME shows the same, and so does a [PCB recording](https://www.youtube.com/watch?v=g4TswNhGXjM), so the core draws every frame as it comes (`docs/MAME_DIVERGENCE.md`).
-* **Twin Eagle** - The guns on the carrier deck run a frame behind the tilemap when it moves side to side. Want to confirm on a real PCB.
 
 See `docs/MAME_DIVERGENCE.md` for cases that are considered 'hacks' from MAME, and also any cases where we diverge from MAME.
 

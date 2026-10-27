@@ -241,10 +241,6 @@ def main():
     ap.add_argument("--all", action="store_true",
                     help="also deploy .mra files listed in HELD_BACK_SETS "
                          "(sets that are built but known not to run yet)")
-    ap.add_argument("--core", choices=("seta", "downtown"), default="seta",
-                    help="downtown: the Seta_Downtown core -- SetaDowntown_N.rbf "
-                         "and the .mra files whose <rbf> is SetaDowntown, to "
-                         "_Arcade/_Seta_Downtown")
     ap.add_argument("--mra-only", action="store_true")
     ap.add_argument("--rbf-only", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
@@ -255,12 +251,7 @@ def main():
                     help="deploy despite failed build checks -- say why")
     a = ap.parse_args()
 
-    global RBF_STEM, REMOTE_ARCADE
     rel = REPO / "releases"
-    if a.core == "downtown":
-        # not Seta_*: the Seta .mra files' <rbf>Seta</rbf> would match it
-        RBF_STEM = "SetaDowntown"
-        REMOTE_ARCADE = "/media/fat/_Arcade/_Seta_Downtown"
 
     env = load_env(REPO / "mister.env")
     m = Mister(env, a.dry_run)
