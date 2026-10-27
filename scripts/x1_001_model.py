@@ -42,9 +42,8 @@ WHAT THE CHIP ACTUALLY DOES, and the parts that are easy to get wrong:
   0x4000 tiles.
 
   THE BANK EXPRESSION IS `(ctrl2 ^ (~ctrl2 << 1)) & 0x40`, copied including
-  its operators. LESSONS_LEARNED, "Copy a driver's register expression
-  including its operators" -- this exact class of bug cost the Psikyo project a
-  layer-enable polarity hunt.
+  its operators: this class of bug cost the Psikyo project a layer-enable
+  polarity hunt.
 """
 import argparse
 import struct
@@ -99,12 +98,6 @@ GAMES = {
     # Group C: the same sprite offsets as Group A, 1536 palette entries. Here
     # for the setac_eof copy, which msgundam alone of the supported sets uses.
     "msgundam":  dict(_GROUP_A, rot=0, palette_entries=1536),
-    # downtown.cpp tndrcade: sprites only (screen_update fills 0x1f0, draws
-    # with 0x1000); set_fg_yoffsets(-0x12, 0x0e) kept as MAME has it (224
-    # lines, as the 224-line seta.cpp sets); visarea 2*8..30*8-1. Its sprite
-    # region is "sprites" (MAME_SRC=.../downtown.cpp).
-    "tndrcade":  dict(_GROUP_A, rot=270, fg_yoffs=(-0x12, 0x0e),
-                      visarea=(0, 383, 16, 239), region="sprites"),
 }
 
 

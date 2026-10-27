@@ -160,8 +160,7 @@ end
 -- a call to them inside a write tap raises an error that MAME SWALLOWS, so the
 -- tap keeps firing and the log stays empty. That is what happened on the first
 -- run of this script: 459 tap hits, zero lines logged, no diagnostic anywhere.
--- Probed with a variant-by-variant test rather than guessed
--- (LESSONS_LEARNED, "Driving MAME as a reference generator").
+-- Probed with a variant-by-variant test rather than guessed.
 --
 -- What does exist is time_until_pos(y) = seconds until the beam next reaches
 -- (y, 0). From it:
@@ -209,7 +208,7 @@ if TAPS ~= "" then
         -- are kept. An error in here is invisible otherwise, and "no writes
         -- happened" then looks identical to "every write threw". Pairing a
         -- bad-event counter with a total-events counter is the same rule the
-        -- hardware probe follows (LESSONS_LEARNED, "Debug instrumentation").
+        -- hardware probe follows.
         local tap = prog:install_write_tap(lo, hi, "setawr", function(offset, data, mask)
             tap_hits = tap_hits + 1
             local ok, err = pcall(function()

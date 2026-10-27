@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Coin 1 pulses of several lengths in MAME, one snapshot each.
 
-    python scripts/coin_test.py twineagl downtown [--at 600] [--count 3]
+    python scripts/coin_test.py thunderl zingzip [--at 600] [--count 3]
 
 Each case runs the set headless (scripts/mame/coin.lua), holds Coin 1 for
 HOLD frames COUNT times with GAP frames between, and snapshots the screen

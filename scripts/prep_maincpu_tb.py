@@ -57,8 +57,8 @@ def main():
     a = ap.parse_args()
 
     bm = _load("build_maincpu_hex", HERE / "build_maincpu_hex.py")
-    # sets outside build_maincpu_hex's table (downtown.cpp, with MAME_SRC
-    # pointed at it): the region from ROM_START through build_region
+    # sets outside build_maincpu_hex's table: the region from ROM_START
+    # through build_region
     if a.set not in bm.SETS:
         sys.path.insert(0, str(HERE))
         from build_region import region_image

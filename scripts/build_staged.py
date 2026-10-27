@@ -5,7 +5,7 @@ Ported from the Fuuki core (D:\\Arcade-Fuuki_MiSTer), which had in turn ported i
 from Psikyo. It exists for the reason Fuuki paid for by leaving it unported:
 a Quartus compile takes about thirteen minutes, and for all of it the tree
 has to be left alone. Editing sources during a run risks the build, and NOT
-editing them means every unrelated task waits. See docs/WORKFLOW.md.
+editing them means every unrelated task waits.
 
 The compile runs in a dedicated git worktree at <repo>/build (gitignored),
 so the main tree is free the moment the build starts, and every scrap of
@@ -254,8 +254,7 @@ def main():
     # different seeds are not interchangeable: 10000019 (seed 2) reported every
     # clock domain positive and broke five games on hardware, where 10000020
     # (seed 7, a WORSE worst slack) runs them all. Record it, or a good build
-    # cannot be rebuilt. LESSONS_LEARNED, "A clean STA summary is a property of
-    # one placement".
+    # cannot be rebuilt.
     stamp = "%s  %s  seed=%s\n" % (
         head, datetime.datetime.now().isoformat(),
         args.seed if args.seed is not None else "default")

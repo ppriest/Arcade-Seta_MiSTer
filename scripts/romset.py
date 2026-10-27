@@ -25,8 +25,7 @@ thirty zips here contain COLLIDING basenames:
 Those are different dumps under the same name. A dict comprehension keeps
 whichever came last in the archive, so asking for daiohp's `data_even.u103`
 can silently hand back daiohp2's -- a wrong image that decodes, boots in
-simulation, and is wrong. LESSONS_LEARNED's "A hardware-vs-image comparison
-cannot detect a wrong image" is the same failure one step downstream.
+simulation, and is wrong.
 
 AND WHY PATHS ARE NOT THE ANSWER EITHER
 ---------------------------------------

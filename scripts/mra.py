@@ -7,7 +7,7 @@ ROM_START by scripts/build_maincpu_hex.py and scripts/prep_tilemap_tb.py --
 which are independently verified against MAME's disassembly and against
 rendered frames.
 
-That check is the whole point. LESSONS_LEARNED is blunt about this: every
+That check is the whole point. Every
 interleave on the Psikyo core that was DERIVED by reasoning about byte order
 was wrong, and the one that worked came from copying a shipped core's idiom.
 "It boots" is weak evidence, because a wrong map can boot far enough to look
@@ -93,8 +93,7 @@ def pattern_from_map(m):
         map="12"  ->  pattern [1,0]  ->  out[0]=src[1], out[1]=src[0]  SWAP
         map="21"  ->  pattern [0,1]  ->  out[0]=src[0], out[1]=src[1]  verbatim
 
-    which is what docs/LESSONS_LEARNED.md records, established the hard way on
-    the Psikyo core: six `.mra` files emitted tile ROMs with the wrong form and
+    established on the Psikyo core: six `.mra` files emitted tile ROMs with the wrong form and
     rendered the tile layers as garbage while the sprites looked fine.
 
     Returns (map_index, pattern).
@@ -181,7 +180,7 @@ def _selftest():
     If these ever disagree with mra-tools-c, every generated `.mra` is wrong on
     hardware while still passing any self-consistency check built on this
     module -- both sides would share the same wrong assumption, which
-    LESSONS_LEARNED calls out as undetectable by comparison alone.
+    no comparison between them can detect.
     """
     src = bytes([0xAA, 0xBB, 0xCC, 0xDD])
 

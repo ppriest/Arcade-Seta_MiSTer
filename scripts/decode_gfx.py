@@ -13,7 +13,7 @@ HOW THIS DIFFERS FROM THE FUUKI VERSION
 ---------------------------------------
 Fuuki's copy hand-derived a pixel extractor per format -- fast, but each one
 had to be reasoned out from a gfx_layout, and reasoning is exactly what
-LESSONS_LEARNED says produces confident wrong answers about byte order. Seta's
+produces confident wrong answers about byte order. Seta's
 formats are more awkward than Fuuki's (planes interleaved inside a word,
 x-offsets that jump in 128-bit strides, and RGN_FRAC halves for sprites), so
 this version instead implements MAME's gfx_layout semantics DIRECTLY and the

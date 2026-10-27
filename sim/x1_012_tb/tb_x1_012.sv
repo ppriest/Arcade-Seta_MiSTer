@@ -66,9 +66,8 @@ module tb_x1_012;
 		// covered end to end by scripts/flip_sweep.py through sim/seta_video_tb.
 		.xextent(10'd384), .yextent(9'd256),
 		.vis_dimy(vis_dimy), .colorbase(colorbase), .code_limit(code_limit),
-		.tile_bank_en(1'b0), .tile_bank(32'd0),
 		.bpp6(bpp6),
-		.vblank_rise(vblank_rise), .raster(1'b0),
+		.vblank_rise(vblank_rise),
 		.line_start(line_start), .line(line), .line_budget(16'd0), .cache_en(1'b1),
 		.line_done(line_done), .busy(busy),
 		.rom_req(rom_req), .rom_addr(rom_addr),

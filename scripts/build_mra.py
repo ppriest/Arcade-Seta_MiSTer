@@ -7,7 +7,7 @@
 
 HOW THIS AVOIDS THE CLASSIC .mra BUG
 ------------------------------------
-docs/LESSONS_LEARNED.md is blunt: on the Psikyo core, *every* interleave that
+On the Psikyo core, *every* interleave that
 was DERIVED by reasoning about byte order was wrong, and "it boots" is weak
 evidence because a wrong map can boot far enough to look plausible. So nothing
 here reasons about map digits. Instead:
@@ -106,9 +106,6 @@ SDRAM_SV = REPO / "rtl" / "memory" / "seta_sdram_top.sv"
 CFG_SV = REPO / "rtl" / "seta_board_cfg.sv"
 ROMS = REPO / "roms"
 OUT_DIR = REPO / "releases"
-# Sets whose .mra goes to unsupported/, outside releases/ so deploy.py does
-# not install it: these overlap with Jotego's cores.
-UNSUPPORTED_SETS = ("calibr50", "arbalest", "metafox")
 
 # The order the regions occupy in the image. Their offsets come from the RTL.
 # ONE ORDER AND ONE BASE TABLE PER LAYOUT, because the two differ in more than
@@ -161,9 +158,7 @@ LAYOUT_F_SETS = {"zombraid"}
 
 # Battery-backed RAM, bytes. zombraid: the 128 low-lane bytes of
 # 0x300100-0x3001ff, saved as the 256-byte window (docs/ROADMAP.md).
-NVRAM_SETS = {"zombraid": 256,
-              # calibr50_map's "nvram" share, 0x200000-0x200fff (downtown.cpp)
-              "calibr50": 4096}
+NVRAM_SETS = {"zombraid": 256}
 
 # Button layouts that differ from the driver's ports. jjsquawk declares
 # JOY_TYPE1_3BUTTONS, but the game uses two (attack, jump): button 3 is read
@@ -409,12 +404,6 @@ def groups_for(records, region, setname, body):
         if r[0] == "copy":
             continue
         kind, name, dest, ln, crc = r[:5]
-        if kind == "reload":
-            # ROM_RELOAD: the previous file again from its start, the same way
-            if prev is None:
-                sys.exit(f"{setname}/{region}: ROM_RELOAD with no load before it")
-            resolved.append((prev[2], prev[0], dest, ln, prev[1], 0))
-            continue
         if kind == "continue":
             if prev is None:
                 sys.exit(f"{setname}/{region}: ROM_CONTINUE with no load "
@@ -435,14 +424,6 @@ def groups_for(records, region, setname, body):
             prev, prev_used = (name, crc, kind), ln
 
     recs = sorted(resolved, key=lambda r: (r[2] & ~1, r[2] & 1))
-    # A plain load that a later one overwrites keeps only the bytes before it:
-    # downtown.cpp's sub regions load a file at 0x4000 and reload it at 0xc000,
-    # and a .mra's parts are laid end to end, so the first becomes a slice.
-    for k in range(len(recs) - 1):
-        a_, b_ = recs[k], recs[k + 1]
-        if a_[0] == "load" and b_[0] == "load" and a_[2] + a_[3] > b_[2]:
-            recs[k] = (a_[0], a_[1], a_[2], b_[2] - a_[2], a_[4],
-                       a_[5] if a_[5] is not None else 0)
     out = []
     i = 0
     while i < len(recs):
@@ -810,7 +791,53 @@ def input_layout(setname, block, all_blocks, depth=0):
     sys.exit(f"{setname}: cannot tell the input layout from its P1 port")
 
 
-def buttons_xml(layout):
+# Button names per set, in joystick order (entry i is joystick bit 4 + i):
+# the game's own, from the manual, cabinet or flyer. A clone without an
+# entry takes its parent's. "Button N" marks a name not yet found.
+BUTTON_NAMES = {
+    "atehate":  ["Answer 1", "Answer 2", "Answer 3", "Answer 4"],  # Athena no Hatena
+    "blandia":  ["Attack High", "Attack Mid", "Attack Low"],  # Blandia
+    "blockcar": ["Shot", "-"],  # Block Carnival - Thunder & Lightning 2
+    "daioh":    ["Shot (Vulcan)", "Shot (Lightning)", "Shot (Missile)", "Bomb (Vulcan)", "Bomb (Lightning)", "Bomb (Missile)"],  # Daioh
+    "drgnunit": ["Attack", "Jump", "Crouch/Special"],  # Dragon Unit - Castle of Dragon
+    "eightfrc": ["Shot", "Bomb"],  # Eight Forces
+    "extdwnhl": ["Brake"],  # Extreme Downhill (v1.5)
+    "gundhara": ["Shot", "Kick", "Bomb"],  # Gundhara
+    "jjsquawk": ["Throw", "Jump"],  # J. J. Squawkers
+    "madshark": ["Shot", "Bomb"],  # Mad Shark
+    "magspeed": ["Button A", "Button B", "Card 1", "Card 2", "Card 3", "Card 4"],  # Magical Speed
+    "kamenrid": ["Accelerate", "Attack"],  # Masked Riders Club Battle Race - Kamen Rider Club Battle Racer
+    "msgundam": ["Punch", "Kick"],  # Mobile Suit Gundam
+    "oisipuzl": ["Confirm", "Help"],  # Oishii Puzzle Ha Irimasenka
+    "pairlove": ["Confirm", "Undo"],  # Pairs Love
+    "qzkklogy": ["Button 1", "Button 2", "Button 3", "Button 4", "Pause (Cheat)"],  # Quiz Kokology
+    "qzkklgy2": ["Button 1", "Button 2", "Button 3", "Button 4"],  # Quiz Kokology 2
+    "rezon":    ["Shot", "-", "-"],  # Rezon
+    "neobattl": ["Attack"],  # SD Gundam Neo Battling (Japan)
+    "sokonuke": ["Action"],  # Sokonuke Taisen Game (Japan)
+    "stg":      ["Shot", "Special", "-"],  # Strike Gunner S.T.G
+    "thunderl": ["Shot", "-"],  # Thunder & Lightning (set 1)
+    "umanclub": ["Shoot", "Jump"],  # Ultraman Club - Tatakae! Ultraman Kyoudai!!
+    "wrofaero": ["Shoot", "Formation", "Discard"],  # War of Aero - Project MEIOU
+    "wits":     ["Turbo", "Jump"],  # Wit's (Japan)
+    "zingzip":  ["Shoot", "Evade"],  # Zing Zing Zip (World) - Zhen Zhen Ji Pao (China)
+    "zombraid": ["Trigger", "Reload"],  # Zombie Raid (9-28-95, US)
+}
+
+
+def button_names(setname, parent, layout):
+    """BUTTON_NAMES for the set or its parent, checked against the layout's
+    button count."""
+    names = BUTTON_NAMES.get(setname) or BUTTON_NAMES.get(parent)
+    if names is None:
+        sys.exit(f"{setname}: no BUTTON_NAMES entry for it or its parent")
+    if len(names) != len(BUTTON_LAYOUTS[layout]):
+        sys.exit(f"{setname}: BUTTON_NAMES has {len(names)} names, layout "
+                 f"{layout} has {len(BUTTON_LAYOUTS[layout])} buttons")
+    return names
+
+
+def buttons_xml(have):
     """The <buttons> element, with Start and Coin at FIXED joystick bits.
 
     THE NAME LIST IS POSITIONAL: entry i is joystick bit 4 + i. Writing the
@@ -828,7 +855,6 @@ def buttons_xml(layout):
 
     Seta.sv reads exactly those bits. Keep the two in step.
     """
-    have = BUTTON_LAYOUTS[layout]
     n = len(have)
     names = have + ["-"] * (6 - n) + ["Start", "Coin", "Pause", "Service"]
     default = ["A", "B", "X", "Y", "L", "R"][:n] + ["Start", "Select", "L", "R"]
@@ -1042,7 +1068,7 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
                                  f'{cuts[k] if cuts else cut} map="{mp}"/>')
                 lines.append('        </interleave>')
             pos += g["size"]
-        declared = region_size(body, region) or 0      # absent: tndrcade's tiles, x1snd
+        declared = region_size(body, region) or 0      # absent: thunderl's tiles, x1snd
         gs = all_groups[region]
         got = (gs[-1]["dest"] + gs[-1]["size"]) if gs else 0
         if got < declared:
@@ -1075,8 +1101,9 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
         lines.append(f'        {dip}')
     lines.append('    </switches>')
     lines.append('')
-    lines.append('    ' + buttons_xml(LAYOUT_OVERRIDE.get(setname) if setname in LAYOUT_OVERRIDE
-        else input_layout(setname, dip_blocks[info["inputs"]], dip_blocks)))
+    layout = (LAYOUT_OVERRIDE[setname] if setname in LAYOUT_OVERRIDE
+              else input_layout(setname, dip_blocks[info["inputs"]], dip_blocks))
+    lines.append('    ' + buttons_xml(button_names(setname, info["parent"], layout)))
     if setname in NVRAM_SETS:
         # The framework keeps a file of this size per .mra: it downloads it
         # into the core at index 4 after the ROM and reads it back when the
@@ -1095,9 +1122,7 @@ def build_one(setname, mod, bases, gl, all_blocks, dip_blocks, out_dir, write):
     # A parent sits directly in the Arcade folder; a clone goes into
     # _alternatives/_<parent>, so the top level lists one entry per game rather
     # than one per ROM revision.
-    if setname in UNSUPPORTED_SETS:
-        folder = REPO / "unsupported"
-    elif info["parent"] != "0":
+    if info["parent"] != "0":
         pinfo = gl.get(info["parent"])
         # the parent's title as a folder name: mra_filename's replacements
         ptitle = mra_filename(pinfo["title"] if pinfo else info["parent"])[:-4]

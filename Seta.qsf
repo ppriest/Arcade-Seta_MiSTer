@@ -49,8 +49,7 @@ set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # SEED 7: the placement that runs all twenty sets on hardware. Seed 2 built
-# the same commit with every clock positive and broke five of them --
-# LESSONS_LEARNED, "A clean STA summary is a property of one placement".
+# the same commit with every clock positive and broke five of them.
 set_global_assignment -name SEED 7
 
 # REQUIRED for HDMI rotation. screen_rotate_two writes a rotated copy of

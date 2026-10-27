@@ -77,8 +77,8 @@ class X1010:
         32768*256. Sixteen channels at maximum volume and full-scale samples
         reach about twice that, so the chip's own mix can exceed 0 dBFS -- it is
         the stream that absorbs it. Kept faithful here; the RTL saturates and
-        says so, rather than wrapping (LESSONS_LEARNED: an ADPCM accumulator
-        that wrapped instead of saturating cost the Psikyo core a long hunt).
+        says so, rather than wrapping (an ADPCM accumulator that wrapped
+        instead of saturating was a bug on the Psikyo core).
         """
         out = []
         for _ in range(n):

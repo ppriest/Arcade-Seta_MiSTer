@@ -50,23 +50,10 @@ module x1_012 #(
 	input  wire [LB_W-1:0] colorbase,       // the GFXDECODE_ENTRY base
 	// code %= elements(), not a mask
 	input  wire  [15:0] code_limit,
-	// twineagl_tile_offset (MAME downtown.cpp; tied off on this core's
-	// boards): codes 0x3exx take bits 13-7 from one of four bank bytes (>> 1),
-	// selected by code bits 8-7
-	input  wire         tile_bank_en,
-	input  wire  [31:0] tile_bank,
 	input  wire         bpp6,
 
 	// bank select and scroll are latched at vblank_rise, as MAME draws the frame
 	input  wire         vblank_rise,
-	// raster (calibr50 in MAME downtown.cpp; tied off on this core's boards):
-	// latched at every line_start instead, and a scroll or bank write
-	// also releases the queued VRAM writes -- MAME redraws the lines above at
-	// each such write (calibr50's trampoline), so the lines after it see the
-	// VRAM as it stood then. VRAM stays queued otherwise: in attract calibr50
-	// writes scroll only in vblank and tiles right across the frame, and
-	// applied live those tiles showed under the old scroll (hardware).
-	input  wire         raster,
 	input  wire         line_start,
 	input  wire   [8:0] line,
 	input  wire  [15:0] line_budget,
@@ -149,9 +136,8 @@ module x1_012 #(
 		if (vq_push) vq_tail <= vq_tail + 7'd1;
 		if (vq_pop)  vq_head <= vq_head + 7'd1;
 		vq_count <= vq_count + {7'd0, vq_push} - {7'd0, vq_pop};
-		if (vblank_rise || (raster && c_we)) begin
-			// what was written before this vblank is this frame's (raster:
-			// before this scroll or bank write, the lines after it)
+		if (vblank_rise) begin
+			// what was written before this vblank is this frame's
 			vq_allow <= vq_count + {7'd0, vq_push} - {7'd0, vq_pop};
 			vq_live  <= 1'b0;
 		end else begin
@@ -180,16 +166,11 @@ module x1_012 #(
 
 	logic       bank_sel = 1'b0;
 	logic [15:0] vctrl0_lat = '0, vctrl1_lat = '0;
-	// twineagl writes its tile bank mid-frame (lines 32-120 after vblank
-	// start, scripts/write_timing.py --extra tbank:400000:400007); MAME
-	// draws with the value it holds at vblank.
-	logic [31:0] tile_bank_lat = '0;
-	always_ff @(posedge clk) if (vblank_rise || (raster && line_start)) begin
+	always_ff @(posedge clk) if (vblank_rise) begin
 		bank_sel   <= vctrl[2][3];
 		cmode      <= vctrl[2][4];
 		vctrl0_lat <= vctrl[0];
 		vctrl1_lat <= vctrl[1];
-		tile_bank_lat <= tile_bank;
 	end
 	wire [12:0] bank_off = bank_sel ? 13'h1000 : 13'h0000;
 
@@ -392,9 +373,7 @@ module x1_012 #(
 
 			S_TILE:  state <= S_TILE2;                // RAM latency
 			S_TILE2: begin
-				tile_code <= (tile_bank_en && eng_vq[13:9] == 5'h1f)
-				           ? {tile_bank_lat[{eng_vq[8:7], 3'd1} +: 7], eng_vq[6:0]}
-				           : eng_vq[13:0];
+				tile_code <= eng_vq[13:0];
 				tile_fx   <= eng_vq[15];
 				tile_fy   <= eng_vq[14];
 				eng_vaddr <= bank_off + {2'd0, tile_ix} + 13'h800;

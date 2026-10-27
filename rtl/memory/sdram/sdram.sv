@@ -236,8 +236,7 @@ always @(posedge clk) begin
 	// through 10.644 ns of interconnect, and bit 8 of the first beat of every
 	// read burst came back wrong in about half of samples -- an inert RTL
 	// change elsewhere had moved that flop. Two builds of the same commit
-	// differed in nothing STA reported (scripts/sdram_check.py, and
-	// docs/LESSONS_LEARNED.md).
+	// differed in nothing STA reported (scripts/sdram_check.py).
 	//
 	// With dq_in the pin path is fixed by the I/O cell, and dq_in -> dout is
 	// an ordinary register-to-register path that STA times completely. The

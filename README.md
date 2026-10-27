@@ -414,7 +414,7 @@ This core is being developed with heavy use of a frontier coding assistant. The 
 
 ## Verification
 
-Not PCB-validated. MAME is the accuracy reference for the most part, with its own acknowledged uncertainties noted where they matter. Goal is to reconcile the inconsistencies and unlikely behaviour. The exception so far is flip screen, checked against the unflipped picture rotated 180 degrees rather than against MAME.
+Not PCB-validated, other than some sourced videos from youtube from original PCBs. MAME is the accuracy reference for the most part, with its own acknowledged uncertainties noted where they matter. Goal is to reconcile the inconsistencies and unlikely behaviour. The exception so far is flip screen, checked against the unflipped picture rotated 180 degrees rather than against MAME.
 
 * Hardware facts come from the MAME driver and verified against it.
   * Graphics layouts were decoded from real ROM data before any RTL used them

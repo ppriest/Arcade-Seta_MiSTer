@@ -97,8 +97,7 @@ def main():
                     help="insert a coin at this frame and play (P1 Right held, "
                          "Button 1 pulsed); counting still starts at --skip")
     ap.add_argument("--extra", default="",
-                    help="more taps, name:hexlo:hexhi[,...] (twineagl's tile "
-                         "bank: tbank:400000:400007)")
+                    help="more taps, name:hexlo:hexhi[,...]")
     ap.add_argument("--tag", default="", help="suffix for the result file")
     ap.add_argument("--reuse", action="store_true", help="report existing results only")
     a = ap.parse_args()

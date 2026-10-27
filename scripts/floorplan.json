@@ -11,16 +11,6 @@
    "color": "#7f0000"
   },
   {
-   "name": "Sub board (u_sub)",
-   "match": "seta_core\\|u_sub",
-   "color": "#7f0000"
-  },
-  {
-   "name": "YM2203 x2",
-   "match": "seta_core\\|u_ym[01]",
-   "color": "#f58231"
-  },
-  {
    "name": "X1-010 sound",
    "match": "seta_core\\|u_snd",
    "color": "#ffe119"

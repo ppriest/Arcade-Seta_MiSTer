@@ -7,8 +7,7 @@ widened copy of Psikyo's `sdram_chip_model.sv`.
 
 It decodes real SDRAM commands from `{nRAS, nCAS, nWE}` and models CAS latency
 and burst behaviour, rather than being a latency stub. That distinction is
-load-bearing: LESSONS_LEARNED's "Verify a burst extension against a
-command-decoding chip model, not a latency stub" records three bugs caught only
+load-bearing: three bugs were caught only
 because the model decoded commands — a row/column address split that had to be
 swapped, a chip model silently ignoring the `DQML`/`DQMH` write mask, and an
 off-by-one in burst-read CAS timing.

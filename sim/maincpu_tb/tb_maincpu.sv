@@ -13,9 +13,7 @@
 // WHAT IS AND IS NOT MODELLED
 // ---------------------------
 // The ROM here is a behavioural model with a parameterised latency, NOT the
-// production SDRAM stack. LESSONS_LEARNED is explicit that this is not enough
-// on its own: "Re-run the failing case with the production transport in place
-// of behavioural models" -- Psikyo had a protocol bug that every module-level
+// production SDRAM stack, and that is not enough on its own: Psikyo had a protocol bug that every module-level
 // sim passed because a short-latency model returned its response while the FSM
 // was between states. So this bench proves the CPU and the decode; wiring
 // psikyo/fuuki's sdram_narrow_bridge underneath is a separate, later step and
@@ -191,7 +189,7 @@ module tb_maincpu;
 		// scripts/run_sim.sh runs from the repository root and this path is
 		// written for that. A wrong CWD leaves both arrays zeroed and fails
 		// every check at once, which reads exactly like an RTL regression;
-		// grep the log for `readmem` first (LESSONS_LEARNED).
+		// grep the log for `readmem` first.
 		$readmemh("sim/maincpu_tb/rom.hex", rom);
 		$readmemh("sim/maincpu_tb/expect.hex", expect_mem);
 

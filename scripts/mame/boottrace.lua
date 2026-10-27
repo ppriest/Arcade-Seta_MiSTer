@@ -54,7 +54,7 @@ end
 
 -- Every callback is wrapped and counted. An error inside a tap is SWALLOWED by
 -- MAME -- on this project that produced 459 tap hits and an empty log with no
--- diagnostic anywhere (docs/LESSONS_LEARNED.md, [Seta] entries). A hits count
+-- diagnostic anywhere. A hits count
 -- beside a logged count is what makes that visible instead of silent.
 local function record(rw)
     return function(offset, data, mask)

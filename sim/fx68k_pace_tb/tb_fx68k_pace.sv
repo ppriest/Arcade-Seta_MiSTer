@@ -3,7 +3,7 @@
 //
 //     scripts/run_sim.sh fx68k_pace_tb [+LAT=n] [+HALF=n]
 //
-// Runs twineagl's boot delay loop (move.w #$2820,D0; nop; dbra D0) and counts
+// Runs a boot delay loop (move.w #$2820,D0; nop; dbra D0) and counts
 // CPU clocks (phi1 enables) between fetches of the nop: a 68000 takes 14 an
 // iteration (NOP 4, DBRA taken 10). The memory answers LAT clk after AS and
 // the data strobes assert; HALF is clk per phase (6 = 8 MHz, 3 = 16 MHz at

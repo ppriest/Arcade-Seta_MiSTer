@@ -193,7 +193,7 @@ attract, every parent) finds 26 of 31 sets doing the same, one flip a frame:
 | `setac_eof` copy on, no flips | qzkklogy, qzkklgy2, msgundam, blandia |
 | copy off, no flips | eightfrc |
 | flip mid-frame | stg 113, zombraid 112, extdwnhl 112/254, sokonuke 113, daioh 117/132/229, atehate 118, gundhara 118, jjsquawk 119, oisipuzl 120, drgnunit 130, pairlove 130-223, umanclub 1-176, zingzip 44/254, wits 11, magspeed 2-17, wrofaero 0-210, kamenrid 5-254, neobattl 2-255 |
-| flip in vblank | madshark 246-255, downtown 254, thunderl 249, blockcar 251, arbalest 241, metafox 241, twineagl 0-1, rezon 0 |
+| flip in vblank | madshark 246-255, thunderl 249, blockcar 251, rezon 0 |
 
 So `x1_001.sv` follows the board's rule, not a per-game switch. Once a game
 flips its own page (`page_flip`: a write to control byte 1 with bit 5 set and
@@ -441,17 +441,17 @@ and broke the other. fx68k (`sim/fx68k_pace_tb`: 14) replaced it.
 #### When the games write, in MAME
 
 `scripts/write_timing.py` counts every write to sprite Y, sprite control,
-sprite code/X and the tile layers by scanline, for the 31 parent sets, over
+sprite code/X and the tile layers by scanline, for the 27 parent sets, over
 1800 frames of attract after 600 and 1800 frames of play (coin at 600,
 counted from 1500; `docs/write_timing_mame.txt` lists the six sets whose
 closing snapshot was not in play). MAME's frames are 256 lines; vblank starts
-at 248 (240 on eightfrc, oisipuzl, madshark, metafox, arbalest). The sprite
+at 248 (240 on eightfrc, oisipuzl, madshark). The sprite
 list (Y, control) falls in the same place in attract and play, in three
 groups:
 
 | written | share | sets |
 |-|-|-|
-| in the first 24 lines after vblank start | 96-100%, 13-26% in the first 2 lines | thunderl, blockcar, umanclub, neobattl, rezon, wrofaero, msgundam, kamenrid, magspeed, zingzip, madshark, downtown, twineagl, metafox, arbalest (wits mostly) |
+| in the first 24 lines after vblank start | 96-100%, 13-26% in the first 2 lines | thunderl, blockcar, umanclub, neobattl, rezon, wrofaero, msgundam, kamenrid, magspeed, zingzip, madshark (wits mostly) |
 | around line 112, nowhere near vblank | all | atehate, pairlove, drgnunit, stg, qzkklogy, qzkklgy2, daioh, gundhara, jjsquawk, extdwnhl, sokonuke, zombraid, eightfrc, oisipuzl |
 | the 8 lines before vblank start | Y and control; codes after vblank start | blandia |
 

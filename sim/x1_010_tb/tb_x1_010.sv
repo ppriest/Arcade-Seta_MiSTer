@@ -61,8 +61,8 @@ module tb_x1_010;
 	// ---- PCM sample ROM, with a latency ---------------------------------------
 	// Behavioural, but with a settable delay: the real path is an SDRAM round
 	// trip and the engine must not depend on the answer being immediate. The
-	// production transport is a separate, later test -- LESSONS_LEARNED is clear
-	// this is a proxy, not a substitute.
+	// production transport is a separate, later test; this is a proxy, not a
+	// substitute.
 	logic [7:0] rom [0:ROM_BYTES-1];
 	int rom_latency = 8;
 	int rom_cnt = 0;

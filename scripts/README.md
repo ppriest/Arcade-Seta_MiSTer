@@ -2,8 +2,6 @@
 
 Capture and verification scripts for the Seta core, ported from
 `Arcade-Fuuki_MiSTer` (which had ported much of it from `Arcade-Psikyo_MiSTer`).
-The practices these implement, and why each exists, are in
-[`docs/WORKFLOW.md`](../docs/WORKFLOW.md).
 
 Reference data is **captured, not hand-made**, so any claim about the hardware
 can be re-checked cheaply — and re-checked the same way by anyone else with a
@@ -75,7 +73,7 @@ while an autoboot script still appears to run. `mame_capture.py` passes
 - **Those images against MAME's own fetches**, per set, with
   `check_boot_trace.py`. Every word MAME's CPU reads from the program region
   must equal the same address in our image. This is the interleave check
-  LESSONS_LEARNED asks for, done mechanically over hundreds of words rather
+  done mechanically over hundreds of words rather
   than by eye over a handful of instructions — and by a path that shares no
   code with the one that built the image.
 - **Every game's reset SP against its family's work RAM.** This is the check
@@ -149,5 +147,4 @@ callback silently stops firing.
 And **wrap every tap callback in `pcall`, with a hits counter beside a logged
 counter**. An error inside a tap is swallowed: the first run of `capture.lua`
 here produced 459 tap hits and zero logged lines, with no error anywhere, and
-the obvious reading was that the game had not written to that range. See
-LESSONS_LEARNED's `[Seta]` entries.
+the obvious reading was that the game had not written to that range.

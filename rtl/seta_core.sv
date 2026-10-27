@@ -575,7 +575,6 @@ module seta_core (
 		.tile1_req(tile1_req), .tile1_addr(tile1_addr),
 		.tile1_valid(tile1_valid), .tile1_data(tile1_data),
 		.vregs(vregs), .tilemaps_flip(tilemaps_flip),
-		.tile_bank_en(1'b0), .tile_bank(32'd0), .tile_raster(1'b0),
 		.force_flip(force_flip),
 
 		.code_we(io_req && io_we && io_sel[IO_SPRCODE] && !io_addr[14]),

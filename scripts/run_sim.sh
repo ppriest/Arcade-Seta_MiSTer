@@ -8,7 +8,7 @@
 # file, so every bench in this project is written to be run from the repo
 # root and this script enforces it. A wrong CWD leaves ROMs all zeroes and
 # fails every check at once, which reads exactly like an RTL regression --
-# grep the log for `readmem` first (LESSONS_LEARNED, "Testbench discipline").
+# grep the log for `readmem` first.
 #
 # Everything is compiled with +define+SIMULATION +initreg=r+0 +initmem=r+0:
 # un-reset registers and memories start at zero, as they do on the FPGA,
@@ -53,13 +53,6 @@ fi
 # nothing at all.
 rm -rf work
 "$MS/vlib.exe" work
-
-# T65 (65C02 sub CPU of the downtown.cpp boards), VHDL-93, package first, then
-# its plain-port wrapper.
-if [ -d rtl/cpu/t65 ]; then
-  echo "--- vcom: T65 ---"
-  "$MS/vcom.exe" -quiet -93 -work work       rtl/cpu/t65/T65_Pack.vhd       rtl/cpu/t65/T65_ALU.vhd       rtl/cpu/t65/T65_MCode.vhd       rtl/cpu/t65/T65.vhd       rtl/cpu/t65c02.vhd
-fi
 
 echo "--- vlog: RTL + testbench ---"
 # Compile the whole core RTL every time rather than a per-bench file list.

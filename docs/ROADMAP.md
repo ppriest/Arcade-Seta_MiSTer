@@ -21,30 +21,11 @@ Scope decision (see "Game scope" below): the **X1-010 mainline** — genuine Set
 68000 + X1-001 sprites + X1-010 sound with 0, 1 or 2 X1-012 tilemap layers. Bootlegs, gambling and
 medal machines, and Crazy Fight are out.
 
-Three documents come with this one and are carried over from the two completed cores in this series,
-`Arcade-Psikyo_MiSTer` and `Arcade-Fuuki_MiSTer`. Each carries a provenance header saying so; they
-are inherited evidence about MiSTer, Quartus, ModelSim and SDRAM transports, not claims about Seta
-hardware.
-
-- **[`docs/LESSONS_LEARNED.md`](LESSONS_LEARNED.md)** — the rules, each with the mechanism that made
-  the wrong assumption plausible and the evidence that settled it. Entries are marked by origin
-  (unmarked = Psikyo, `[Fuuki]`, and `[Seta]` for anything this core establishes). Read the relevant
-  section **before** starting a subsystem; most entries are cheap to obey up front and expensive to
-  retrofit.
-- **[`docs/WORKFLOW.md`](WORKFLOW.md)** — the working practice built on top of those rules: staged
-  builds out of `build/`, slack-gated deploys, OSD debug switches, the JTAG probe, the trace ring,
-  memory read-back from a running core, and MAME as a reference generator. **Adopted in full from
-  the start**, not incrementally. Fuuki judged `build_staged.py` optional and paid for that
-  judgement with a whole session of serialised work.
-- **[`docs/mister_framework_notes.md`](mister_framework_notes.md)** — CONF_STR/status-word
-  mechanics, the `.CFG` format, DIP delivery via ioctl index 254, and the video output chain.
-
 ## Progress
 
 **Phase 0 is under way.** What exists and has been exercised:
 
-- **Workflow, ported and proven.** `scripts/` and `rtl/debug/` from Fuuki, adapted (see
-  [`WORKFLOW.md`](WORKFLOW.md)). The MAME capture pipeline runs end to end against real ROM sets;
+- **Workflow, ported and proven.** `scripts/` and `rtl/debug/` from Fuuki, adapted. The MAME capture pipeline runs end to end against real ROM sets;
   `roms/` holds the 30 in-scope parent archives, from which all 43 in-scope sets resolve.
 - **The project builds.** Revision renamed `Template` → `Seta`; `scripts/build.sh --map` completes
   with 0 errors.
@@ -62,7 +43,7 @@ hardware.
   addressing, one parameterised arbiter). `sim/maincpu_sdram_tb` boots the CPU through the real
   stack — ioctl stream → `sdram_download` → `sdram_arbiter` → `sdram_phy` → `sdram.sv` → a
   command-decoding chip model, with the fetch path coming back through `sdram_narrow_bridge`. This
-  is the test LESSONS_LEARNED insists on: Psikyo had a handshake bug that every module-level
+  is the test that matters: Psikyo had a handshake bug that every module-level
   simulation passed because a short-latency behavioural model answered while the FSM was between
   states. It also proves four byte-order conventions compose (ioctl ascending → download pairs
   even-byte-low → bridge unchanged → `ROM_BYTESWAP` to big-endian), and runs the download under
@@ -481,13 +462,12 @@ Four control bytes at `spritectrl[0..3]`. From the chip's own comment block: bit
 flip screen, byte 1 bits carry the buffering control and the column count (`0x0` disabled, `0x1`
 means 16, otherwise the literal count), bytes 2-3 are the per-column high X bits. Banking and
 buffering both key off `(ctrl2 ^ (~ctrl2 << 1)) & 0x40` — **copy that expression across including
-its operators** (LESSONS_LEARNED, "Copy a driver's register expression including its operators";
-this exact class of bug cost the Psikyo project a layer-enable polarity hunt).
+its operators** (this class of bug cost the Psikyo project a layer-enable polarity hunt).
 
 Buffering is a **copy**, not a bank swap: `setac_eof()` does
 `std::copy_n(&m_spritecode[0x1000], 0x800, &m_spritecode[0x0000])` on the vblank rising edge, in
-whichever direction bit 0x40 selects. LESSONS_LEARNED has an entry titled "A swap is not a copy"
-describing exactly the ghosting this produces if implemented as a ping-pong — do not repeat it.
+whichever direction bit 0x40 selects. Implemented as a ping-pong, a swap is not a copy and
+produces ghosting.
 
 The sprite code goes through one game-independent bank function before addressing graphics:
 
@@ -606,8 +586,7 @@ Visible areas actually used: 384×240 (most), 320×240 (`extdwnhl`, `keroppi`), 
 Working hypothesis, to be checked rather than assumed: dot clock = 16 MHz / 2 = **8 MHz**,
 htotal = 512. Then vtotal 272 gives 57.446 Hz (0.05% from the verified 57.42), vtotal 260 gives
 60.10 Hz, vtotal 276 gives 56.61 Hz. All three land within a rounding error of MAME's numbers on a
-single consistent htotal, which is the kind of "hypothesis that predicts the number exactly" that
-LESSONS_LEARNED recommends preferring. It is still a hypothesis — the 8 MHz dot clock is inferred
+single consistent htotal, a hypothesis that predicts the number exactly. It is still a hypothesis — the 8 MHz dot clock is inferred
 from the XTAL, not read anywhere.
 
 The three 14.318181 MHz games (`orbs`, `keroppi`, `krzybowl`) presumably run a 7.159 MHz dot clock
@@ -622,9 +601,9 @@ Two scanline-driven IRQs, from `seta_interrupt_1_and_2` / `seta_interrupt_2_and_
 
 `_1_and_2` uses `HOLD_LINE` (auto-clearing); `_2_and_4` uses `ASSERT_LINE` with explicit acks at
 `ipl1_ack_w` / `ipl2_ack_w`. `wrofaero` and `gundhara` additionally have a uPD71054/8254 PIT whose
-output 0 asserts IPL 4, clocked at 16 MHz / 2 / 8 = 1 MHz. Read LESSONS_LEARNED's "Give a held
-interrupt line's acknowledge priority" and "Ask of every stimulus whether it is the shape the real
-system produces" before writing either the RTL or its testbench: the Psikyo project shipped a
+output 0 asserts IPL 4, clocked at 16 MHz / 2 / 8 = 1 MHz. Give a held
+interrupt line's acknowledge priority, and ask of every stimulus whether it is the shape the real
+system produces, before writing either the RTL or its testbench: the Psikyo project shipped a
 set-vs-clear priority bug for the whole project because its testbench pulsed vblank for one clock
 where hardware holds it for the entire blanking interval.
 
@@ -726,7 +705,7 @@ open** — see Open items.
 | High score save | `hiscore.v` | MiSTer-devel standard; both prior cores have a working integration to copy |
 | Pause | `pause_control.sv` | `D:\Arcade-Fuuki_MiSTer\rtl\pause_control.sv` |
 | **Debug instrumentation** | **Vendor `issp_probe.sv`, `debug_tracer.sv`, `debug_counter.sv` with their header comments intact** — the rationale in those headers is why they have no reset port and why the counters saturate | `D:\Arcade-Fuuki_MiSTer\rtl\debug\` |
-| **Build / deploy / capture tooling** | **Vendor the Fuuki `scripts/` set** — `build_staged.py`, `deploy.py`, `run_sim.sh`, `cfg.py`, `build_mra.py`/`mra.py`, `mame_capture.py` + `mame/*.lua`, `memdump.py`, `boot_trace.py`, `read_issp.tcl`, `report_worst_paths.tcl`, `sweep.py`, `soak.py`. Full inventory and rationale in [`WORKFLOW.md`](WORKFLOW.md) | `D:\Arcade-Fuuki_MiSTer\scripts\` |
+| **Build / deploy / capture tooling** | **Vendor the Fuuki `scripts/` set** — `build_staged.py`, `deploy.py`, `run_sim.sh`, `cfg.py`, `build_mra.py`/`mra.py`, `mame_capture.py` + `mame/*.lua`, `memdump.py`, `boot_trace.py`, `read_issp.tcl`, `report_worst_paths.tcl`, `sweep.py`, `soak.py`. | `D:\Arcade-Fuuki_MiSTer\scripts\` |
 | Top-level framework | `MiSTer-devel/Template_MiSTer` (already checked out) | this repository |
 
 ## Design decisions
@@ -737,8 +716,7 @@ The board runs from one 16 MHz XTAL (three Group A games use 14.318181 MHz inste
 or 8 MHz; dot clock is believed to be 8 MHz.
 
 **Proposal: `clk_sys` = 96 MHz.** That is 6× the 16 MHz CPU and 12× the 8 MHz dot clock, so both
-clock enables are exact integer dividers with no accumulator error — LESSONS_LEARNED's "Derive the
-clock-enable ratio exactly rather than rounding" is satisfied trivially for the 16 MHz family. The
+clock enables are exact integer dividers with no accumulator error. The
 14.318181 MHz family does not divide 96 MHz; those three games need either a Bresenham accumulator
 (176/945-style, as Psikyo used) or a second PLL configuration selected at load time. Recommend the
 Bresenham enable — a clock mux is a synthesis hazard for no benefit.
@@ -796,8 +774,7 @@ not round-robin; Psikyo learned this the expensive way):
 - **Port 1** — sprite graphics fetch. Also a per-scanline deadline.
 - **Port 2** — 68000 program ROM + X1-010 sample ROM + HPS download, arbitrated. Latency-tolerant.
 
-BRAM inventory, to be tracked from the first build (LESSONS_LEARNED: "A design can be BRAM-bound
-while logic sits at 40%"):
+BRAM inventory, to be tracked from the first build:
 
 | region | size | note |
 |---|---|---|
@@ -826,8 +803,7 @@ effort on Psikyo and is trivially avoidable here.
 
 ### Instrumentation this core needs
 
-Planned from the start rather than added when something breaks. Mechanics and the rules that make
-each trustworthy are in [`WORKFLOW.md`](WORKFLOW.md); this is the Seta-specific list.
+Planned from the start rather than added when something breaks.
 
 **OSD Debug page** (every line `H`-prefixed so it hides in release builds):
 
@@ -1005,8 +981,7 @@ gets its own ModelSim testbench and each integration step gets one too. But the 
 both prior cores is that several real bugs were only ever visible on the machine — work RAM indexed
 one bit too narrowly, an arbiter still packing 25-bit addresses after a widening, a sprite depth
 order that hardware settled against a reading of the driver. So the probe, the trace ring and the
-memory read-back go in **early**, not when something breaks. Mechanics are in
-[`WORKFLOW.md`](WORKFLOW.md); this section is what gets verified and when.
+memory read-back go in **early**, not when something breaks.
 
 ### Golden references from MAME
 
@@ -1057,8 +1032,7 @@ content.
 ## Repository setup
 
 This repository (`E:\Arcade-Seta_MiSTer`, branch `master`) is a `Template_MiSTer` checkout. It
-adopts the Psikyo/Fuuki conventions in full — see [`WORKFLOW.md`](WORKFLOW.md) for the reasoning
-behind each; this is the summary.
+adopts the Psikyo/Fuuki conventions in full; this is the summary.
 
 - Rename the revision `Template` → `Seta` (`.qpf`, `.qsf`, `.sdc`, `.srf`, `.sv`, `files.qip`).
 - **Branching**: `develop` is the working branch and carries granular commits; that work is
@@ -1116,7 +1090,7 @@ behind each; this is the summary.
   and `msgundam`'s 56.66 is explicitly a game-speed fudge. Needs deriving properly — PCB video
   captures or a measurement from someone with the hardware. One data point has since been added,
   from MAME rather than hardware: its emulated frame is **256 lines** for thunderl, gundhara and
-  daioh alike (measured with `time_until_pos()` — see LESSONS_LEARNED). That is the height the
+  daioh alike (measured with `time_until_pos()`). That is the height the
   games' own raster arithmetic is written against, and it is NOT the RTL's expected ~262; keep the
   two apart wherever a value is compared against a line number.
 - **24-bit `.mra` interleave for the 6bpp layers — the FORMAT is now settled; only its `.mra`
@@ -1173,7 +1147,7 @@ behind each; this is the summary.
 2. **Port the workflow** — `scripts/` from Fuuki and `rtl/debug/` with their header comments intact,
    plus the `.gitignore` entries for `build/`, `roms/` and Quartus scratch. Prove `build_staged.py`
    and `deploy.py` end to end on the unmodified template: a `.rbf` that does nothing, built out of
-   a worktree, slack-checked, numbered and landed on the device. See [`WORKFLOW.md`](WORKFLOW.md).
+   a worktree, slack-checked, numbered and landed on the device.
 3. Vendor the SDRAM stack (Psikyo's, via Fuuki's 26-bit widening) with its `PROVENANCE.md` intact.
 4. Get `mame_capture.py` producing a boot trace and a video-region dump for one set, so Phase 0's
    CPU spike has something to diff against.

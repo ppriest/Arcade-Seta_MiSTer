@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Decode a VGA debug-tap screenshot back into the values the RTL was driving.
 
-The bring-up technique this supports is documented in docs/LESSONS_LEARNED.md:
-with no JTAG available, internal state is driven straight onto VGA_R/G/B, a
+The bring-up technique this supports: with no JTAG available, internal state is driven straight onto VGA_R/G/B, a
 screenshot is pulled with scripts/mister_hw_test.py, and the pixels are read
 back here. Each pixel carries 24 bits (R<<16 | G<<8 | B).
 

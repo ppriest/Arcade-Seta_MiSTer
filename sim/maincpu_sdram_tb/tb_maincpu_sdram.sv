@@ -10,9 +10,7 @@
 //                  -> sdram.sv -> sdram_chip_model_wide
 //     maincpu -> sdram_narrow_bridge -> sdram_arbiter (client 0) -> ...
 //
-// LESSONS_LEARNED is explicit that the first is not a substitute for the
-// second: "Re-run the failing case with the production transport in place of
-// behavioural models". Psikyo had a gfxrom handshake bug that EVERY
+// The first is not a substitute for the second. Psikyo had a gfxrom handshake bug that EVERY
 // module-level simulation passed, because a short-latency behavioural model
 // returned its response while the FSM was between states; the real controller's
 // ~12-cycle latency landed the duplicate in the next wait state, where it
@@ -335,7 +333,7 @@ module tb_maincpu_sdram;
 		for (int b = 0; b < n_bytes; b++) begin
 			// `do @(posedge clk); while (...)`, never the other way round: the
 			// latter races an always_ff updating the same signal on the same
-			// edge (LESSONS_LEARNED, "Testbench discipline", first entry).
+			// edge.
 			while (ioctl_wait) @(posedge clk);
 			ioctl_addr <= b[26:0];
 			ioctl_dout <= img[b];

@@ -213,7 +213,7 @@ module tb_seta_core;
 	// ---- ioctl ---------------------------------------------------------------
 	// The wait loop and the assignments with NO edge between them: an extra
 	// edge lets ioctl_wait rise again in the gap and the write lands in a
-	// stalled port and is lost (LESSONS_LEARNED).
+	// stalled port and is lost.
 	task automatic push(input [26:0] a, input [7:0] d);
 		begin
 			while (ioctl_wait) @(posedge clk);

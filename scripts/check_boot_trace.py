@@ -13,14 +13,13 @@ Two independent paths to the same bytes:
 
 They share no code. If every word MAME's CPU read from inside the program
 region equals the same address in our image, the interleave is right --
-which is the check LESSONS_LEARNED's "Prove the interleave against MAME's
-disassembly offline, before building" is really asking for, done mechanically
+which is proving the interleave against MAME's disassembly, done mechanically
 rather than by eye over a handful of instructions.
 
 WHAT THIS DOES NOT PROVE
 ------------------------
-LESSONS_LEARNED, "A hardware-vs-image comparison cannot detect a wrong image":
-that entry is about comparing two things built from the SAME assumption. This
+A comparison of two things built from the SAME assumption cannot detect a
+wrong image. This
 is not that -- MAME's loader is independent of ours -- but the caution still
 bounds the claim. It shows the two agree on the addresses MAME happened to
 read during the traced window. It says nothing about regions the boot never

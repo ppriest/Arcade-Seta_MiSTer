@@ -45,9 +45,6 @@ invisible without a chip model that decodes commands:
 - The chip model silently ignored the `DQML`/`DQMH` write mask.
 - An off-by-one in burst-read CAS timing, from a dropped registration-delay margin.
 
-LESSONS_LEARNED, "Verify a burst extension against a command-decoding chip model, not a latency
-stub".
-
 ## The 32 MB ceiling, and FG-3
 
 `addr0`/`addr1`/`addr2` were `[24:1]` upstream — 24 bits of **word** address, i.e. exactly 32 MB; this copy widens them to `[25:1]` and drives bit 25 onto A9 at column time, the 64 MB layout of the 128 MB module's first chip (FG-3 needs 56.5 MB). That was
@@ -69,7 +66,7 @@ FG-2 bring-up depends on it.
 - **Upstream has no reset port at all** — it is driven purely by `init`, deliberately, so that a
   core reset cannot disturb memory contents. Do not add one. Psikyo's wrapper did, and it pinned
   the download FSM in idle for the entire ROM transfer, because MiSTer holds core `RESET` asserted
-  for the whole download (LESSONS_LEARNED, "Never hold the memory path in the core reset").
+  for the whole download.
 - **`dout0`/`dout1`/`dout2` are literally the same register.** Sampling later than your own
   valid/ack cycle reads another port's in-flight data. Capture read data on the valid pulse.
 - **The three ports are fixed priority, not fair.** Port 0 always preempts port 1, which always

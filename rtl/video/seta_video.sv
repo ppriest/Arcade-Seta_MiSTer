@@ -97,11 +97,6 @@ module seta_video #(
 	input  wire [63:0] tile1_data,
 	// m_vregs: bit 0 swaps the layers, bit 1 sprites above both, bit 2 blandia's effect
 	input  wire  [7:0] vregs,
-	// a per-board tile code bank (layer 0; x1_012.sv tile_bank_en)
-	input  wire        tile_bank_en,
-	// layer 0 scroll latched per line (x1_012.sv raster)
-	input  wire        tile_raster,
-	input  wire [31:0] tile_bank,
 	// set_tilemaps_flip(1) (oisipuzl): layers flip on sprite flip XOR this
 	input  wire        tilemaps_flip,
 
@@ -293,9 +288,8 @@ module seta_video #(
 		.xoffs(l0_xoffs), .xoffs_flip(l0_xoffs_flip),
 		.flipscr(flip_layers), .xextent(xextent), .yextent(yextent),
 		.vis_dimy(vis_dimy), .colorbase(l0_colorbase), .code_limit(l0_code_limit),
-		.tile_bank_en(tile_bank_en), .tile_bank(tile_bank),
 		.bpp6(l0_bpp6),
-		.vblank_rise(vblank_rise), .raster(tile_raster),
+		.vblank_rise(vblank_rise),
 		.line_start(line_start & has_l0), .line(eng_line),
 		.line_budget(line_budget), .cache_en(tile_cache_en),
 		.line_done(), .busy(),
@@ -322,9 +316,8 @@ module seta_video #(
 		.xoffs(l1_xoffs), .xoffs_flip(l1_xoffs_flip),
 		.flipscr(flip_layers), .xextent(xextent), .yextent(yextent),
 		.vis_dimy(vis_dimy), .colorbase(l1_colorbase), .code_limit(l1_code_limit),
-		.tile_bank_en(1'b0), .tile_bank(32'd0),
 		.bpp6(l1_bpp6),
-		.vblank_rise(vblank_rise), .raster(1'b0),
+		.vblank_rise(vblank_rise),
 		.line_start(line_start & has_l1), .line(eng_line),
 		.line_budget(line_budget), .cache_en(tile_cache_en),
 		.line_done(), .busy(),

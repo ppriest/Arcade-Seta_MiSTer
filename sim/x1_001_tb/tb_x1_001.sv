@@ -135,9 +135,8 @@ module tb_x1_001;
 	// ---- graphics ROM: 64-bit granules, with a settable latency -------------
 	// Behavioural, but never instantaneous: the real path is an SDRAM round
 	// trip and the engine must not depend on the answer arriving in any
-	// particular cycle. The production transport is a separate, later test --
-	// LESSONS_LEARNED is explicit that a latency sweep against a behavioural
-	// model is a proxy, not a proof.
+	// particular cycle. The production transport is a separate, later test:
+	// a latency sweep against a behavioural model is a proxy, not a proof.
 	//
 	// A granule is four consecutive 16-bit words, word i at g_data[16*i], which
 	// is sdram.sv's order as documented in sdram_narrow_bridge.sv.
@@ -162,7 +161,7 @@ module tb_x1_001;
 				// top bit -- invisible on thunderl's 0.5 MB region, which needs
 				// 16, and wrong on atehate's 2 MB one, which needs all 18. It
 				// failed as wrong pen values on exactly one game. Same shape as
-				// the bridge width bug in LESSONS_LEARNED: harmless at 64 KB,
+				// a bridge width bug: harmless at 64 KB,
 				// not at 2 MB.
 				rom_data  <= { gfxrom[{rom_hold_a[22:3], 2'd3}],
 				               gfxrom[{rom_hold_a[22:3], 2'd2}],
@@ -378,7 +377,7 @@ module tb_x1_001;
 			for (i = 0; i < 8192; i++) cpu_code_write(i[12:0], codeimg[i]);
 		end
 		// the rest runs with the copy off, whether or not it was tested (a
-		// capture with ctrl2 bit 5 set -- tndrcade -- skips it)
+		// capture with ctrl2 bit 5 set skips it)
 		copy_test = 1'b0;
 
 		// THE COPY MUST NOT MIX TWO FRAMES. The game's handler rewrites the
@@ -448,7 +447,7 @@ module tb_x1_001;
 			cpu_code_write((c1[6] ^ 1'b1) ? 13'h1100 : 13'h0100, 16'hBAAD);
 			repeat (40) @(posedge clk);
 			if ({dut.codesh_hi[{dut.rbuf, 11'h100}], dut.codesh_lo[{dut.rbuf, 11'h100}]} !== 16'hF00D) flip_bad++;
-			// a game that never flips its own page (tndrcade) renders with
+			// a game that never flips its own page renders with
 			// own_flip clear: bit 5 low clears it, then the capture's value
 			cpu_ctrl_write(2'd1, ctrlimg[1] & 8'hdf);
 			cpu_ctrl_write(2'd1, ctrlimg[1]);

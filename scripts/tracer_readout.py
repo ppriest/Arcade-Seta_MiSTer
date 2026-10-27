@@ -11,8 +11,7 @@ a screenshot of each, and recovers entries by CONTENT rather than by row
 number. The inverse band is the self-check: v and ~v are read from the same
 BRAM entry, so they must XOR to 0xFFFFFF whatever the memory holds, and any
 transform in the capture path shows up as an unpaired run instead of being
-read as data. That is how the framework's gamma LUT was caught (see
-docs/LESSONS_LEARNED.md); the earlier one-row-per-entry overlays had read
+read as data. That is how the framework's gamma LUT was caught; the earlier one-row-per-entry overlays had read
 its output as SDRAM corruption.
 
 Recovery per screen: split the rows into runs of identical value; a run is a

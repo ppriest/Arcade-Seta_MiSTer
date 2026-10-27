@@ -8,8 +8,7 @@ The interleave is taken from each driver's ROM_START, not guessed. Every entry
 below is transcribed from src/mame/seta/seta.cpp and mirrors MAME's own load
 semantics; nothing here reasons about byte order.
 
-LESSONS_LEARNED, "Prove the interleave against MAME's disassembly offline,
-before building": run --check to score the reset vector and the first
+Run --check to score the reset vector and the first
 instructions before trusting any of this. On the Psikyo core every interleave
 DERIVED by reasoning was wrong and every one SCORED against disassembly was
 right, in seconds, with no hardware.
@@ -38,7 +37,6 @@ from romset import RomSet
 # reads them out of seta.cpp's ROM_START blocks. Hand transcription across 43
 # sets, four load forms, and offsets that differ by one between the even and
 # odd ROM of a pair is exactly the work that produces a plausible wrong answer
-# (LESSONS_LEARNED, "Prove the interleave ... offline, before building").
 #   ("load16_byte",  file, dest, length)   dest & 1 selects the byte lane
 #   ("load",         file, dest, length)   plain, byte for byte
 #   ("load16_wswap", file, dest, length)   whole words, byte-swapped
@@ -274,12 +272,7 @@ def build(zippath, records, setname):
     prev_kind = None  # and HOW it was loaded
     for rec in records:
         kind, fname, dest, length, crc = rec
-        if kind == "reload":
-            if blob is None:
-                sys.exit("ROM_RELOAD with no preceding load")
-            consumed = 0
-            kind = prev_kind
-        elif kind == "continue":
+        if kind == "continue":
             if blob is None:
                 sys.exit("ROM_CONTINUE with no preceding load")
             # A CONTINUE INHERITS ITS LOAD'S KIND. Treating every one as a

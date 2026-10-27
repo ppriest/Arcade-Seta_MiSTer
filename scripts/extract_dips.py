@@ -183,7 +183,7 @@ def parse_ports(body, all_blocks, missing, depth=0):
         # PORT_CONDITION("DSW",0x8000,EQUALS,0x8000) after a setting: the label
         # applies only while that switch reads so. Split off first -- a lazy
         # match to the last ")" otherwise takes the condition into the label,
-        # which is how Coin A read "DSW" (Blandia, Dragon Unit, downtown.cpp).
+        # which is how Coin A read "DSW" (Blandia, Dragon Unit).
         cond = None
         mc = re.search(rf'\)\s*PORT_CONDITION\(\s*"(\w+)"\s*,\s*{_NUM}\s*,\s*(EQUALS|NOTEQUALS)\s*,\s*{_NUM}\s*\)\s*$',
                        line)
@@ -311,7 +311,6 @@ def _fold(dip, ports):
 
 # The controlling switch's labels, shortened for a folded name's tag
 FOLD_TAG = {
-    "Taito Corp. Japan": "JP",           # tndrcade's Licensed To
     "Taito America Corp.": "US",
 }
 

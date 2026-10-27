@@ -182,45 +182,6 @@ FAMILIES = {
         "sprcode": (0xe00000, 0x004000),
         "x1snd":   (0x100000, 0x004000),
     }, ((0x500000, 0x500007), (0x800000, 0x800005), (0x100000, 0x1000ff))),
-    # downtown.cpp downtown_map (downtown, twineagl, metafox, arbalest): one
-    # layer, the 65C02 behind sub_ctrl at 0xa00000 and the shared RAM at
-    # 0xb00000 (byte-wide, low half of words). Work RAM is declared
-    # 0xf00000-0xffffff; the dump covers the top 64 KB, where the stack is.
-    "downtown": ({
-        "workram": (0xff0000, 0x10000),
-        "palette": (0x700000, 0x000400),
-        "l0ctrl":  (0x800000, 0x000006),
-        "l0vram":  (0x900000, 0x004000),
-        "shared":  (0xb00000, 0x001000),
-        "sprylow": (0xd00000, 0x000600),
-        "sprctrl": (0xd00600, 0x000008),
-        "sprcode": (0xe00000, 0x004000),
-        "x1snd":   (0x100000, 0x004000),
-    }, ((0x800000, 0x800005), (0xa00000, 0xa00007), (0x400000, 0x400007),
-        (0x500000, 0x500001), (0x300000, 0x300001))),
-    # downtown.cpp calibr50_map: one layer, raster scroll; the X1-010 is on
-    # the 65C02, the latches at 0xb00001, battery RAM at 0x200000
-    "calibr50": ({
-        "workram": (0xff0000, 0x10000),
-        "nvram":   (0x200000, 0x001000),
-        "palette": (0x700000, 0x000400),
-        "l0ctrl":  (0x800000, 0x000006),
-        "l0vram":  (0x900000, 0x004000),
-        "sprylow": (0xd00000, 0x000600),
-        "sprctrl": (0xd00600, 0x000008),
-        "sprcode": (0xe00000, 0x004000),
-    }, ((0x800000, 0x800005), (0x500000, 0x500001), (0x300000, 0x300001),
-        (0x100000, 0x100001))),
-    # downtown.cpp tndrcade_map: no layers; the 65C02 behind sub_ctrl at
-    # 0x800000 and the shared RAM at 0xa00000; 16 KB work RAM mirrored
-    "tndrcade": ({
-        "workram": (0xffc000, 0x004000),
-        "palette": (0x380000, 0x000400),
-        "shared":  (0xa00000, 0x001000),
-        "sprylow": (0x600000, 0x000600),
-        "sprctrl": (0x600600, 0x000008),
-        "sprcode": (0xc00000, 0x004000),
-    }, ((0x800000, 0x800007), (0x200000, 0x200001))),
     # thunderl_map -- no layers at all
     "thunderl": ({
         "workram": (0xffc000, 0x4000),
@@ -313,11 +274,6 @@ GAMES = {
     "wits": "wits",
     "atehate": "atehate",
     "pairlove": "pairlove",
-    "downtown": "downtown", "downtown2": "downtown", "downtownj": "downtown",
-    "downtownp": "downtown", "twineagl": "downtown", "metafox": "downtown",
-    "arbalest": "downtown",
-    "calibr50": "calibr50",
-    "tndrcade": "tndrcade", "tndrcadej": "tndrcade",
     # NOT YET TRANSCRIBED -- read the map function in seta.cpp and add them:
     #   eightfrc, oisipuzl, magspeed, krzybowl, orbs, keroppi, keroppij
     #

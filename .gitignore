@@ -38,7 +38,7 @@ build_id.v
 
 # Staged-build worktree (scripts/build_staged.py): each build compiles a
 # snapshot of HEAD there, so Quartus scratch stays out of the repo root and
-# the main tree stays editable during the compile. See docs/WORKFLOW.md.
+# the main tree stays editable during the compile.
 build/
 quartus_*.log
 q_*.log

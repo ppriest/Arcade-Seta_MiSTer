@@ -1,7 +1,7 @@
 set_global_assignment -name SDC_FILE Seta.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE Seta.sv
 
-# Debug instrumentation (docs/WORKFLOW.md), listed so `scripts/build.sh --map`
+# Debug instrumentation, listed so `scripts/build.sh --map`
 # type-checks it even when nothing instantiates it.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/debug_counter.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/debug_tracer.sv

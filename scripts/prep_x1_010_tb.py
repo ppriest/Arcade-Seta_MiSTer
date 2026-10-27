@@ -11,9 +11,8 @@ expect.hex ({left,right} per line) into sim/x1_010_tb/, all gitignored.
 `--selftest` builds a synthetic case that exercises both modes without needing
 a ROM set: a waveform channel with a ramp wave and a full envelope, and a PCM
 channel reading a known pattern. Synthetic content is chosen so a wrong index
-shows up as a wrong VALUE rather than as silence -- LESSONS_LEARNED, "Any test
-using uniform or all-zero content is invariant under byte order and cannot
-catch this".
+shows up as a wrong VALUE rather than as silence: uniform or all-zero content
+is invariant under byte order.
 """
 import argparse
 import importlib.util

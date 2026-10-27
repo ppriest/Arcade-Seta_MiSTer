@@ -8,8 +8,7 @@
 // already have theirs -- sdram.sv, sdram_phy, the arbiter, the narrow bridge
 // and gfx_swizzle are all exercised elsewhere -- but nothing until now has run
 // a real image through the loader and then asked all three consumers whether
-// they can find their own data. LESSONS_LEARNED is blunt that a behavioural
-// stand-in is a proxy, not a proof: Psikyo had a handshake bug that every
+// they can find their own data. A behavioural stand-in is a proxy, not a proof: Psikyo had a handshake bug that every
 // module-level simulation passed and only the real controller's latency
 // exposed.
 //

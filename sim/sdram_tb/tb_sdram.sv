@@ -11,9 +11,7 @@
 // its neighbour's word, or the last lane holding whatever the bus floated to.
 // A read-back of known data through the real command decoder is the only
 // check that distinguishes "one cycle early" from "one cycle late" from
-// "right", and LESSONS_LEARNED ("Verify a burst extension against a
-// command-decoding chip model, not a latency stub") is why it is this model
-// and not a latency stub.
+// "right", which is why it is this model and not a latency stub.
 //
 // sim/sdram_top_tb is the whole memory path over a real image and is the
 // stronger test, but its fixture is stale and it fails on the unmodified
